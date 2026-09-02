@@ -146,20 +146,14 @@ lượt đọc tăng theo N² (mỗi tin bị N pod đọc, phần lớn rồi v
 tăng nhanh hơn hẳn traffic thật, dù không cần tự vận hành gì thêm. Route thẳng theo địa chỉ (tên pod)
 tính sẵn từ Maglev tránh được khoản lãng phí đó hoàn toàn: mỗi tin chỉ đi tới đúng 1 nơi cần nó.
 
-| | EventBus + consistent hashing (đang dùng) | Kafka (partition theo conversation/pod) |
-|---|---|---|
-| Độ trễ | 1 hop trực tiếp tới đúng pod sở hữu, cùng cụm Hazelcast — cỡ mili-giây | Thêm 1 vòng publish → broker ghi log → consumer poll — chậm hơn hẳn |
-| Hạ tầng vận hành | Không thêm service nào — EventBus có sẵn trong Vert.x | Phải tự vận hành thêm 1 cụm Kafka (+ZooKeeper/KRaft) |
-| Rebalance khi scale | Maglev: chỉ ~1/N conversation bị route lại, không cần điều phối trung tâm | Partition reassignment nặng hơn, số partition thường cố định, khó co giãn mượt |
-| Durability / replay | Không — pod chết đúng lúc tin đang bay thì mất, không có log | Có — giữ log, consumer group mới replay lại được toàn bộ lịch sử |
-| Fan-out cho nhiều consumer | Không — chỉ đúng 1 pod nhận đúng 1 message | Nhiều consumer group độc lập cùng đọc 1 topic — dễ thêm service mới (notification, audit log...) |
-| Back-pressure | Không có buffer tự nhiên — dồn thẳng vào EventBus | Partition tự nhiên là buffer, consumer đọc theo tốc độ riêng |
-
-Cái giá phải trả cho việc không dùng Kafka: hoàn toàn không có persistence ở tầng transport này — một
-tin nhắn có thể mất nếu đúng lúc pod đích chết, và `ACK` hiện chỉ xác nhận "đã chuyển tiếp thành
-công", không xác nhận người nhận thực sự đã nhận được. Nếu sau này cần thêm nhiều consumer độc lập
-hoặc cần đảm bảo delivery mạnh hơn (at-least-once, có replay), đó sẽ là lúc đáng cân nhắc thêm Kafka
-cho riêng luồng đó — không nhất thiết phải thay cả hệ thống.
+|                            | EventBus + consistent hashing (đang dùng)                                 | Kafka (partition theo conversation/pod)                                                          |
+|----------------------------|---------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| Độ trễ                     | 1 hop trực tiếp tới đúng pod sở hữu, cùng cụm Hazelcast — cỡ mili-giây    | Thêm 1 vòng publish → broker ghi log → consumer poll — chậm hơn hẳn                              |
+| Hạ tầng vận hành           | Không thêm service nào — EventBus có sẵn trong Vert.x                     | Phải tự vận hành thêm 1 cụm Kafka (+ZooKeeper/KRaft)                                             |
+| Rebalance khi scale        | Maglev: chỉ ~1/N conversation bị route lại, không cần điều phối trung tâm | Partition reassignment nặng hơn, số partition thường cố định, khó co giãn mượt                   |
+| Durability / replay        | Không — pod chết đúng lúc tin đang bay thì mất, không có log              | Có — giữ log, consumer group mới replay lại được toàn bộ lịch sử                                 |
+| Fan-out cho nhiều consumer | Không — chỉ đúng 1 pod nhận đúng 1 message                                | Nhiều consumer group độc lập cùng đọc 1 topic — dễ thêm service mới (notification, audit log...) |
+| Back-pressure              | Không có buffer tự nhiên — dồn thẳng vào EventBus                         | Partition tự nhiên là buffer, consumer đọc theo tốc độ riêng                                     |
 
 ## Scale như thế nào
 
@@ -180,16 +174,6 @@ conversation.** Vì 1 kết nối backend dùng chung cho mọi conversation cù
 cuộc trò chuyện rải trên 20 pod `colony` chỉ tốn tối đa 20 kết nối vật lý cho `harbor`, không phải
 100.
 
-**Đã kiểm chứng khả năng chịu lỗi bằng test thật, không chỉ trên giấy.** Chúng tôi xoá thẳng 1 pod
-`colony` giữa lúc 2 client đang chat, rồi gửi liên tục tin nhắn suốt 40 giây: toàn bộ tin nhắn đều
-tới nơi, không rớt tin nào — kể cả tin gửi ngay sau khi pod biến mất. Có được kết quả đó nhờ 4 lớp
-phối hợp: `beacon` gossip pod chết ngay lập tức (không gộp batch); `colony`/`harbor` gửi dự phòng
-tin nhắn sang cả routing-version cũ lẫn mới trong lúc đang chuyển tiếp; không đóng kết nối cũ cho tới
-khi kết nối mới được xác nhận xong; và `harbor` tự "nhớ" lại danh sách thành viên của từng
-conversation để gửi kèm mỗi lần kết nối lại — vì một pod `colony` vừa khởi động lại sẽ không còn nhớ
-ai từng ở trong đó (lớp cuối cùng này là phát hiện trong lúc test thật, ban đầu không có, tin nhắn
-từng rớt vĩnh viễn sau khi pod restart cho tới khi thêm nó vào).
-
 **Còn 1 bài toán cân bằng tải chưa cần giải: kết nối MỚI vào `harbor`.** Ở trên là chuyện cân bằng
 các kết nối ĐANG mở khi `colony` scale. Còn việc phân phối kết nối MỚI của client vào đúng pod
 `harbor` nào hiện chỉ dựa vào round-robin mặc định của k8s Service — đơn giản nhưng đủ dùng, vì đây
@@ -198,12 +182,6 @@ quá tải và cần tạm ngừng nhận thêm kết nối mới trong lúc cá
 cơ chế readinessProbe đã có sẵn cho lúc pod tắt (`HealthCheckVerticle`) — đánh dấu tạm "chưa sẵn
 sàng" để k8s ngừng route thêm vào — chứ không cần xây mới.
 
-## Những gì chưa có
-
-Pingo hiện chưa lưu lịch sử tin nhắn hay danh sách thành viên một cách bền vững — mọi thứ sống trong
-bộ nhớ của từng pod. Cũng chưa có khái niệm nhiều vùng địa lý, và chưa có service theo dõi trạng thái
-online/offline riêng. Đây là những phần chúng tôi biết trước sẽ cần khi đưa hệ thống lên sản xuất
-thật, nhưng cố tình gác lại cho tới khi bài toán đó thực sự xuất hiện.
 
 ## Tham khảo thêm
 
