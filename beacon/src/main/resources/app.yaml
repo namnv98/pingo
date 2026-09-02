@@ -1,0 +1,27 @@
+basePackage: com.lego.namnv
+hazelcast:
+  file: /beacon/src/main/resources/hazelcast-local.xml
+  props: { }
+admEventBus:
+  address: beacon
+  tags: private
+  printStackTrace: false
+msgEventBus:
+  address: beacon
+  tags: private
+  printStackTrace: false
+admHttp:
+  tags: private
+  port: 8087
+  path:
+  headers:
+    content-type: application/json
+publicHttp:
+  tags: public
+  port: 8086
+  path:
+  headers:
+    content-type: application/json
+  printStackTrace: false
+invalidateCacheConfig:
+  eventBusAddress: lego-invalid-cache-info

@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hazelcast-files-cfm
+data:
+  hazelcast.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <hazelcast xmlns="http://www.hazelcast.com/schema/config"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="http://www.hazelcast.com/schema/config
+               https://www.hazelcast.com/schema/config/hazelcast-config-5.3.xsd">
+        <!-- Dung boi beacon/colony/harbor (mount qua volume hazelcast-files-cfm trong helm chart
+             cua tung module): moi app van tu embed 1 Hazelcast member (Vert.x's
+             HazelcastClusterManager bat buoc phai vay), nhung danh dau lite-member (khong giu
+             partition nao) roi join vao backbone 3 pod on dinh qua tcp-ip tinh, xem
+             statefulset.yaml/configmap.yaml cung chart nay. Scale/restart app pod vi vay khong
+             lam xao tron du lieu cua cluster. -->
+        <lite-member enabled="true"/>
+        <!-- Mac dinh hazelcast.graceful.shutdown.max.wait la 600s (10 phut): vertx.close() goi
+             HazelcastInstance.shutdown() ben trong, cho toi 600s de "phoi hop" voi cluster du
+             khong co gi thuc su can doi (lite member khong giu partition). k8s terminationGracePeriodSeconds
+             chi 60s nen luon bi SIGKILL cuong buc truoc khi Hazelcast tu xong, rut ngan xuong day
+             de shutdown that su graceful (GOAWAY + dong ket noi sach) hoan tat trong vai giay. -->
+        <properties>
+            <property name="hazelcast.graceful.shutdown.max.wait">10</property>
+            <!-- Tam thoi (debug): route log cua Hazelcast qua log4j2 (mac dinh dung java.util.logging,
+                 khong bi anh huong boi cau hinh level trong log4j2.xml) de bat duoc OperationTimeoutException
+                 that su luc dieu tra vertx.close() treo o dau. -->
+            <property name="hazelcast.logging.type">log4j2</property>
+            <!-- Hazelcast tu dong dang ky 1 JVM shutdown hook rieng (thread "hz.ShutdownThread",
+                 bat duoc qua log that luc dieu tra: "Running shutdown hook..." chay dong thoi voi
+                 hook "SHUTDOWN HOOK" cua chinh app, xem ThreadUtils). Ca 2 hook chay SONG SONG
+                 khi JVM nhan SIGTERM (JVM khong dam bao thu tu giua cac shutdown hook), cung dua
+                 tay vao shutdown chung 1 HazelcastInstance, ung vien hop ly nhat cho hien tuong
+                 vertx.close() treo khong on dinh. Tat hook nay di de chi con 1 duong dan shutdown
+                 duy nhat, do app tu kiem soat qua vertx.close() (goi tu HarborApp/ColonyApp/BeaconApp). -->
+            <property name="hazelcast.shutdownhook.enabled">false</property>
+        </properties>
+        <network>
+            <join>
+                <multicast enabled="false"/>
+                <kubernetes enabled="false"/>
+                <tcp-ip enabled="true">
+                    {{- range $i := until (int .Values.replicas) }}
+                    <member>hazelcast-{{ $i }}.hazelcast-headless.{{ $.Release.Namespace }}.svc.cluster.local</member>
+                    {{- end }}
+                </tcp-ip>
+            </join>
+        </network>
+
+        <multimap name="__vertx.subs">
+            <backup-count>1</backup-count>
+            <value-collection-type>SET</value-collection-type>
+        </multimap>
+
+        <map name="__vertx.haInfo">
+            <backup-count>1</backup-count>
+        </map>
+
+        <map name="__vertx.nodeInfo">
+            <backup-count>1</backup-count>
+        </map>
+
+        <cp-subsystem>
+            <cp-member-count>0</cp-member-count>
+            <semaphores>
+                <semaphore>
+                    <name>__vertx.*</name>
+                    <jdk-compatible>false</jdk-compatible>
+                    <initial-permits>1</initial-permits>
+                </semaphore>
+            </semaphores>
+        </cp-subsystem>
+    </hazelcast>

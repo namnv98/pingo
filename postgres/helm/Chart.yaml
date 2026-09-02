@@ -1,0 +1,6 @@
+apiVersion: v2
+name: postgres
+description: Postgres cho colony (conversation_members) -- 1 instance, khong cluster, du cho local dev/prototype
+type: application
+version: 0.0.1
+appVersion: "17"

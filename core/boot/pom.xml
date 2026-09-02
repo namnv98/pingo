@@ -1,0 +1,72 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <parent>
+        <artifactId>core</artifactId>
+        <groupId>com.pingo.namnv</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+    <artifactId>boot</artifactId>
+    <properties>
+        <hazelcast.kubernetes.version>2.2.3</hazelcast.kubernetes.version>
+        <hazelcast.version>5.3.0</hazelcast.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>eventbus</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>http</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-micrometer-metrics</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-hazelcast</artifactId>
+        </dependency>
+        <!-- Khai bao truc tiep thay vi de vertx-hazelcast keo bac cau (ban 4.2.8, cu hon han):
+             beacon/colony/harbor tu pin 5.3.0 o pom rieng nen runtime luon la 5.3.0, nhung module
+             nay truoc gio compile bang 4.2.8 mot cach ngam dinh. Pin thang o day de code Hazelcast
+             Client (LegoBootStart) compile dung API cua ban thuc su chay. -->
+        <dependency>
+            <groupId>com.hazelcast</groupId>
+            <artifactId>hazelcast</artifactId>
+            <version>${hazelcast.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.lmax</groupId>
+            <artifactId>disruptor</artifactId>
+            <version>4.0.0.RC1</version>
+        </dependency>
+    </dependencies>
+</project>

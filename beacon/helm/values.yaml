@@ -1,0 +1,15 @@
+imageId: nnv98/beacon:1.0.15
+istio:
+  sidecar_inject: true
+
+global:
+  environment: dev
+  baseDomain: lego.dev
+  hazelcast:
+    configMap: hazelcast-files
+  vertx:
+    mainCluster:
+      name: vertx-land-cluster
+      label:
+        key: lego/vertx-cluster
+        value: vertx-land-cluster

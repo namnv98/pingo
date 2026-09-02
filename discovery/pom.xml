@@ -1,0 +1,46 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <artifactId>pingo</artifactId>
+        <groupId>com.pingo.namnv</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>discovery</artifactId>
+    <packaging>jar</packaging>
+
+    <properties>
+        <lz4.version>1.8.0</lz4.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>commons-lang</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>pingo-event</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <artifactId>lz4-java</artifactId>
+            <groupId>org.lz4</groupId>
+            <version>${lz4.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>message</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>eventbus</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+    </dependencies>
+</project>

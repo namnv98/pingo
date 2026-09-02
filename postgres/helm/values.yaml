@@ -1,0 +1,8 @@
+image: localhost:5000/postgres:17
+# 1 instance, khong replica -- prototype/local dev, khong can chiu duoc pod chet (khac hazelcast
+# backbone, Postgres o day chi luu conversation_members, mat du lieu tam thoi neu pod chet la chap
+# nhan duoc o quy mo nay, dinh vi lai bang PVC tren local-path-provisioner co san cua k3s).
+db: pingo
+user: pingo
+password: pingo-local-dev
+storageSize: 1Gi

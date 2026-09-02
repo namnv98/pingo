@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+    {{ .Values.global.vertx.mainCluster.label.key }}: {{ .Values.global.vertx.mainCluster.label.value }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        {{ .Values.global.vertx.mainCluster.label.key }}: {{ .Values.global.vertx.mainCluster.label.value }}
+        app: {{ .Chart.Name }}
+        {{- if .Values.istio.sidecar_inject }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        component: service-hazelcast-server
+    spec:
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: config-files
+          configMap:
+            name: {{ .Chart.Name }}-config-files
+        - name: hazelcast-files-cfm
+          configMap:
+            name: hazelcast-files-cfm
+#      imagePullSecrets:
+#        - name: {{ .Values.global.dockerImagePullSecret }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ .Values.imageId }}
+          imagePullPolicy: {{ .Values.imagePullPolicy | default "IfNotPresent" }}
+          volumeMounts:
+            - name: config-files
+              mountPath: /config
+            - name: hazelcast-files-cfm
+              mountPath: /hazelcast-files
+          env:
+            - name: CONFIG_FILE
+              value: /config/app.yaml
+            - name: LOG4J2_CONFIG
+              value: /config/log4j2.xml
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xdebug -agentlib:jdwp=transport=dt_socket,address=0.0.0.0:5005,server=y,suspend=n"
+          ports:
+            - name: http
+              containerPort: 8888
+              protocol: TCP
+            - name: debug-port
+              containerPort: 5005
+              protocol: TCP

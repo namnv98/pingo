@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hazelcast
+spec:
+  serviceName: hazelcast-headless
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: hazelcast
+  template:
+    metadata:
+      labels:
+        app: hazelcast
+    spec:
+      containers:
+        - name: hazelcast
+          # Dung qua registry local thay vi keo thang Docker Hub -- mang nay IPv6 bi dut, containerd
+          # cua k3s uu tien IPv6 nen pull thang tu docker.io bi treo/timeout. Da pull qua host
+          # docker (IPv4 hoat dong binh thuong) roi day len registry local, cung pattern voi
+          # beacon/colony/harbor.
+          image: {{ .Values.image }}
+          # -Dhazelcast.config la system property chuan cua chinh Hazelcast core, doc lap voi
+          # convention rieng cua tung Docker image -- chac chan hoat dong bat ke image nao.
+          env:
+            - name: JAVA_OPTS
+              value: "-Dhazelcast.config=/data/hazelcast.xml"
+          ports:
+            - name: hazelcast
+              containerPort: 5701
+          volumeMounts:
+            - name: config
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 5701
+            periodSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: hazelcast-config

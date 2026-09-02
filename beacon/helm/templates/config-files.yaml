@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Chart.Name }}-config-files
+data:
+  app.yaml: |
+    basePackage: com.lego.namnv
+    hazelcast:
+      file: /hazelcast-files/hazelcast.xml
+      props: { }
+    admEventBus:
+      address: admin
+      tags: private
+      printStackTrace: false
+    publicHttp:
+      tags: public
+      port: 8080
+      path:
+      headers:
+        content-type: application/json
+      printStackTrace: false
+  log4j2.xml: |
+{{ .Files.Get "config/log4j2.xml" | indent 4 }}

@@ -1,0 +1,533 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.pingo.namnv</groupId>
+    <artifactId>pingo</artifactId>
+    <packaging>pom</packaging>
+    <version>1.0-SNAPSHOT</version>
+
+    <modules>
+        <module>core</module>
+        <module>harbor</module>
+        <module>colony</module>
+        <module>discovery</module>
+        <module>beacon</module>
+    </modules>
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <maven.surefire.plugin.version>2.22.2</maven.surefire.plugin.version>
+        <maven.failsafe.plugin.version>2.22.2</maven.failsafe.plugin.version>
+
+        <lombok.version>1.18.46</lombok.version>
+        <delombok.output>${project.build.directory}/delombok</delombok.output>
+
+        <vertx.version>4.5.5</vertx.version>
+        <guice.version>7.0.0</guice.version>
+        <slf4j.version>1.7.36</slf4j.version>
+        <logstash.gelf.version>1.15.0</logstash.gelf.version>
+        <sentry.log4j2.version>5.7.4</sentry.log4j2.version>
+        <disruptor.version>3.4.4</disruptor.version>
+        <!-- Trước đây scope tham chiếu ${log4j2.scope} nhưng biến này chưa từng được định nghĩa ở đâu,
+             khiến Maven cảnh báo "must be one of [provided, compile, runtime, test, system]".
+             Định nghĩa ở đây với giá trị mặc định hợp lệ. -->
+        <log4j2.scope>compile</log4j2.scope>
+
+        <junit5.version>5.8.2</junit5.version>
+        <junit.platform.version>1.8.2</junit.platform.version>
+
+        <project.dist>dist/${project.artifactId}</project.dist>
+
+        <release.sbin.start.name>start-${project.artifactId}</release.sbin.start.name>
+        <release.sentry.env>$RELEASE_TARGET</release.sentry.env>
+        <release.vmoptions.xms>512M</release.vmoptions.xms>
+        <release.vmoptions.xmx>512M</release.vmoptions.xmx>
+        <release.vmoptions.log4j2.config>$LOG4J2_CONFIG</release.vmoptions.log4j2.config>
+        <release.vmoptions.more/>
+    </properties>
+
+    <build>
+        <sourceDirectory>src/main/java</sourceDirectory>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+        </resources>
+
+        <testSourceDirectory>src/test/java</testSourceDirectory>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+        </testResources>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>0.8.8</version>
+                    <configuration>
+                        <append>true</append>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>default-report</id>
+                            <phase>prepare-package</phase>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.eclipse.m2e</groupId>
+                    <artifactId>lifecycle-mapping</artifactId>
+                    <version>1.0.0</version>
+                    <configuration>
+                        <lifecycleMappingMetadata>
+                            <pluginExecutions>
+                                <pluginExecution>
+                                    <pluginExecutionFilter>
+                                        <groupId>org.projectlombok</groupId>
+                                        <artifactId>lombok-maven-plugin</artifactId>
+                                        <versionRange>[1,)</versionRange>
+                                        <goals>
+                                            <goal>delombok</goal>
+                                        </goals>
+                                    </pluginExecutionFilter>
+                                    <action>
+                                        <ignore/>
+                                    </action>
+                                </pluginExecution>
+                                <pluginExecution>
+                                    <pluginExecutionFilter>
+                                        <groupId>org.apache.maven.plugins</groupId>
+                                        <artifactId>maven-enforcer-plugin</artifactId>
+                                        <versionRange>[1.0.0,)</versionRange>
+                                        <goals>
+                                            <goal>enforce</goal>
+                                        </goals>
+                                    </pluginExecutionFilter>
+                                    <action>
+                                        <ignore/>
+                                    </action>
+                                </pluginExecution>
+                            </pluginExecutions>
+                        </lifecycleMappingMetadata>
+                    </configuration>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>3.3.0</version>
+                    <executions>
+                        <execution>
+                            <id>copy-dependencies</id>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>copy-dependencies</goal>
+                            </goals>
+                            <configuration>
+                                <outputDirectory>${project.dist}/lib</outputDirectory>
+                                <includeScope>runtime</includeScope>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-antrun-plugin</artifactId>
+                    <version>3.1.0</version>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <configuration>
+                                <target>
+                                    <delete failonerror="false">
+                                        <fileset dir="${project.dist}"/>
+                                    </delete>
+                                    <copy todir="${project.dist}/lib">
+                                        <fileset dir="${project.build.directory}">
+                                            <exclude name="*-sources.jar"/>
+                                            <exclude name="*-javadoc.jar"/>
+                                            <include name="*.jar"/>
+                                        </fileset>
+                                    </copy>
+
+                                    <echo file="${project.dist}/banner.txt">${project.artifactId}</echo>
+                                    <echo file="${project.dist}/version.txt" append="false">${project.version}</echo>
+                                    <echo file="${project.dist}/${project.artifactId}.vmoptions">
+                                        <![CDATA[
+--add-modules java.se
+--add-exports java.base/jdk.internal.ref=ALL-UNNAMED
+--add-exports java.base/sun.security.pkcs=ALL-UNNAMED
+--add-exports java.base/sun.security.util=ALL-UNNAMED
+--add-exports java.base/sun.security.x509=ALL-UNNAMED
+--add-opens java.base/java.lang=ALL-UNNAMED
+--add-opens java.base/java.nio=ALL-UNNAMED
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED
+--add-opens java.management/sun.management=ALL-UNNAMED
+--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
+#
+-Dfile.encoding=UTF-8
+-server
+-Xms${release.vmoptions.xms}
+-Xmx${release.vmoptions.xmx}
+#
+# force to use G1GC
+-XX:+UseG1GC
+-XX:MaxGCPauseMillis=100
+#
+# heap dump
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath="logs/heap-dump.hprof"
+#
+# log4j config to use disruptor
+-DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector
+-DAsyncLoggerConfig.RingBufferSize=1024*1024
+-Dlog4j.configurationFile=${release.vmoptions.log4j2.config}
+#
+# sentry environment
+-Dsentry.environment=${release.sentry.env}
+#
+# tls config
+-Dhttps.protocols=TLSv1.1,TLSv1.2
+-Djdk.tls.client.protocols=TLSv1.1,TLSv1.2
+#
+# additional options which configured from pom's properties gone here
+${release.vmoptions.more}
+#
+									]]>
+                                    </echo>
+                                    <!--suppress UnresolvedMavenProperty -->
+                                    <echo file="${project.dist}/${release.sbin.start.name}.sh">
+                                        <![CDATA[#!/bin/bash
+cat banner.txt
+SELF_ABSOLUTE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+WORKING_DIR=$(dirname $SELF_ABSOLUTE_PATH)
+
+read_vmoptions() {
+  vmoptions_file=`eval echo "$1" 2>/dev/null`
+  if [ ! -r "$vmoptions_file" ]; then
+    vmoptions_file="$prg_dir/$vmoptions_file"
+  fi
+  if [ -r "$vmoptions_file" ] && [ -f "$vmoptions_file" ]; then
+    exec 8< "$vmoptions_file"
+    while read cur_option<&8; do
+      is_comment=`expr "W$cur_option" : 'W *#.*'`
+      if [ "$is_comment" = "0" ]; then
+      	echo $(eval echo $cur_option)
+        vmo_include=`expr "W$cur_option" : 'W *-include-options \(.*\)'`
+        if [ "$vmo_include" = "" ]; then
+          JVM_OPTS="$JVM_OPTS $(eval echo $cur_option)"
+        fi
+      fi
+    done
+    exec 8<&-
+    if [ ! "$vmo_include" = "" ]; then
+      read_vmoptions "$vmo_include"
+    fi
+  fi
+}
+
+JVM_OPTS=""
+read_vmoptions $WORKING_DIR/${project.artifactId}.vmoptions
+
+MAIN_CLASS=${mainClass}
+LOCAL_CLASSPATH="$WORKING_DIR/*:$WORKING_DIR/lib/*"
+
+mkdir -p logs
+
+exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLASS $@]]>
+                                    </echo>
+                                    <copy file="${project.dist}/${release.sbin.start.name}.sh"
+                                          tofile="${project.dist}/${release.sbin.start.name}-background.sh"/>
+                                    <echo append="true" file="${project.dist}/${release.sbin.start.name}-background.sh">
+                                        <![CDATA[ > /dev/null 2>&1 &]]>
+                                    </echo>
+                                </target>
+                            </configuration>
+                            <goals>
+                                <goal>run</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven.surefire.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${maven.failsafe.plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <configuration>
+                    <append>true</append>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>default-report</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <source>${maven.compiler.source}</source>
+                    <target>${maven.compiler.target}</target>
+                    <!--
+                        FIX QUAN TRỌNG: Từ JDK 23 trở đi, javac không còn tự động dò
+                        annotation processor (Lombok) trên classpath nữa (JDK-8321314).
+                        Nếu không khai báo tường minh, Lombok sẽ IM LẶNG không chạy,
+                        gây ra hàng loạt lỗi "cannot find symbol" cho các getter/setter/
+                        builder/constructor/log field mà Lombok lẽ ra phải sinh ra.
+
+                        Khai báo annotationProcessorPaths tường minh là giải pháp bền vững,
+                        không phụ thuộc cờ -proc:full (vốn chỉ là biện pháp giữ hành vi cũ tạm thời).
+                    -->
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>com.google.auto.service</groupId>
+                            <artifactId>auto-service</artifactId>
+                            <version>1.0</version>
+                        </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.2.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.4.0</version>
+                <configuration>
+                    <sourcepath>${delombok.output}</sourcepath>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>javadoc-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <!--                            <additionalparam>${javadoc.opts}</additionalparam>-->
+                            <!--                            <additionalparam>-Xdoclint:none</additionalparam>-->
+                            <additionalOptions>-Xdoclint:none</additionalOptions>
+                            <additionalJOption>-Xdoclint:none</additionalJOption>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok-maven-plugin</artifactId>
+                <version>1.18.20.0</version>
+                <configuration>
+                    <sourceDirectory>${project.basedir}/src/main/java</sourceDirectory>
+                    <outputDirectory>${delombok.output}</outputDirectory>
+                    <addOutputDirectory>false</addOutputDirectory>
+                </configuration>
+                <executions>
+                    <execution>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <!--
+                                LƯU Ý: goal đang bị comment nên execution này hiện KHÔNG làm gì cả.
+                                maven-javadoc-plugin phía trên trỏ <sourcepath> vào ${delombok.output},
+                                nếu thư mục này luôn trống thì bước generate javadoc-jar sẽ không có
+                                nội dung nào để xử lý (dù không gây lỗi build).
+                                Bỏ comment dòng dưới nếu bạn thực sự cần javadoc sinh ra đúng.
+                            -->
+                            <!-- <goal>delombok</goal> -->
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+                <scope>provided</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-stack-depchain</artifactId>
+                <version>${vertx.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.google.inject</groupId>
+                <artifactId>guice</artifactId>
+                <version>${guice.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.lmax</groupId>
+                <artifactId>disruptor</artifactId>
+                <version>${disruptor.version}</version>
+                <scope>${log4j2.scope}</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-api</artifactId>
+                <version>2.23.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-core</artifactId>
+                <version>2.23.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-slf4j2-impl</artifactId>
+                <version>2.23.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>2.0.13</version>
+            </dependency>
+
+            <!-- T E S T I N G -->
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter-engine</artifactId>
+                <version>${junit5.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.platform</groupId>
+                <artifactId>junit-platform-suite-engine</artifactId>
+                <version>${junit.platform.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.platform</groupId>
+                <artifactId>junit-platform-runner</artifactId>
+                <version>${junit.platform.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- CODING ENHANCE DEPENDENCIES -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.13</version>
+        </dependency>
+
+        <!-- LOGGING DEPENDENCIES -->
+        <!-- TEST DEPENDENCIES -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-runner</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite-engine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lmax</groupId>
+            <artifactId>disruptor</artifactId>
+            <version>4.0.0.RC1</version>
+        </dependency>
+    </dependencies>
+
+</project>

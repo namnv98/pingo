@@ -1,0 +1,35 @@
+basePackage: com.lego.namnv
+hazelcast:
+  file: /harbor/src/main/resources/hazelcast-local.xml
+  props: { }
+admEventBus:
+  address: harbor
+  tags: private
+  printStackTrace: false
+msgEventBus:
+  address: harbor
+  tags: private
+  printStackTrace: false
+admHttp:
+  tags: private
+  port: 8087
+  path:
+  headers:
+    content-type: application/json
+publicHttp:
+  tags: public
+  port: 8086
+  path:
+  headers:
+    content-type: application/json
+  printStackTrace: false
+invalidateCacheConfig:
+  eventBusAddress: lego-invalid-cache-info
+chatSocket:
+  host: 0.0.0.0
+  port: 8888
+  path: /connect
+  serviceName: eb_gossip_adm # định danh fallback dùng cho local dev; khi chạy production, HOSTNAME (tên pod k8s) sẽ được ưu tiên dùng thay
+chatBackend:
+  port: 9999
+  path: /connect # phải khớp với chatSocket.path bên colony

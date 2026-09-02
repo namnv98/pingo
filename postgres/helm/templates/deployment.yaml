@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  strategy:
+    # Deployment (khong phai StatefulSet) du dung o day vi chi 1 replica co dinh, khong scale --
+    # nhung PHAI Recreate (khong phai mac dinh RollingUpdate): 2 pod cung mount 1 PVC ReadWriteOnce
+    # cung luc se bi ket (pod moi Pending mai vi volume dang bi pod cu giu).
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.image }}
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.db }}
+            - name: POSTGRES_USER
+              value: {{ .Values.user }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.password }}
+            # Data dir mac dinh (/var/lib/postgresql/data) nam ngay tai diem mount -- initdb doi
+            # thu muc muc tieu rong hoan toan, PGDATA la 1 subdir de tranh xung dot voi file
+            # "lost+found" ma 1 so storage provisioner tu tao san trong volume moi.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            periodSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: initdb
+          configMap:
+            name: postgres-initdb

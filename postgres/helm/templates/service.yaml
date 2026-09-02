@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  type: NodePort
+  ports:
+    # NodePort 31005 -- de local dev (mvn exec:java, ngoai k3s) cung ket noi duoc qua
+    # localhost:31005, dung pattern voi harbor (31003)/colony (31001/31002)/beacon (31004).
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      nodePort: 31005

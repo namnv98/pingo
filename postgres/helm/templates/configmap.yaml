@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+data:
+  # Image postgres chinh thuc tu dong chay moi file *.sql trong /docker-entrypoint-initdb.d/ DUY
+  # NHAT 1 LAN luc container khoi dong voi data directory rong (lan dau tien, hoac sau khi xoa PVC)
+  # -- khong chay lai o nhung lan start sau, nen dung IF NOT EXISTS la du, khong can body idempotent
+  # phuc tap hon.
+  schema.sql: |
+    CREATE TABLE IF NOT EXISTS conversation_members (
+        conversation_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (conversation_id, user_id)
+    );
+    -- Danh cho truy van sau nay "user X thuoc nhung conversation nao" (sync luc client connect,
+    -- xem REAL_TIME_MESSAGING.md) -- chua co code nao dung toi trong dot nay, nhung them index
+    -- ngay tu dau gan nhu khong ton chi phi gi, tranh phai them sau tren bang da co du lieu.
+    CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members (user_id);
