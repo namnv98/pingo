@@ -42,6 +42,7 @@ public class BackendLinkGateway {
   private static final long BACKEND_PING_INTERVAL_MS = 25_000;
   private static final long BACKEND_PONG_TIMEOUT_MS = 60_000;
   private static final long HANDSHAKE_TIMEOUT_MS = 5_000;
+  private static final long MESSAGE_ACK_TIMEOUT_MS = 5_000;
 
   private final Vertx vertx;
   private final PingoConnector connector;
@@ -70,6 +71,22 @@ public class BackendLinkGateway {
   private record PendingSubscribe(CompletableFuture<Void> future, boolean relayToClient) {}
 
   private final Map<String, PendingSubscribe> pendingSubscribes = new ConcurrentHashMap<>();
+
+  /**
+   * Theo dõi các MESSAGE đang chờ phản hồi (ACK/ERROR/MESSAGE echo) từ colony, keyed theo id của
+   * chính frame đó — bù cho khoảng hở duy nhất còn "im lặng thật" đã tìm thấy qua resilience test
+   * thật: {@code forwardMessage} (khác {@link #sendSubscribeAndAwait}) trước đây KHÔNG track gì cả
+   * — nếu 1 shard link cache vẫn báo {@code isClosed()==false} nhưng backend thật đã chết, write()
+   * xuống local thành công (buffer OS/Netty nhận), colony không bao giờ trả lời, và client không
+   * nhận được gì — không MESSAGE, không ACK, không ERROR — cho tới khi {@link #pingSharedLinksIfDue}
+   * phát hiện quá hạn PONG (60s). Giờ nếu quá {@link #MESSAGE_ACK_TIMEOUT_MS} không có phản hồi,
+   * chủ động coi link đó là chết: đóng + gỡ khỏi {@link #links} ngay (không đợi đủ 60s, giảm blast
+   * radius cho các session khác đang share shard đó), đồng thời báo ERROR rõ ràng cho client — biến
+   * "im lặng thật" thành "lỗi rõ ràng", không còn trường hợp nào client chờ mãi không có hồi đáp.
+   */
+  private record PendingAck(BackendLink link, SockjsSocket session) {}
+
+  private final Map<String, PendingAck> pendingAcks = new ConcurrentHashMap<>();
 
   /**
    * Shard ổn định (deterministic) cho 1 session, trong khoảng {@code [0, chatBackendShardsPerPod)}
@@ -205,15 +222,36 @@ public class BackendLinkGateway {
 
   private void forwardMessage(SockjsSocket session, BackendLink link, SocketFrame frame) {
     var outgoing = frame.toBuilder().fromUserId(session.getUserId().toString()).harborSessionId(session.getId()).build();
+
+    pendingAcks.put(frame.getId(), new PendingAck(link, session));
+    vertx.setTimer(MESSAGE_ACK_TIMEOUT_MS, tid -> onMessageAckTimeout(frame.getId()));
+
     link.getSocket()
         .write(outgoing.encode())
         .toCompletionStage()
         .exceptionally(
             ex -> {
-              log.warn("failed to forward message {} to backend for session {}", frame.getId(), session.getId(), ex);
-              relayToClient.accept(session, SocketFrames.error(frame.getId(), "backend unavailable"));
+              if (pendingAcks.remove(frame.getId()) != null) {
+                log.warn("failed to forward message {} to backend for session {}", frame.getId(), session.getId(), ex);
+                relayToClient.accept(session, SocketFrames.error(frame.getId(), "backend unavailable"));
+              }
               return null;
             });
+  }
+
+  private void onMessageAckTimeout(String frameId) {
+    var pending = pendingAcks.remove(frameId);
+    if (pending == null) {
+      return; // da co phan hoi (ACK/ERROR/MESSAGE echo) truoc do roi, timer nay het y nghia
+    }
+    var shardKey = new PodShardKey(pending.link().getPodName(), shardFor(pending.session().getId()));
+    log.warn(
+        "khong nhan duoc phan hoi cho message {} tu backend trong {}ms, coi link (pod {}, shard {}) la chet, tu don + bao loi cho client",
+        frameId, MESSAGE_ACK_TIMEOUT_MS, shardKey.podName(), shardKey.shardIndex());
+    if (links.remove(shardKey, pending.link()) && !pending.link().isClosed()) {
+      pending.link().close();
+    }
+    relayToClient.accept(pending.session(), SocketFrames.error(frameId, "backend unavailable"));
   }
 
   private CompletionStage<RouteResp> getRoutingIp(int version, UUID conversationId) {
@@ -337,7 +375,10 @@ public class BackendLinkGateway {
       }
       return;
     }
-    // MESSAGE / ACK / ERROR được relay lên client gần như nguyên vẹn (verbatim), không sửa đổi gì thêm.
+    // MESSAGE / ACK / ERROR được relay lên client gần như nguyên vẹn (verbatim), không sửa đổi gì
+    // thêm — nhưng trước tiên huỷ pending-tracking (nếu id này đang chờ, xem forwardMessage) để
+    // timer MESSAGE_ACK_TIMEOUT_MS không bắn ERROR trùng lên 1 message vừa thật sự có hồi đáp.
+    pendingAcks.remove(frame.getId());
     relayToSession(frame);
   }
 
