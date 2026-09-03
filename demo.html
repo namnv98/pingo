@@ -35,6 +35,10 @@
         .conv-send input { flex: 1; }
         .hint { font-size: 12px; color: #888; margin: 4px 0 8px; }
         .idbox { font-family: monospace; background: #f0f0f0; padding: 1px 5px; border-radius: 4px; }
+        select { padding: 5px 7px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; background: white; }
+        .chip { background: white; }
+        .chip.selected { background: #2563eb; color: white; border-color: #2563eb; }
+        #memberPicker:empty::before { content: '(chưa có ai trong danh sách khớp bộ lọc)'; font-size: 12px; color: #aaa; font-style: italic; }
     </style>
 </head>
 <body>
@@ -63,11 +67,10 @@
     <h3>Bắt đầu trò chuyện</h3>
     <div class="row">
         <label style="min-width:110px">Nhắn 1-1 với:</label>
-        <input type="text" id="dmPeerUserId" size="38" list="userList" placeholder="gõ tên hoặc chọn từ danh sách, hoặc dán user id">
+        <select id="dmPeerSelect" onchange="document.getElementById('dmPeerUserId').value = this.value"><option value="">— chọn từ danh sách —</option></select>
+        <input type="text" id="dmPeerUserId" size="30" placeholder="hoặc dán user id trực tiếp">
         <button class="primary" onclick="startDm()">Bắt đầu DM</button>
-        <button onclick="refreshUserList()">🔄 Làm mới danh sách</button>
     </div>
-    <datalist id="userList"></datalist>
     <div class="row">
         <label style="min-width:110px">Group id:</label>
         <input type="text" id="groupConversationId" size="38" placeholder="để trống = tự tạo mới">
@@ -78,8 +81,13 @@
         <input type="text" id="groupMembers" size="50" placeholder="user id, cách nhau bởi dấu phẩy (không cần tự thêm mình)">
         <button class="primary" onclick="startGroup()">Tham gia / Tạo group</button>
     </div>
+    <div class="row">
+        <label style="min-width:110px"></label>
+        <label style="font-weight:400"><input type="checkbox" id="showAllUsers" onchange="renderUserPickers()"> hiện cả user chưa đặt tên</label>
+        <button onclick="refreshUserList()">🔄 Làm mới danh sách</button>
+    </div>
     <div class="row" id="memberPicker"></div>
-    <div class="hint">DM: gõ tên/user id của người kia (có gợi ý từ danh sách đã biết) — hệ thống tự tính conversationId. Group: để trống ô id + bấm "Tạo mới" nếu bạn là người tạo, hoặc dán id group có sẵn nếu tham gia group người khác đã tạo; bấm vào tên trong danh sách bên dưới ô "Thành viên" để thêm/bớt nhanh.</div>
+    <div class="hint">DM: chọn từ danh sách (chỉ hiện user đã đặt tên, trừ khi tick ô trên) hoặc dán user id trực tiếp. Group: để trống ô id + bấm "Tạo mới" nếu bạn là người tạo; bấm vào tên trong danh sách dưới ô "Thành viên" để thêm/bớt nhanh (đang chọn = tô xanh).</div>
 </div>
 
 <div class="panel">
@@ -123,42 +131,62 @@ function refreshUserList() {
         .then(function (list) {
             knownUsers = list;
             usernameById = {};
-            var datalist = document.getElementById('userList');
-            var picker = document.getElementById('memberPicker');
-            datalist.innerHTML = '';
-            picker.innerHTML = '';
             list.forEach(function (u) {
                 if (u.username) usernameById[u.id] = u.username;
                 if (u.id === myUserId && u.username && !document.getElementById('myUsername').value) {
                     document.getElementById('myUsername').value = u.username;
                 }
-                var label = u.username ? u.username : (u.id.substring(0, 8) + '…');
-
-                var option = document.createElement('option');
-                option.value = u.id;
-                option.label = label + (u.username ? '' : ' (chưa đặt tên)');
-                datalist.appendChild(option);
-
-                if (u.id === myUserId) return; // không cần tự chọn chính mình làm thành viên
-                var chip = document.createElement('button');
-                chip.type = 'button';
-                chip.innerText = label;
-                chip.title = u.id;
-                chip.onclick = function () { toggleMember(u.id); };
-                picker.appendChild(chip);
             });
+            renderUserPickers();
         })
         .catch(function (err) {
             console.warn('không load được danh sách user', err);
         });
 }
 
-function toggleMember(userId) {
+// Vẽ lại <select> DM peer + hàng chip chọn thành viên, từ knownUsers đã fetch sẵn (không gọi lại
+// API) — tách riêng khỏi refreshUserList() để ô checkbox "hiện cả user chưa đặt tên" chỉ cần vẽ
+// lại, không cần fetch lại mỗi lần tick. Mặc định CHỈ hiện user đã đặt tên — danh sách thật có thể
+// có hàng chục UUID rác (vd từ load test) chưa từng đặt tên, hiện hết ra sẽ rối, không dùng nổi.
+function renderUserPickers() {
+    var showAll = document.getElementById('showAllUsers').checked;
+    var visible = knownUsers.filter(function (u) { return showAll || u.username; });
+
+    var select = document.getElementById('dmPeerSelect');
+    var currentSelectValue = select.value;
+    select.innerHTML = '<option value="">— chọn từ danh sách —</option>';
+    visible.forEach(function (u) {
+        if (u.id === myUserId) return; // không tự nhắn cho chính mình
+        var option = document.createElement('option');
+        option.value = u.id;
+        option.innerText = u.username ? u.username : (u.id.substring(0, 8) + '… (chưa đặt tên)');
+        select.appendChild(option);
+    });
+    select.value = currentSelectValue; // giữ lựa chọn cũ nếu vẫn còn trong danh sách sau khi lọc lại
+
+    var currentMembers = document.getElementById('groupMembers').value
+        .split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+    var picker = document.getElementById('memberPicker');
+    picker.innerHTML = '';
+    visible.forEach(function (u) {
+        if (u.id === myUserId) return; // không cần tự chọn chính mình làm thành viên
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip' + (currentMembers.indexOf(u.id) !== -1 ? ' selected' : '');
+        chip.innerText = u.username ? u.username : (u.id.substring(0, 8) + '…');
+        chip.title = u.id;
+        chip.onclick = function () { toggleMember(u.id, chip); };
+        picker.appendChild(chip);
+    });
+}
+
+function toggleMember(userId, chipEl) {
     var input = document.getElementById('groupMembers');
     var current = input.value.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
     var idx = current.indexOf(userId);
     if (idx === -1) current.push(userId); else current.splice(idx, 1);
     input.value = current.join(', ');
+    if (chipEl) chipEl.classList.toggle('selected', idx === -1);
 }
 
 function saveUsername() {
