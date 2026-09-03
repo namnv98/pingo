@@ -5,6 +5,7 @@ import com.lego.namnv.core.common.support.UUIDUtils;
 import com.lego.colony.ws.delivery.MessageDelivery;
 import com.lego.colony.ws.dto.MessageType;
 import com.lego.colony.ws.dto.SocketFrame;
+import com.lego.colony.ws.history.MessageHistoryRegistry;
 import com.lego.colony.ws.membership.ChannelMembershipRegistry;
 import com.lego.colony.ws.routing.RoutingVersionSync;
 import com.lego.colony.ws.session.ChatLink;
@@ -65,16 +66,19 @@ public class ChatSessionManager {
   private final String serverId;
   private final SessionRegistry registry = new SessionRegistry();
   private final ChannelMembershipRegistry membership;
+  private final MessageHistoryRegistry history;
   private final Vertx vertx;
   private final RoutingVersionSync routingVersionSync;
   private final MessageDelivery messageDelivery;
   /** false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe (xem {@code RestApiVerticle}). */
   private volatile boolean ready = true;
 
-  public ChatSessionManager(String serverId, Vertx vertx, PingoConnector connector, ChannelMembershipRegistry membership) {
+  public ChatSessionManager(
+      String serverId, Vertx vertx, PingoConnector connector, ChannelMembershipRegistry membership, MessageHistoryRegistry history) {
     this.serverId = serverId;
     this.vertx = vertx;
     this.membership = membership;
+    this.history = history;
     this.routingVersionSync = new RoutingVersionSync(vertx, connector);
     this.messageDelivery = new MessageDelivery(registry, connector);
     vertx.eventBus().consumer(serverId, messageDelivery::onRoutedMessage);
@@ -266,8 +270,32 @@ public class ChatSessionManager {
     if (!messageDelivery.deliverLocally(outgoing)) {
       messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
     }
+    persistMessage(subscriber, frame, outgoing);
     subscriber.send(
         SocketFrame.builder().type(MessageType.ACK).id(frame.getId()).harborSessionId(subscriber.getHarborSessionId()).ts(now()).build());
+  }
+
+  /**
+   * Ghi lại lịch sử tin nhắn — best-effort, KHÔNG chặn đường đi real-time ở trên (deliverLocally/
+   * forwardToOwningNode/ACK đã chạy xong hoặc đang chạy song song, không đợi write này). Dùng
+   * {@code outgoing.getConversationId()}/{@code getTs()} (đã chuẩn hoá — server tự stamp) thay vì
+   * đọc lại từ {@code frame} gốc của client. Bỏ qua lặng lẽ nếu conversationId sai định dạng — cùng
+   * mức độ khoan dung với {@code MessageDelivery.deliverLocally}, không phải lỗi cần báo client.
+   */
+  private void persistMessage(ChatSubscriber subscriber, SocketFrame frame, SocketFrame outgoing) {
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(outgoing.getConversationId());
+    } catch (IllegalArgumentException | NullPointerException e) {
+      return;
+    }
+    history
+        .saveMessage(UUID.randomUUID(), conversationId, subscriber.getUserId(), outgoing.getBody(), outgoing.getTs())
+        .exceptionally(
+            ex -> {
+              log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
+              return null;
+            });
   }
 
   /**

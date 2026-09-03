@@ -18,3 +18,27 @@ data:
     -- xem REAL_TIME_MESSAGING.md) -- chua co code nao dung toi trong dot nay, nhung them index
     -- ngay tu dau gan nhu khong ton chi phi gi, tranh phai them sau tren bang da co du lieu.
     CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members (user_id);
+
+    -- Chua co bang user nao truoc do trong he thong (AUTH chi tin fromUserId client tu khai, xem
+    -- ARCHITECTURE.md muc 8) -- bang nay chi la 1 so dang ky toi thieu "id nay da tung xuat hien",
+    -- khong co field auth/profile gi ca, khong co du lieu de dien.
+    CREATE TABLE IF NOT EXISTS users (
+        id UUID NOT NULL PRIMARY KEY,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Lich su tin nhan -- xem MessageHistoryRegistry (colony). Khong co FK toi conversation_members
+    -- hay users, giu dung quy uoc loose-schema da co san cua conversation_members (khong co bang
+    -- conversations rieng de FK toi).
+    CREATE TABLE IF NOT EXISTS messages (
+        id UUID NOT NULL PRIMARY KEY,
+        conversation_id UUID NOT NULL,
+        from_user_id UUID NOT NULL,
+        -- Luu duoi dang JSON string (Json.encode(body)), KHONG dung JSONB -- tranh phai phu thuoc
+        -- dung cach vertx-pg-client wrap/unwrap kieu JSON polymorphic (body la Object bat ky tu
+        -- SocketFrame, server khong doc/hieu noi dung ben trong) -- chi can luu/tra lai nguyen
+        -- ven cho list API, khong can query theo noi dung body.
+        body TEXT,
+        created_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages (conversation_id, created_at DESC);
