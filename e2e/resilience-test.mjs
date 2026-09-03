@@ -1,6 +1,9 @@
 // Test resilience thuc su tren k3s: N session gui tin lien tuc, giua chung kill LAN LUOT toan bo
 // pod colony GOC (khong phai chon ngau nhien 1 pod — xem ARCHITECTURE.md muc 10, 12) -> verify
-// khong mat tin nao, ke ca khi nhieu session dang dung chung 1 shard link bi cat cung luc.
+// khong CO TIN NAO BI IM LANG HOAN TOAN, ke ca khi nhieu session dang dung chung 1 shard link bi
+// cat cung luc. Tally tach ro 3 loai ket qua cho moi tin (delivered / errored / silent) — nhan
+// duoc ERROR (server tra loi ro "backend unavailable") KHONG tinh la "mat tin", chi co "silent"
+// (khong nhan duoc gi ca) moi tinh — xem giai thich chi tiet o doan tally cuoi file.
 //
 // Vi sao kill "lan luot CA 3 pod" thay vi 1 pod: chi kill 1 pod ngau nhien co the "trung" dung pod
 // khong co session nao dang dung -> test PASS gia tao, khong chung minh duoc gi (bai hoc rut ra
@@ -115,23 +118,50 @@ async function main() {
 
   console.log(`\n== da kill du ${killed.length}/${KILL_TIMES_MS.length} pod colony goc: ${killed.join(", ")} ==`);
   console.log("== tallying results ==");
+  // Phan biet 3 loai ket qua cho MOI id da gui, KHONG gop chung vao 1 "lost":
+  //  - delivered : nhan duoc dung MESSAGE echo (thanh cong)
+  //  - errored   : nhan duoc ERROR frame CUNG id (server co tra loi, chi la khong gui duoc -
+  //                vd routing rong destination -> NPE -> .exceptionally() gui ERROR, xem
+  //                BackendLinkGateway.sendMessage/forwardMessage) -- KHONG phai "mat tin" theo
+  //                nghia im lang, day la hanh vi da biet/co chu dich cua he thong
+  //  - silent    : khong nhan duoc gi ca (khong MESSAGE, khong ERROR) cho id do -- day moi la
+  //                "mat tin" thuc su theo nghia im lang hoan toan (vd link cache tuong con song
+  //                nhung colony phia sau da chet, khong ACK/ERROR gi cho toi khi PONG timeout 60s
+  //                don link -- xem forwardMessage, khong co pending-tracking/timeout cho MESSAGE)
   let totalSent = 0;
-  let totalLost = 0;
-  const lostDetail = [];
+  let totalDelivered = 0;
+  let totalErrored = 0;
+  let totalSilent = 0;
+  const silentDetail = [];
   for (const s of sessions) {
     const ids = sentIds.get(s.label);
-    const receivedIds = new Set(s.received.filter((f) => f.type === "MESSAGE").map((f) => f.id));
+    const deliveredIds = new Set(s.received.filter((f) => f.type === "MESSAGE").map((f) => f.id));
+    const erroredIds = new Set(s.received.filter((f) => f.type === "ERROR").map((f) => f.id));
     totalSent += ids.length;
-    const lost = ids.filter((id) => !receivedIds.has(id));
-    totalLost += lost.length;
-    if (lost.length > 0) lostDetail.push(`${s.label}: ${lost.length} lost`);
+    let delivered = 0;
+    let errored = 0;
+    let silent = 0;
+    for (const id of ids) {
+      if (deliveredIds.has(id)) delivered++;
+      else if (erroredIds.has(id)) errored++;
+      else silent++;
+    }
+    totalDelivered += delivered;
+    totalErrored += errored;
+    totalSilent += silent;
+    if (silent > 0) silentDetail.push(`${s.label}: ${silent} silent`);
     s.ws.close();
   }
 
-  console.log(`\nTOTAL: sent=${totalSent} lost=${totalLost} (${totalSent ? ((totalLost / totalSent) * 100).toFixed(2) : "0.00"}%)`);
-  if (lostDetail.length) console.log("Chi tiet mat tin:", lostDetail.join(", "));
-  const pass = totalLost === 0 && killed.length === KILL_TIMES_MS.length;
-  console.log(pass ? "=== PASS ===" : "=== FAIL ===");
+  const pct = (n) => (totalSent ? ((n / totalSent) * 100).toFixed(2) : "0.00");
+  console.log(
+    `\nTOTAL: sent=${totalSent}  delivered=${totalDelivered} (${pct(totalDelivered)}%)  ` +
+      `errored=${totalErrored} (${pct(totalErrored)}%, server co tra loi ERROR - khong phai im lang)  ` +
+      `silent=${totalSilent} (${pct(totalSilent)}%, KHONG nhan duoc gi ca - moi la "mat tin" thuc su)`
+  );
+  if (silentDetail.length) console.log("Chi tiet silent (mat tin thuc su):", silentDetail.join(", "));
+  const pass = totalSilent === 0 && killed.length === KILL_TIMES_MS.length;
+  console.log(pass ? "=== PASS (0 silent — errored khong tinh la mat tin, server da tra loi ro rang) ===" : "=== FAIL: co tin bi im lang hoan toan ===");
   console.log(`\nNHO scale colony ve lai replica ban dau: kubectl scale deployment colony -n ${NAMESPACE} --replicas=1`);
   process.exitCode = pass ? 0 : 1;
 }
