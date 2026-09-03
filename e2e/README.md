@@ -19,8 +19,8 @@ Chạy được với bất kỳ `harbor` nào đang sống — local dev (`mvn 
 hay k3s — chỉ cần 1 pod/instance `colony` là đủ, không cần nhiều pod.
 
 ```bash
-node e2e/demux-test.mjs                                                          # mặc định trỏ k3s NodePort 31003
-PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/demux-test.mjs       # local dev, không qua k3s
+node e2e/demux-test.mjs                                                              # mặc định trỏ k3s NodePort 31003
+env PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/demux-test.mjs       # local dev, không qua k3s (bash lẫn fish đều chạy được)
 ```
 
 ## `resilience-test.mjs` — test tải + kill pod thật trên k3s
@@ -34,7 +34,12 @@ ai dùng, test pass giả tạo, không chứng minh được gì — bài học
 kill 3 lần, nên cần >= 3 pod):
 
 ```bash
+# bash/zsh:
 export KUBECONFIG=~/.kube/k3s.yaml   # hoặc bất kỳ đâu trỏ đúng cụm k3s của bạn
+# fish (export VAR=value là cú pháp bash, fish KHÔNG hiểu — set KUBECONFIG "trông như đã set"
+# trong lệnh nhưng kubectl không thấy, rơi về default localhost:8080 rồi báo "connection refused"):
+set -x KUBECONFIG ~/.kube/k3s.yaml
+
 kubectl scale deployment colony -n default --replicas=3
 kubectl rollout status deployment/colony -n default
 
@@ -56,11 +61,12 @@ Tuỳ chỉnh qua biến môi trường (không cần sửa code):
 | `PINGO_TOTAL_DURATION_MS` | `60000` | tổng thời gian gửi tin |
 | `PINGO_KILL_TIMES_MS` | `10000,30000,50000` | mốc thời gian (ms, tính từ lúc bắt đầu gửi) kill từng pod — số phần tử = số pod cần có sẵn |
 
-Ví dụ chạy nhanh, tải nhẹ (như lần test 15-session ban đầu):
+Ví dụ chạy nhanh, tải nhẹ (như lần test 15-session ban đầu) — dùng `env VAR=value command` (lệnh
+`env` là binary ngoài, chạy được y hệt trên cả bash lẫn fish, không như cú pháp `VAR=value command` chỉ bash mới hiểu):
 
 ```bash
 kubectl scale deployment colony -n default --replicas=3 && kubectl rollout status deployment/colony -n default
-PINGO_NUM_SESSIONS=15 PINGO_TOTAL_DURATION_MS=32000 PINGO_KILL_TIMES_MS=5000,15000,25000 node e2e/resilience-test.mjs
+env PINGO_NUM_SESSIONS=15 PINGO_TOTAL_DURATION_MS=32000 PINGO_KILL_TIMES_MS=5000,15000,25000 node e2e/resilience-test.mjs
 kubectl scale deployment colony -n default --replicas=1
 ```
 
