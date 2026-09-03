@@ -314,10 +314,24 @@ class K8SKeeper extends AbstractLifeCycle implements Keeper {
                 try {
                   // ip chắc chắn không null ở đây — đã guard/return sớm ở đầu addPod() rồi.
                   var destination = Destination.of(podName, InetAddress.getByName(ip));
+                  prePods.remove(podName);
+                  // SortedArray.add() KHÔNG tự dedupe — chỉ là chèn theo thứ tự sắp xếp, gọi lại
+                  // cho 1 pod đã có sẵn (tên trùng — Destination.equals() chỉ so name, xem
+                  // K8sDestination) sẽ tạo thêm 1 bản sao mới thay vì no-op. Trước đây hiếm khi lộ
+                  // ra vì onModified() chỉ gọi addPod() khi k8s thật sự gửi 1 event MODIFIED, nhưng
+                  // từ khi có reconcileOnce() (LIST định kỳ, gọi addPod cho MỌI pod đang chạy dù
+                  // không đổi gì) thì lộ rõ: pod không đổi vẫn bị addPod gọi lại mỗi
+                  // RECONCILE_INTERVAL_MS, khiến "pods" phình vô hạn nếu không tự chặn ở đây. Chặn
+                  // bằng contains() trước — KHÔNG dùng lại pattern remove-rồi-add của
+                  // SnapshotKeeper.upsert() vì pattern đó cố tình bắn REMOVE+ADD khi có thay đổi
+                  // thật, ở đây ta muốn ngược lại: hoàn toàn no-op (không bắn event nào) khi không
+                  // có gì đổi.
+                  if (pods.contains(destination)) {
+                    return;
+                  }
                   if (pods.add(destination)) {
                     eventEmitter.dispatch(
                         new DestinationChangeEvent(ChangeType.ADD, destination));
-                    prePods.remove(podName);
                     log.info("phat hien pod moi (ADD) [pod={}], tong hien co {} destination", destination, pods.unmodifiableValues().size());
                   }
                 } catch (UnknownHostException ex) {
