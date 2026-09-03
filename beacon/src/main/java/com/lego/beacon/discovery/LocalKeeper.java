@@ -1,4 +1,4 @@
-package com.lego.beacon.discovery.keeper;
+package com.lego.beacon.discovery;
 
 import com.lego.namnv.core.common.comp.AbstractLifeCycle;
 import com.lego.namnv.core.common.support.Disposable;

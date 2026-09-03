@@ -1,11 +1,9 @@
-package com.lego.beacon.discovery.keeper;
+package com.lego.beacon.discovery;
 
 import com.lego.namnv.discovery.k8s.K8sClientConfig;
 import com.lego.namnv.discovery.router.Destination;
 import com.lego.namnv98.event.EventObservable;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
