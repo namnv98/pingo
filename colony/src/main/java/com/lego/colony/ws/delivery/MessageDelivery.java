@@ -35,16 +35,17 @@ public class MessageDelivery {
       log.warn("dropping message {} with invalid conversationId {}", frame.getId(), frame.getConversationId());
       return true; // conversationId sai định dạng, không phải lỗi do routing — không forward đi node khác nữa
     }
-    var localSubscribers = registry.sessionsOfConversation(conversationId);
+    var localSubscribers = registry.subscribersOfConversation(conversationId);
     if (localSubscribers.isEmpty()) {
       return false;
     }
-    for (var subscriberSession : localSubscribers) {
-      subscriberSession
-          .send(frame)
+    for (var subscriber : localSubscribers) {
+      var tagged = frame.toBuilder().harborSessionId(subscriber.getHarborSessionId()).build();
+      subscriber
+          .send(tagged)
           .exceptionally(
               ex -> {
-                log.warn("failed to deliver message {} to session {}", frame.getId(), subscriberSession.getId(), ex);
+                log.warn("failed to deliver message {} to subscriber {}", frame.getId(), subscriber.getId(), ex);
                 return null;
               });
     }

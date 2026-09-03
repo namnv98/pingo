@@ -33,3 +33,4 @@ chatSocket:
 chatBackend:
   port: 9999
   path: /connect # phải khớp với chatSocket.path bên colony
+chatBackendShardsPerPod: 4 # số link song song/pod colony, dùng chung cho mọi session trên node harbor này

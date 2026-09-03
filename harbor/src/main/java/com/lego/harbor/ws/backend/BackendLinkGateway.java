@@ -12,6 +12,7 @@ import com.lego.harbor.ws.session.BackendLink;
 import com.lego.harbor.ws.session.SockjsSocket;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,10 +25,15 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Mọi việc liên quan tới backend WebSocket link — link thuần (plain) mà gateway giữ, DÙNG CHUNG
- * cho mọi conversationId hash ra cùng 1 pod colony (không còn 1 link/session như trước): mở/dùng
- * lại link, gửi SUBSCRIBE để đăng ký 1 conversationId trên 1 link, forward MESSAGE của client
- * xuống backend, relay frame từ backend lên lại client, và ping/pong kiểm tra sống của từng link.
- * Dùng bởi {@code com.lego.harbor.ws.SockjsSocketManager} và {@code com.lego.harbor.ws.routing.RoutingVersionSync}.
+ * cho MỌI client session trên node harbor này (không phải 1 link/session như trước): với mỗi pod
+ * colony, giữ {@code chatBackendShardsPerPod} link song song (shard), chọn shard theo hash ổn định
+ * của {@code session.getId()} (xem {@link #shardFor}) — 1 session luôn rơi vào đúng 1 shard trong
+ * suốt vòng đời của nó (giữ nguyên thứ tự frame của riêng session đó), chỉ có traffic của các
+ * session KHÁC mới có thể "đụng" nhau khi cùng rơi vào 1 shard (~1/N khả năng). Việc mở/dùng lại
+ * link, gửi SUBSCRIBE, forward MESSAGE, relay frame từ backend lên lại đúng client (qua
+ * {@code harborSessionId} trong frame — không còn suy ra được từ chính socket nữa vì socket giờ
+ * dùng chung), và ping/pong kiểm tra sống của từng shard link đều nằm ở đây. Dùng bởi
+ * {@code com.lego.harbor.ws.SockjsSocketManager} và {@code com.lego.harbor.ws.routing.RoutingVersionSync}.
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -40,8 +46,19 @@ public class BackendLinkGateway {
   private final Vertx vertx;
   private final PingoConnector connector;
   private final LegoConfig1 config;
+  /**
+   * Cùng 1 map sống (live) mà {@code SockjsSocketManager} đang giữ — cần để {@link #onBackendFrame}
+   * tra ra đúng session cục bộ cần relay tới, dựa trên {@code harborSessionId} của frame trả về từ
+   * colony (không còn closure sẵn 1 session cố định như khi link còn thuộc riêng 1 session).
+   */
+  private final Map<String, SockjsSocket> sessions;
   /** Đẩy 1 frame lên lại cho client của session — do {@code SockjsSocketManager} cung cấp. */
   private final BiConsumer<SockjsSocket, SocketFrame> relayToClient;
+
+  /** Link song song (shard) đang sống, keyed theo (pod, shardIndex) — dùng chung cho mọi session. */
+  private final Map<PodShardKey, BackendLink> links = new ConcurrentHashMap<>();
+  /** Single-flight: gom nhiều session cùng cần 1 shard key lần đầu vào đúng 1 lần connect. */
+  private final Map<PodShardKey, CompletableFuture<BackendLink>> connecting = new ConcurrentHashMap<>();
 
   /**
    * Theo dõi các SUBSCRIBE đang chờ SUBSCRIBE_OK/SUBSCRIBE_ERROR, keyed theo correlation id của
@@ -54,6 +71,17 @@ public class BackendLinkGateway {
 
   private final Map<String, PendingSubscribe> pendingSubscribes = new ConcurrentHashMap<>();
 
+  /**
+   * Shard ổn định (deterministic) cho 1 session, trong khoảng {@code [0, chatBackendShardsPerPod)}
+   * — cùng 1 session luôn ra cùng 1 shard, nên mọi conversation của nó trên cùng 1 pod vẫn tiếp
+   * tục dùng chung đúng 1 link vật lý như trước (giữ nguyên thứ tự), chỉ khác là link đó giờ có
+   * thể dùng chung với ~1/N session khác thay vì độc chiếm.
+   */
+  int shardFor(String sessionId) {
+    var shardCount = Math.max(1, config.getChatBackendShardsPerPod());
+    return Math.floorMod(sessionId.hashCode(), shardCount);
+  }
+
   /** Client chủ động SUBSCRIBE 1 conversationId — mở/dùng lại link xuống đúng pod sở hữu nó. */
   public CompletionStage<Void> subscribe(
       SockjsSocket session, String frameId, UUID conversationId, List<UUID> memberUserIds, int routingVersion) {
@@ -64,7 +92,7 @@ public class BackendLinkGateway {
   /** Gửi 1 MESSAGE của client cho đúng conversation — tự mở/dùng lại link + auto-subscribe nếu session chưa subscribe conversation này. */
   public void sendMessage(SockjsSocket session, SocketFrame frame, UUID conversationId, int routingVersion) {
     var podName = session.getPodFor(conversationId);
-    var link = podName == null ? null : session.getLinkForPod(podName);
+    var link = podName == null ? null : links.get(new PodShardKey(podName, shardFor(session.getId())));
     if (link != null && !link.isClosed()) {
       forwardMessage(session, link, frame);
       return;
@@ -75,7 +103,8 @@ public class BackendLinkGateway {
         .thenCompose(routeResp -> ensureLinkAndSubscribe(session, null, conversationId, members, routeResp, false))
         .thenAccept(
             unused -> {
-              var newLink = session.getLinkForPod(session.getPodFor(conversationId));
+              var newPod = session.getPodFor(conversationId);
+              var newLink = newPod == null ? null : links.get(new PodShardKey(newPod, shardFor(session.getId())));
               if (newLink != null) {
                 forwardMessage(session, newLink, frame);
               }
@@ -115,14 +144,55 @@ public class BackendLinkGateway {
             });
   }
 
-  /** Kiểm tra liveness của mọi backend link đang mở: đóng nếu quá hạn PONG, hoặc gửi PING nếu tới hạn. */
-  public void pingIfDue(SockjsSocket session, long now) {
-    for (var link : session.allLinks()) {
+  /**
+   * Kiểm tra liveness của MỌI shard link đang mở (dùng chung cho mọi session) — đóng nếu quá hạn
+   * PONG, hoặc gửi PING nếu tới hạn. Quét đúng 1 lần/chu kỳ (do {@code SockjsSocketManager} gọi),
+   * KHÔNG còn theo từng session như trước (1 link giờ có thể có hàng trăm session đang dùng).
+   */
+  public void pingSharedLinksIfDue(long now) {
+    for (var entry : links.entrySet()) {
+      var link = entry.getValue();
       if (now - link.getLastPongAt() > BACKEND_PONG_TIMEOUT_MS) {
-        log.warn("backend link to pod {} for session {} timed out, dropping it", link.getPodName(), session.getId());
-        session.closeLink(link.getPodName());
+        log.warn("backend link to pod {} (shard {}) timed out, dropping it", link.getPodName(), entry.getKey().shardIndex());
+        links.remove(entry.getKey(), link);
+        link.close();
       } else if (now - link.getLastPongAt() >= BACKEND_PING_INTERVAL_MS) {
         link.getSocket().write(SocketFrames.ping(UUIDUtils.timeBasedUuidAsString()).encode());
+      }
+    }
+  }
+
+  /**
+   * Best-effort báo cho colony biết 1 session vừa đóng, trên MỌI shard link mà session đó đang
+   * dùng — colony sẽ gỡ đúng subscriber tương ứng khỏi registry của nó (xem
+   * {@code ChatSessionManager}), vì link vật lý giờ dùng chung nên TCP close của session này
+   * không còn tự động kéo theo việc đóng link nữa (xem {@code SockjsSocketManager#onClose}).
+   */
+  public void notifySessionClosed(SockjsSocket session) {
+    var pods = new HashSet<String>();
+    for (var conversationId : session.subscribedConversationIds()) {
+      var pod = session.getPodFor(conversationId);
+      if (pod != null) {
+        pods.add(pod);
+      }
+    }
+    if (pods.isEmpty()) {
+      return;
+    }
+    var encoded =
+        SocketFrame.builder()
+            .type(MessageType.SESSION_CLOSED)
+            .id(UUIDUtils.timeBasedUuidAsString())
+            .harborSessionId(session.getId())
+            .ts(System.currentTimeMillis())
+            .build()
+            .encode();
+    for (var pod : pods) {
+      var link = links.get(new PodShardKey(pod, shardFor(session.getId())));
+      if (link != null && !link.isClosed()) {
+        link.getSocket()
+            .write(encoded)
+            .onFailure(ex -> log.debug("failed to notify pod {} that session {} closed", pod, session.getId(), ex));
       }
     }
   }
@@ -134,7 +204,7 @@ public class BackendLinkGateway {
   }
 
   private void forwardMessage(SockjsSocket session, BackendLink link, SocketFrame frame) {
-    var outgoing = frame.toBuilder().fromUserId(session.getUserId().toString()).build();
+    var outgoing = frame.toBuilder().fromUserId(session.getUserId().toString()).harborSessionId(session.getId()).build();
     link.getSocket()
         .write(outgoing.encode())
         .toCompletionStage()
@@ -151,40 +221,50 @@ public class BackendLinkGateway {
   }
 
   /**
-   * Cốt lõi: dùng lại link cùng pod nếu đã có (chỉ gửi thêm SUBSCRIBE trên đó), hoặc mở link mới +
-   * đợi SUBSCRIBE_OK mới chính thức gắn vào session — giữ nguyên an toàn "không đóng link cũ tới
-   * khi link mới được xác nhận xong" (xem {@code SockjsSocket#putLink}), giờ áp dụng theo pod thay
-   * vì theo session (1 session có thể giữ nhiều link, mỗi link phục vụ N conversation cùng pod).
+   * Cốt lõi: dùng lại shard link (pod, shard) nếu đã sống, hoặc mở mới rồi gửi SUBSCRIBE cho
+   * đúng conversationId trên đó. Khác thiết kế cũ: link được commit vào registry dùng chung
+   * NGAY KHI kết nối WebSocket xong (không đợi SUBSCRIBE_OK) — vì giờ link là tài nguyên dùng
+   * chung, 1 lần SUBSCRIBE thất bại (vd "not a member") của riêng conversation này KHÔNG được
+   * phép đóng/huỷ link, session/conversation khác vẫn có thể đang dùng tốt. Chỉ khi bản thân việc
+   * connect() thất bại thì mới không có link nào để commit.
    */
   private CompletionStage<Void> ensureLinkAndSubscribe(
       SockjsSocket session, String frameId, UUID conversationId, List<UUID> memberUserIds, RouteResp routeResp, boolean relayResultToClient) {
     session.rememberMembers(conversationId, memberUserIds);
     var resolvedFrameId = frameId != null ? frameId : UUIDUtils.timeBasedUuidAsString();
-    var existing = session.getLinkForPod(routeResp.getPodName());
+    var shardKey = new PodShardKey(routeResp.getPodName(), shardFor(session.getId()));
+    return connectShard(shardKey, routeResp)
+        .thenCompose(link -> sendSubscribeAndAwait(session, link, resolvedFrameId, conversationId, memberUserIds, relayResultToClient))
+        .thenAccept(unused -> session.setPodFor(conversationId, routeResp.getPodName()));
+  }
+
+  /** Dùng lại shard link đang sống nếu có, ngược lại connect mới — single-flight qua {@link #connecting}. */
+  private CompletionStage<BackendLink> connectShard(PodShardKey shardKey, RouteResp routeResp) {
+    var existing = links.get(shardKey);
     if (existing != null && !existing.isClosed()) {
-      return sendSubscribeAndAwait(session, existing, resolvedFrameId, conversationId, memberUserIds, relayResultToClient)
-          .thenAccept(unused -> session.setPodFor(conversationId, routeResp.getPodName()));
+      return CompletableFuture.completedStage(existing);
     }
+    return connecting.computeIfAbsent(shardKey, key -> doConnect(shardKey, routeResp)).whenComplete((link, ex) -> connecting.remove(shardKey));
+  }
+
+  private CompletableFuture<BackendLink> doConnect(PodShardKey shardKey, RouteResp routeResp) {
     var chatBackend = config.getChatBackend();
     return vertx
         .createHttpClient()
         .webSocket(chatBackend.getPort(), routeResp.getIp(), chatBackend.getPath())
         .toCompletionStage()
-        .thenCompose(
+        .thenApply(
             socket -> {
               var link = new BackendLink(routeResp.getPodName(), routeResp.getIp(), socket, routeResp.getVersion());
-              socket.handler(buffer -> onBackendFrame(session, link, buffer));
-              return sendSubscribeAndAwait(session, link, resolvedFrameId, conversationId, memberUserIds, relayResultToClient)
-                  .whenComplete(
-                      (v, ex) -> {
-                        if (ex == null) {
-                          session.putLink(routeResp.getPodName(), link);
-                          session.setPodFor(conversationId, routeResp.getPodName());
-                        } else if (!link.isClosed()) {
-                          link.close(); // handshake thất bại — dọn link mới, KHÔNG đụng link cũ (nếu có) của session tới pod khác
-                        }
-                      });
-            });
+              socket.handler(buffer -> onBackendFrame(link, buffer));
+              socket.closeHandler(any -> links.remove(shardKey, link));
+              var previous = links.put(shardKey, link);
+              if (previous != null && previous != link && !previous.isClosed()) {
+                previous.close();
+              }
+              return link;
+            })
+        .toCompletableFuture();
   }
 
   private CompletionStage<Void> sendSubscribeAndAwait(
@@ -210,6 +290,7 @@ public class BackendLinkGateway {
             .fromUserId(session.getUserId().toString())
             .conversationId(conversationId.toString())
             .memberUserIds(memberUserIds.isEmpty() ? null : memberUserIds.stream().map(UUID::toString).toList())
+            .harborSessionId(session.getId())
             .ts(System.currentTimeMillis())
             .build();
     link.getSocket().write(subscribeFrame.encode());
@@ -217,10 +298,15 @@ public class BackendLinkGateway {
     return handshake;
   }
 
-  private void onBackendFrame(SockjsSocket session, BackendLink link, Buffer buffer) {
+  /**
+   * Không còn closure sẵn 1 {@code session} cố định (link giờ dùng chung) — mọi frame cần relay
+   * lên client phải tự tra {@code frame.getHarborSessionId()} trong {@link #sessions} để biết đúng
+   * đích cục bộ, xem {@link #relayToSession}.
+   */
+  private void onBackendFrame(BackendLink link, Buffer buffer) {
     var frameOpt = SocketFrame.decode(buffer);
     if (frameOpt.isEmpty()) {
-      log.debug("dropping undecodable frame from backend for session {}", session.getId());
+      log.debug("dropping undecodable frame from backend link to pod {}", link.getPodName());
       return;
     }
     var frame = frameOpt.get();
@@ -244,7 +330,7 @@ public class BackendLinkGateway {
         // caller (subscribe()/sendMessage()), nơi DUY NHẤT chịu trách nhiệm relay lỗi (kèm đúng lý
         // do thật từ colony) — tránh gửi trùng 2 frame lỗi lên client cho cùng 1 lần thất bại.
         if (pending.relayToClient()) {
-          relayToClient.accept(session, frame);
+          relayToSession(frame);
         }
       } else {
         pending.future().completeExceptionally(new RuntimeException(frame.getReason()));
@@ -252,6 +338,15 @@ public class BackendLinkGateway {
       return;
     }
     // MESSAGE / ACK / ERROR được relay lên client gần như nguyên vẹn (verbatim), không sửa đổi gì thêm.
+    relayToSession(frame);
+  }
+
+  private void relayToSession(SocketFrame frame) {
+    var session = sessions.get(frame.getHarborSessionId());
+    if (session == null) {
+      log.debug("dropping frame {} for unknown/disconnected harbor session {}", frame.getId(), frame.getHarborSessionId());
+      return;
+    }
     relayToClient.accept(session, frame);
   }
 }

@@ -33,5 +33,11 @@ public enum MessageType {
   /** Cả 2 chiều: probe kiểm tra liveness (còn sống hay không) của connection, dùng cho heartbeat. */
   PING,
   /** Cả 2 chiều: phản hồi của PING. */
-  PONG
+  PONG,
+  /**
+   * Harbor -&gt; colony: 1 harbor session cụ thể vừa đóng (browser rời đi), dù backend link dùng
+   * chung với session khác vẫn còn sống — báo cho colony biết để gỡ đúng subscriber đó khỏi
+   * registry, vì giờ TCP close của link không còn đồng nghĩa "session này đã rời" nữa.
+   */
+  SESSION_CLOSED
 }

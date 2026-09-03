@@ -33,6 +33,13 @@ public class LegoConfig1 {
    * (IP của pod được resolve), chứ không lấy từ config này.
    */
   private HttpServerConfig chatBackend;
+  /**
+   * Chỉ dùng bởi harbor: số link song song (shard) cho MỖI pod colony, dùng CHUNG cho mọi client
+   * session trên node harbor này (thay vì 1 link/session như trước) — xem
+   * {@code BackendLinkGateway#shardFor}. Giảm mạnh tổng số connection vật lý harbor&lt;-&gt;colony, đổi
+   * lại 1 session ồn ào có thể ảnh hưởng tới ~1/N session khác đang rơi vào cùng shard.
+   */
+  @Builder.Default private int chatBackendShardsPerPod = 4;
   private DbConfig database;
   private InvalidateCacheConfig invalidateCacheConfig;
   private KafkaConfig kafka;

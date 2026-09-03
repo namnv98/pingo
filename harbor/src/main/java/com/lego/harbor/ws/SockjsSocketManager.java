@@ -50,7 +50,7 @@ public class SockjsSocketManager {
   public SockjsSocketManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config) {
     this.serverId = serverId;
     this.vertx = vertx;
-    this.backendLinkGateway = new BackendLinkGateway(vertx, connector, config, this::sendToClient);
+    this.backendLinkGateway = new BackendLinkGateway(vertx, connector, config, sessions, this::sendToClient);
     this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendLinkGateway, sessions, this::sendToClient);
     vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
   }
@@ -86,6 +86,7 @@ public class SockjsSocketManager {
     if (session == null) {
       return;
     }
+    backendLinkGateway.notifySessionClosed(session);
     session.cleanUpAfterClose();
   }
 
@@ -99,10 +100,9 @@ public class SockjsSocketManager {
       if (now - session.getLastSeenAt() > CLIENT_IDLE_TIMEOUT_MS) {
         log.info("closing idle client session {} (userId={})", session.getId(), session.getUserId());
         session.close();
-        continue;
       }
-      backendLinkGateway.pingIfDue(session, now);
     }
+    backendLinkGateway.pingSharedLinksIfDue(now);
   }
 
   private void onClientFrame(SockjsSocket session, Buffer buffer) {
@@ -204,8 +204,10 @@ public class SockjsSocketManager {
     backendLinkGateway.sendMessage(session, outgoing, conversationId, routingVersionSync.currentVersion());
   }
 
+  /** harborSessionId chỉ có ý nghĩa nội bộ trên chặng harbor<->colony (xem BackendLinkGateway) — không lộ ra ngoài cho client. */
   private void sendToClient(SockjsSocket session, SocketFrame frame) {
-    session.send(frame.encode());
+    var outgoing = frame.getHarborSessionId() == null ? frame : frame.toBuilder().harborSessionId(null).build();
+    session.send(outgoing.encode());
   }
 
   private String generateSessionId() {

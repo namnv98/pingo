@@ -5,33 +5,34 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ServerWebSocket;
 
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 
 import lombok.*;
 
 /**
- * Một connection WebSocket đang sống (live) tới colony.
- * Lưu ý: dù tên class server của package này trước đây có "Sockjs", thực chất đây là plain WebSocket, không phải SockJS.
+ * Một connection WebSocket vật lý đang sống (live) tới colony — KHÔNG còn đồng nghĩa với 1
+ * subscriber logic nữa: từ khi harbor sharded link theo pod (dùng chung 1 link cho nhiều client
+ * session), 1 {@code ChatLink} có thể mang nhiều {@link ChatSubscriber} (mỗi cái là 1 harbor
+ * session cụ thể) cùng lúc — xem {@code SessionRegistry#subscriberFor}. {@code subscriberIds} giữ
+ * lại đúng những harborSessionId nào đang "cưỡi" trên link này, để {@code ChatSessionManager#onClose}
+ * biết cần gỡ đúng những subscriber nào khi link vật lý này chết.
+ *
+ * <p>Lưu ý: dù tên class server của package này trước đây có "Sockjs", thực chất đây là plain WebSocket, không phải SockJS.
  */
 @Getter
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-@AllArgsConstructor
 @Setter
-public class ChatSession implements MessageChatSocket {
+public class ChatLink {
 
   @EqualsAndHashCode.Include private final @NonNull String id;
   private final @NonNull String serverId;
   private final @NonNull ServerWebSocket socket;
-  private UUID userId;
-  private String ip;
-  private int currentVersion;
   private volatile long lastSeenAt = System.currentTimeMillis();
-  /** conversationId nao dang duoc subscribe tren link nay -- xem SessionRegistry.subscribe/remove. */
-  private final Set<UUID> conversationIds = ConcurrentHashMap.newKeySet();
+  /** harborSessionId nào đang dùng chung link này — xem {@code SessionRegistry}. */
+  private final Set<String> subscriberIds = ConcurrentHashMap.newKeySet();
 
-  public ChatSession(@NonNull String id, @NonNull String serverId, @NonNull ServerWebSocket socket) {
+  public ChatLink(@NonNull String id, @NonNull String serverId, @NonNull ServerWebSocket socket) {
     this.id = id;
     this.serverId = serverId;
     this.socket = socket;
@@ -41,31 +42,26 @@ public class ChatSession implements MessageChatSocket {
     return send(frame.encode());
   }
 
-  @Override
   public CompletionStage<Void> send(Buffer data) {
     return socket
         .write(data) //
         .toCompletionStage();
   }
 
-  @Override
   public CompletionStage<Void> send(String data) {
     return socket
         .write(Buffer.buffer(data)) //
         .toCompletionStage();
   }
 
-  @Override
   public String getHeader(String headerName) {
     return socket.headers().get(headerName);
   }
 
-  @Override
   public void close() {
     socket.close();
   }
 
-  @Override
   public void cleanUpAfterClose() {
     try {
       socket.handler(null);

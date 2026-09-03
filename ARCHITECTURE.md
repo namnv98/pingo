@@ -14,11 +14,14 @@ gồm 4 module: `discovery`, `beacon`, `harbor`, `colony`.
 - `beacon` là control-plane: theo dõi pod colony nào đang sống, phát (gossip) danh sách đó
   cho `harbor` và `colony`.
 - `harbor` là cửa ngõ public (client kết nối vào qua SockJS/WebSocket), không giữ trạng
-  thái chat — chỉ relay. Với mỗi pod colony đang sở hữu ít nhất 1 conversation mà client của nó
-  quan tâm, giữ **1 backend link dùng chung** cho mọi conversation nào hash ra pod đó (không phải
-  1 link/session như thiết kế ban đầu).
+  thái chat — chỉ relay. Với mỗi pod colony, giữ **N link song song (shard) dùng chung cho MỌI
+  client session trên node harbor này** (không phải 1 link/session, cũng không phải 1 link/pod —
+  xem mục 12) — chọn shard theo hash ổn định của session id, nên 1 session luôn rơi vào đúng 1 shard
+  trong suốt vòng đời của nó.
 - `colony` là nơi thật sự giữ subscriber (không phải "session theo user") của từng conversation và
   deliver tin nhắn cho đúng subscriber cục bộ, hoặc forward sang đúng pod đang sở hữu conversation đó.
+  Từ mục 12, 1 subscriber ứng với 1 harbor session cụ thể chứ không còn ứng với 1 connection WebSocket
+  vật lý — nhiều subscriber có thể cùng dùng chung 1 connection.
 - `discovery` là thư viện dùng chung (routing, versioning, connector) — không phải service độc lập,
   không có `main()`.
 
@@ -44,7 +47,7 @@ graph TB
     K8S["k8s API<br/>(watch pod colony)"]
 
     Browser -- "1 WebSocket/SockJS<br/>AUTH, SUBSCRIBE, MESSAGE, PING" --> GW1
-    GW1 -- "1 backend link/pod<br/>(dùng chung cho N conversationId)" --> MC1
+    GW1 -- "N shard link/pod<br/>(dùng chung cho MỌI session trên harbor này)" --> MC1
     GW1 -.->|"nếu conversation khác hash ra pod khác"| MC2
 
     SIG -- "watch pods" --> K8S
@@ -61,8 +64,8 @@ graph TB
 |---|---|---|
 | `discovery` | Không (thư viện) | `PingoConnector`/`VersionVector`/`Router` (Maglev) — client-side: tra routing table biết `conversationId` thuộc pod nào, gửi tin nhắn cross-node qua EventBus. `Router`/`Maglev`/`VersionVector` hoàn toàn generic (route theo `RoutingKey.hash()`, không biết gì về userId/conversationId) — sự khác biệt nằm ở `RouteByUserIdRequest`/`RouteByConversationIdRequest`, 2 implementation cụ thể của `RoutingKey`. Định nghĩa chung `SocketFrame`-adjacent DTO cho gossip (`Payload`, `SignalingResponse`), `Destination`, `Keeper` (snapshot). |
 | `beacon` | Có | Control-plane duy nhất nói chuyện trực tiếp với **k8s API** (`K8SKeeper`, watch pod colony theo label `app=colony`). Gossip danh sách destination qua EventBus (`RoutingGossipPublisher`). Không đụng gì tới việc đổi routing key sang `conversationId` — chỉ gossip topology pod (ADD/REMOVE), không biết gì về conversation. Chạy local (không k8s) thì dùng `LocalKeeper` với 1 destination cố định. |
-| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) backend link xuống đúng pod colony sở hữu conversation đó, relay frame 2 chiều gần như nguyên vẹn. 1 session có thể giữ nhiều backend link (1 link/pod), tuỳ số conversation đang mở nằm rải trên bao nhiêu pod khác nhau. |
-| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — 1 "subscriber" nó giữ cho 1 conversation thực chất là 1 link WebSocket từ chính harbor (đăng ký lúc SUBSCRIBE), port 9999 không public ra ngoài. |
+| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) backend shard link xuống đúng pod colony sở hữu conversation đó, relay frame 2 chiều gần như nguyên vẹn (kèm `harborSessionId` để colony demux đúng subscriber trên link dùng chung, xem mục 12). `BackendLinkGateway` giữ shard link ở cấp NODE (dùng chung cho mọi session), không phải session tự giữ link của riêng nó nữa. |
+| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — 1 "subscriber" (`ChatSubscriber`) nó giữ cho 1 conversation ứng với 1 harbor session cụ thể, gửi/nhận qua 1 `ChatLink` (connection WebSocket vật lý từ harbor, đăng ký lúc SUBSCRIBE) — nhiều subscriber có thể dùng chung 1 `ChatLink` (xem mục 12), port 9999 không public ra ngoài. |
 
 ## 3. Giao thức `SocketFrame`
 
@@ -70,7 +73,7 @@ Toàn bộ giao tiếp (client↔gateway, gateway↔chat) dùng chung 1 envelope
 
 ```json
 {
-  "type": "AUTH | AUTH_OK | AUTH_ERROR | SUBSCRIBE | SUBSCRIBE_OK | SUBSCRIBE_ERROR | MESSAGE | ACK | ERROR | PING | PONG",
+  "type": "AUTH | AUTH_OK | AUTH_ERROR | SUBSCRIBE | SUBSCRIBE_OK | SUBSCRIBE_ERROR | MESSAGE | ACK | ERROR | PING | PONG | SESSION_CLOSED",
   "id": "correlation id — client tự sinh, server echo lại trong ACK/ERROR/SUBSCRIBE_OK/SUBSCRIBE_ERROR",
   "fromUserId": "sender — server tự gán khi xử lý MESSAGE, không tin giá trị client gửi lên",
   "toUserId": "recipient — CHỈ còn mang tính tiện lợi cho client (DM), KHÔNG dùng để route",
@@ -78,7 +81,8 @@ Toàn bộ giao tiếp (client↔gateway, gateway↔chat) dùng chung 1 envelope
   "memberUserIds": "chỉ có ý nghĩa với SUBSCRIBE — danh sách userId cần union vào membership (lazy-create/join)",
   "body": "payload tuỳ ý",
   "reason": "lý do lỗi — chỉ có ở ERROR/AUTH_ERROR/SUBSCRIBE_ERROR",
-  "ts": "epoch millis, server đóng dấu"
+  "ts": "epoch millis, server đóng dấu",
+  "harborSessionId": "CHỈ có ý nghĩa trên chặng harbor<->colony (không phải client<->harbor) — xem mục 12"
 }
 ```
 
@@ -191,30 +195,35 @@ harbor/ws/              colony/ws/
     SocketFrame                       SocketFrame
     SocketFrames   (frame builder)
   session/                          session/
-    SockjsSocket   (1 client conn,     ChatSession      (1 backend conn,
-     giữ nhiều BackendLink theo pod)    biết N conversationId đang subscribe)
-    BackendLink    (1 link/pod,        MessageChatSocket (interface)
-     dùng chung cho N conversation)    SessionRegistry  (tra cứu theo user id
-    MessageSocket  (interface)          VÀ theo conversationId)
-  backend/                          delivery/
-    BackendLinkGateway                 MessageDelivery
-    (subscribe/sendMessage/            (deliver local / forward EventBus,
-     reconnect theo conversationId,     route theo conversationId)
-     đa-pod cho 1 session)            membership/
-  routing/                            ChannelMembershipRegistry
-    RoutingVersionSync                 (in-memory, ai thuộc conversation nào)
-    (đồng bộ version + re-subscribe   routing/
-     từng (session,conversationId)     RoutingVersionSync
-     đang mở khi pod sở hữu đổi)       (đồng bộ version, không cần di chuyển
-                                        gì — chat không chủ động dial ra)
+    SockjsSocket   (1 client conn,     ChatLink       (1 backend conn vật lý,
+     chỉ nhớ podFor(conversationId))    dùng chung cho NHIỀU subscriber)
+    BackendLink    (1 shard link,      ChatSubscriber (1 subscriber logic
+     dùng chung cho MỌI session         = 1 harbor session, biết N
+     trên node harbor này)              conversationId đang subscribe)
+    MessageSocket  (interface)        MessageChatSocket (interface)
+  backend/                            SessionRegistry  (2 tầng: link + subscriber,
+    BackendLinkGateway                  tra cứu theo user id VÀ conversationId)
+    (shard theo pod, single-flight   delivery/
+     connect, subscribe/sendMessage/   MessageDelivery
+     reconnect theo conversationId,    (deliver local / forward EventBus,
+     notifySessionClosed lúc session    route theo conversationId, gắn
+     đóng — xem mục 12)                 harborSessionId trước khi gửi)
+  routing/                          membership/
+    RoutingVersionSync                 ChannelMembershipRegistry
+    (đồng bộ version + re-subscribe    (Postgres, ai thuộc conversation nào)
+     từng (session,conversationId)   routing/
+     đang mở khi pod sở hữu đổi)        RoutingVersionSync
+                                        (đồng bộ version, không cần di chuyển
+                                         gì — chat không chủ động dial ra)
   SockjsSocketManager (cửa trước)   ChatSessionManager (cửa trước)
   SockjsSocketServer  (verticle)    ChatSocketServer   (verticle)
 ```
 
 - **`dto`** — định dạng frame trên dây (wire format).
-- **`session`** — biểu diễn 1 connection đang sống + tra cứu.
+- **`session`** — biểu diễn 1 connection đang sống + tra cứu. Bên colony tách 2 khái niệm: `ChatLink`
+  (connection vật lý) và `ChatSubscriber` (subscriber logic, 1:1 với 1 harbor session) — xem mục 12.
 - **`backend`/`delivery`** — quyết định tin nhắn phải đi đâu và đưa nó đi.
-- **`membership`** (mới, chỉ colony) — ai thuộc conversation nào, in-memory theo từng pod (xem mục 8, 11).
+- **`membership`** (mới, chỉ colony) — ai thuộc conversation nào, lưu bền trong Postgres (xem mục 8).
 - **`routing`** — biết pod nào đang sở hữu conversation nào (dựa trên gossip từ beacon).
 - File ở gốc package (`*Manager`, `*Server`) — nơi ráp mọi thứ lại, là "cửa trước" nhận connection
   và dispatch protocol.
@@ -248,19 +257,18 @@ không ảnh hưởng chức năng nhưng dễ gây nhầm khi debug.
   của 1 conversation, kể cả chính người gửi nếu họ cũng đang subscribe (điều này LUÔN đúng với DM,
   vì cả 2 phía đều phải subscribe). Cố tình để vậy — client tự dedupe qua `id` nếu cần, tránh thêm
   1 tầng phức tạp cho lợi ích nhỏ.
-- **Không có persistence nào — kể cả lịch sử tin nhắn lẫn membership**. `colony` có sẵn config
-  `database` trong `app.yaml`/`LegoConfig1.DbConfig` (trỏ Postgres) nhưng **chưa có dòng code nào
-  đọc/dùng tới** — hoàn toàn là config chết. `ChannelMembershipRegistry` (ai thuộc conversation nào)
-  chỉ sống in-memory, theo từng pod colony, mất khi pod restart — vá tạm bằng việc `harbor` "nhớ"
-  lại `memberUserIds` đã biết cho mỗi conversation (`SockjsSocket.membersByConversation`) và gửi lại
-  mỗi lần SUBSCRIBE/reconnect, để pod mới tự khôi phục membership — nhưng nếu MỌI session từng biết
-  membership của 1 group đều disconnect trước khi ai đó subscribe lại, group đó "quên sạch" vĩnh
-  viễn, không nơi nào còn lưu. Đây là giới hạn đã biết trước, cố tình gác lại (xem mục 11) — có sẵn
-  framework JDBC pool/SQL executor dùng được ngay trong `core/commons-lang/.../jdbcpool`,
-  `.../sql`, chỉ chưa wire vào `colony`.
-- **Heartbeat**: gateway↔client và gateway↔backend đều có PING/PONG riêng — phía backend giờ theo
-  từng `BackendLink` (không phải theo session), session/link không phản hồi trong ~60s bị coi là
-  chết và dọn dẹp.
+- **Không có persistence lịch sử tin nhắn** — chỉ tin nhắn "đang bay" được deliver real-time, không
+  lưu lại đâu để replay/xem lịch sử. `ChannelMembershipRegistry` (ai thuộc conversation nào) **đã**
+  chuyển sang lưu bền (persistent) trong Postgres — mọi pod colony đều đọc/ghi thẳng bảng
+  `conversation_members`, không còn in-memory-theo-pod như thiết kế ban đầu ở mục 11 nữa. `harbor`
+  vẫn giữ cơ chế "nhớ" lại `memberUserIds` (`SockjsSocket.membersByConversation`) và gửi kèm mỗi lần
+  SUBSCRIBE/reconnect như một lớp phòng hộ thêm (không còn bắt buộc để khôi phục membership sau khi
+  pod restart như trước, vì DB đã giữ), nhưng vẫn hữu ích để giảm 1 vòng query cho lần subscribe lại.
+- **Heartbeat**: gateway↔client và gateway↔backend đều có PING/PONG riêng. Phía backend, từ khi link
+  được sharded và dùng chung cho nhiều session (xem mục 12), heartbeat theo từng **shard link**
+  (không phải theo session, và không còn theo từng session như bản trước đó của tài liệu này) — 1
+  shard link không phản hồi trong ~60s bị coi là chết và dọn dẹp, kéo theo mọi subscriber logic đang
+  "cưỡi" trên nó bị colony tự gỡ khi nó phát hiện TCP đóng.
 - **DTO lặp có chủ đích**: `MessageType`/`SocketFrame` (envelope tầng ws) cố tình duplicate giữa
   `colony` và `harbor` thay vì gộp lên `discovery` — giữ 2 module độc lập nhau ở tầng
   giao thức chat, dù cùng chung định dạng. Ngược lại, `Payload`/`SignalingResponse`/`Destination`/...
@@ -417,10 +425,86 @@ path riêng).
 
 - **Không có lịch sử tin nhắn** — Slack's Channel Server giữ channel history; `colony` không lưu gì
   cả, subscribe vào 1 group không nhận được tin cũ.
-- **Membership không bền** — patch bằng "harbor tự nhớ" (mục 10, fix #4) chỉ hoạt động khi còn ít
-  nhất 1 session "nhớ" thông tin đó; không có nơi lưu trữ trung tâm thật sự.
 - **Không đa vùng, không Presence Server** — chưa có khái niệm vùng địa lý trong `harbor`, chưa track
   online/offline.
 
 Đây là những khoảng gác lại có chủ đích (xem mục 8, 9) — không phải thiếu sót của lần đổi này, mà là
 việc chưa cần làm cho mục tiêu hiện tại (prototype/MVP), biết trước sẽ cần khi lên production thật.
+(Membership từng nằm trong danh sách giới hạn ở đây do in-memory-theo-pod — đã chuyển sang Postgres,
+xem mục 8.)
+
+## 12. Sharding backend link harbor↔colony — dùng chung 1 link cho nhiều session
+
+### Vấn đề: connection fan-out không có trần
+
+Thiết kế trước mục này (mục 4, 11): mỗi client session giữ **1 backend link riêng/pod colony**
+(`BackendLinkGateway`/`SockjsSocket.linksByPod` cũ) — dùng chung giữa các conversation của CHÍNH
+session đó, nhưng không dùng chung với session khác. Hệ quả: tổng số connection vật lý giữa 1 pod
+`harbor` và cụm `colony` scale theo `O(số session đang active × số pod colony khác nhau mà mỗi
+session chạm tới)`, không phải `O(số pod harbor × số pod colony)`. Với nhiều user cùng lúc, mỗi
+người tham gia nhiều group rải trên nhiều pod, con số này có thể lên tới hàng chục nghìn connection
+cho 1 pod harbor — không có trần nào chặn lại, và không phụ thuộc số pod colony đang chạy.
+
+Hệ thống lớn tương tự (Slack's Gateway Server/Channel Server, xem mục tham khảo cuối `readme.md`)
+là nguồn cảm hứng cho mô hình `harbor`/`colony` nói chung (2 tầng, sharded theo consistent hashing,
+Channel Server fan-out cho mọi Gateway Server đang subscribe rồi mỗi Gateway Server fan-out tiếp cho
+client cục bộ — khớp với `MessageDelivery.deliverLocally` hiện tại). **Nhưng bài viết công khai đó
+KHÔNG tiết lộ chi tiết connection giữa Gateway Server và Channel Server dùng 1-connection/user hay
+pool dùng chung** — câu duy nhất liên quan chỉ nói GS subscribe tới CS "based on consistent hashing
+asynchronously", không nói gì thêm. Giải pháp N-shard-link dưới đây do tự suy luận từ chính vấn đề
+connection fan-out ở trên, không phải sao chép 1 chi tiết đã được Slack xác nhận công khai.
+
+### Giải pháp: N shard link/pod, dùng chung cho mọi session
+
+`harbor` giờ giữ **N link song song (shard) cho MỖI pod colony** (`chatBackendShardsPerPod` trong
+`LegoConfig1`, mặc định 4), dùng CHUNG cho mọi client session trên node harbor đó — thay vì 1
+link/session. Shard được chọn bằng hash ổn định của `session.getId()`
+(`BackendLinkGateway.shardFor`, `Math.floorMod(sessionId.hashCode(), N)`): cùng 1 session luôn rơi
+vào đúng 1 shard trong suốt vòng đời của nó, nên mọi conversation của session đó trên cùng 1 pod vẫn
+tiếp tục dùng chung đúng 1 link vật lý và giữ nguyên thứ tự frame như thiết kế cũ — chỉ có traffic
+của các session KHÁC mới có thể "đụng" nhau khi cùng rơi vào 1 shard (~1/N khả năng), thay vì hoàn
+toàn cô lập như trước. Đánh đổi: tổng số connection giờ bị chặn trên bởi
+`O(số pod harbor × số pod colony × N)` — hằng số theo hạ tầng, không phụ thuộc số session/conversation
+— đổi lấy việc 1 session ồn ào có thể ảnh hưởng (head-of-line blocking) tới ~1/N session khác đang
+dùng chung shard.
+
+Chọn shard theo `sessionId` (không phải theo `conversationId`) có chủ đích: giữ nguyên tính chất "1
+session luôn dùng 1 link cho 1 pod" của thiết kế cũ, chỉ thêm đúng 1 chiều chia sẻ mới (giữa các
+session) — thay đổi tối thiểu so với hành vi hiện có.
+
+### Vì sao colony phải đổi mô hình session
+
+Trước mục này, colony hard-code "1 connection WebSocket vật lý == 1 subscriber logic": 1
+`userId`, 1 tập `conversationIds`, TCP close == dọn dẹp toàn bộ. Một khi 1 link vật lý mang traffic
+của NHIỀU harbor session khác nhau, giả định đó sai — colony tách thành 2 lớp:
+
+- **`ChatLink`** (`colony/ws/session/ChatLink.java`) — connection vật lý, giữ `subscriberIds` (những
+  `harborSessionId` nào đang dùng chung link này).
+- **`ChatSubscriber`** (`colony/ws/session/ChatSubscriber.java`) — subscriber logic, 1:1 với 1 harbor
+  session (định danh bởi `harborSessionId` trong mỗi frame, xem mục 3), giữ `userId`/`conversationIds`
+  riêng, `send()` chỉ là proxy ghi xuống `ChatLink` đang gắn.
+
+Mọi frame trên chặng harbor↔colony (SUBSCRIBE, MESSAGE, SUBSCRIBE_OK/ERROR, ACK, ERROR) giờ mang
+kèm `harborSessionId` — cả 2 chiều: harbor gắn nó khi gửi lên để colony biết SUBSCRIBE/MESSAGE này
+của session nào (`SessionRegistry.subscriberFor`); colony gắn lại khi gửi xuống
+(`MessageDelivery.deliverLocally`, `ChatSessionManager`) để harbor biết frame trả về này (SUBSCRIBE_OK,
+MESSAGE deliver, ACK...) cần relay cho đúng client session nào (`BackendLinkGateway.relayToSession`
+tra trong map session sống của chính node harbor đó) — vì socket giờ dùng chung, không còn suy ra
+được người nhận chỉ từ chính connection nữa.
+
+### `SESSION_CLOSED` — vì TCP close của link không còn đồng nghĩa "1 session rời đi"
+
+Trước đây, đóng session ở harbor tự động đóng backend link của nó, và TCP close đó là tín hiệu để
+colony dọn dẹp subscriber. Giờ link dùng chung — 1 session đóng KHÔNG được phép đóng link (session
+khác vẫn đang dùng). Harbor phải chủ động báo bằng 1 frame mới, `SESSION_CLOSED{harborSessionId}`
+(`BackendLinkGateway.notifySessionClosed`, gọi từ `SockjsSocketManager.onClose`), để colony gỡ đúng
+`ChatSubscriber` đó (`ChatSessionManager.onMessage` → `SessionRegistry.removeSubscriber`) mà không
+đụng gì tới link hay subscriber khác. TCP close của chính link vật lý (colony pod chết, timeout
+PONG...) vẫn dọn dẹp MỌI subscriber đang cưỡi trên nó, như trước.
+
+**Giới hạn đã biết, cố tình gác lại** (cùng tinh thần mục 8, 9, 11): `SESSION_CLOSED` là best-effort,
+chỉ gửi khi session đóng "sạch" (graceful). Nếu pod harbor crash trước khi kịp gửi, colony giữ lại 1
+`ChatSubscriber` "ma" — vô hại về mặt chức năng (ghi vào nó chỉ rơi vào hư không vì harbor session đã
+mất, không lỗi lộ ra ngoài) nhưng tốn 1 chút bộ nhớ, cho tới khi chính link vật lý đó chết/reconnect
+mới bị dọn theo. Không xây thêm 1 tầng heartbeat riêng cho từng subscriber cho lần đổi này — chưa
+cần thiết ở quy mô hiện tại.

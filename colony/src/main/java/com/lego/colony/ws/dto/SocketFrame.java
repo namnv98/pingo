@@ -58,6 +58,15 @@ public class SocketFrame {
   /** Timestamp (epoch millis) do server đóng dấu, không lấy từ client. */
   private Long ts;
 
+  /**
+   * Chỉ có ý nghĩa trên chặng harbor&lt;-&gt;colony (không phải client&lt;-&gt;harbor): định danh session
+   * harbor gửi frame này lên, hoặc là đích cần relay khi colony gửi frame này xuống — bắt buộc từ
+   * khi 1 backend link được nhiều harbor session dùng chung (sharded theo pod, xem
+   * {@code BackendLinkGateway} bên harbor), nên không còn suy ra được người gửi/nhận chỉ từ chính
+   * socket nữa.
+   */
+  private String harborSessionId;
+
   public Buffer encode() {
     return JsonObject.mapFrom(this).toBuffer();
   }

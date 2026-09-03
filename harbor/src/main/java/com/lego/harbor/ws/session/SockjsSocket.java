@@ -14,9 +14,10 @@ import java.util.concurrent.CompletionStage;
 import lombok.*;
 
 /**
- * Connection SockJS công khai (public-facing) của một client, đi kèm nhiều {@link BackendLink}
- * (mỗi pod colony sở hữu ít nhất 1 conversation mà session này đang subscribe — có thể nhiều
- * conversation dùng chung 1 link nếu chúng cùng hash ra 1 pod).
+ * Connection SockJS công khai (public-facing) của một client. Không còn tự giữ {@link BackendLink}
+ * riêng — link xuống colony giờ dùng CHUNG cho mọi session trên node harbor này, sharded theo pod
+ * (xem {@code BackendLinkGateway}); session này chỉ còn nhớ NÓ đang trỏ vào pod nào cho mỗi
+ * conversation, không sở hữu link vật lý nữa.
  */
 @Getter
 @Setter
@@ -29,9 +30,7 @@ public class SockjsSocket implements MessageSocket {
   private UUID userId;
   private volatile long lastSeenAt = System.currentTimeMillis();
 
-  /** Link thật xuống từng pod colony, keyed theo tên pod — dùng chung cho mọi conversation trên cùng pod. */
-  private final Map<String, BackendLink> linksByPod = new ConcurrentHashMap<>();
-  /** conversationId đang subscribe → tên pod hiện đang sở hữu nó (trỏ vào key của {@link #linksByPod}). */
+  /** conversationId đang subscribe → tên pod hiện đang sở hữu nó. */
   private final Map<UUID, String> podByConversation = new ConcurrentHashMap<>();
 
   /**
@@ -59,39 +58,6 @@ public class SockjsSocket implements MessageSocket {
     this.id = id;
     this.serverId = serverId;
     this.socket = socket;
-  }
-
-  public BackendLink getLinkForPod(String podName) {
-    return linksByPod.get(podName);
-  }
-
-  /**
-   * Đăng ký link mới cho 1 pod — CHỈ đóng link CŨ của CÙNG pod đó (nếu có), giữ nguyên mọi link
-   * khác — bảo toàn đúng tính chất "không đóng link cũ tới khi link mới được xác nhận" (giờ áp
-   * dụng per-pod thay vì per-session).
-   */
-  public void putLink(String podName, BackendLink link) {
-    var previous = linksByPod.put(podName, link);
-    if (previous != null && previous != link && !previous.isClosed()) {
-      previous.close();
-    }
-  }
-
-  public Collection<BackendLink> allLinks() {
-    return linksByPod.values();
-  }
-
-  public void closeLink(String podName) {
-    var link = linksByPod.remove(podName);
-    if (link != null) {
-      link.close();
-    }
-  }
-
-  public void closeAllBackendLinks() {
-    linksByPod.values().forEach(BackendLink::close);
-    linksByPod.clear();
-    podByConversation.clear();
   }
 
   public String getPodFor(UUID conversationId) {
@@ -130,7 +96,6 @@ public class SockjsSocket implements MessageSocket {
 
   @Override
   public void cleanUpAfterClose() {
-    closeAllBackendLinks();
     try {
       socket.handler(null);
       socket.drainHandler(null);

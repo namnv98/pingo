@@ -10,84 +10,100 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Sổ đăng ký (registry) các {@link ChatSession} đang sống trên node này, tra cứu được theo cả
- * session id lẫn user id (1 user có thể có nhiều session/tab cùng lúc). Tách riêng khỏi
+ * Sổ đăng ký (registry) 2 tầng: {@link ChatLink} (connection vật lý đang sống) và
+ * {@link ChatSubscriber} (subscriber logic, 1:1 với 1 harbor session — nhiều subscriber có thể
+ * cùng dùng chung 1 link, xem {@link ChatLink}). Tra cứu được subscriber theo cả userId lẫn
+ * conversationId (1 user có thể có nhiều subscriber/tab cùng lúc). Tách riêng khỏi
  * {@code com.lego.colony.ws.ChatSessionManager} để {@code com.lego.colony.ws.delivery.MessageDelivery}
- * dùng chung, không phải đụng thẳng vào 2 map nội bộ.
+ * dùng chung, không phải đụng thẳng vào các map nội bộ.
  */
 public class SessionRegistry {
 
-  private final Map<String, ChatSession> sessions = new ConcurrentHashMap<>();
-  private final Map<UUID, List<String>> sessionIdsByUser = new ConcurrentHashMap<>();
-  private final Map<UUID, Set<String>> sessionIdsByConversation = new ConcurrentHashMap<>();
+  private final Map<String, ChatLink> links = new ConcurrentHashMap<>();
+  private final Map<String, ChatSubscriber> subscribers = new ConcurrentHashMap<>();
+  private final Map<UUID, List<String>> subscriberIdsByUser = new ConcurrentHashMap<>();
+  private final Map<UUID, Set<String>> subscriberIdsByConversation = new ConcurrentHashMap<>();
 
-  public ChatSession register(String id, String serverId, ServerWebSocket socket) {
-    var session = new ChatSession(id, serverId, socket);
-    sessions.put(id, session);
-    return session;
-  }
-
-  /** Gắn session với 1 user id sau khi AUTH thành công (1 user có thể có nhiều session). */
-  public void attachUser(ChatSession session, UUID userId) {
-    session.setUserId(userId);
-    sessionIdsByUser.computeIfAbsent(userId, key -> new CopyOnWriteArrayList<>()).add(session.getId());
+  public ChatLink registerLink(String id, String serverId, ServerWebSocket socket) {
+    var link = new ChatLink(id, serverId, socket);
+    links.put(id, link);
+    return link;
   }
 
   /**
-   * Đăng ký session này là subscriber cục bộ của 1 conversationId — gọi sau khi SUBSCRIBE hợp lệ
+   * Trả về subscriber logic của {@code harborSessionId}, tạo mới nếu chưa từng thấy trên node này.
+   * Nếu subscriber đã tồn tại nhưng đang gắn với 1 link KHÁC (harbor phía đó vừa reconnect sang 1
+   * physical link mới, cùng shard key), rebind sang link mới — gỡ khỏi {@code subscriberIds} của
+   * link cũ, thêm vào link mới — để việc dọn dẹp khi 1 trong 2 link đóng luôn đúng.
+   */
+  public ChatSubscriber subscriberFor(String harborSessionId, ChatLink link) {
+    var subscriber = subscribers.computeIfAbsent(harborSessionId, id -> new ChatSubscriber(id, link));
+    if (subscriber.getLink() != link) {
+      subscriber.getLink().getSubscriberIds().remove(harborSessionId);
+      subscriber.setLink(link);
+    }
+    link.getSubscriberIds().add(harborSessionId);
+    return subscriber;
+  }
+
+  /** Gắn subscriber với 1 user id sau khi SUBSCRIBE thành công lần đầu (1 user có thể có nhiều subscriber). */
+  public void attachUser(ChatSubscriber subscriber, UUID userId) {
+    subscriber.setUserId(userId);
+    subscriberIdsByUser.computeIfAbsent(userId, key -> new CopyOnWriteArrayList<>()).add(subscriber.getId());
+  }
+
+  /**
+   * Đăng ký subscriber này là subscriber cục bộ của 1 conversationId — gọi sau khi SUBSCRIBE hợp lệ
    * (đã check membership, xem ChatSessionManager.handleSubscribe).
    */
-  public void subscribe(ChatSession session, UUID conversationId) {
-    sessionIdsByConversation.computeIfAbsent(conversationId, key -> ConcurrentHashMap.newKeySet()).add(session.getId());
-    session.getConversationIds().add(conversationId);
+  public void subscribe(ChatSubscriber subscriber, UUID conversationId) {
+    subscriberIdsByConversation.computeIfAbsent(conversationId, key -> ConcurrentHashMap.newKeySet()).add(subscriber.getId());
+    subscriber.getConversationIds().add(conversationId);
   }
 
-  /** Gỡ session khỏi registry (khi socket đóng) — trả về session đã gỡ, hoặc null nếu đã gỡ trước đó rồi. */
-  public ChatSession remove(String sessionId) {
-    var session = sessions.remove(sessionId);
-    if (session == null) {
+  /** Gỡ subscriber khỏi registry (khi harbor báo session đóng, hoặc link vật lý của nó chết) — trả về subscriber đã gỡ, hoặc null nếu đã gỡ trước đó rồi. */
+  public ChatSubscriber removeSubscriber(String harborSessionId) {
+    var subscriber = subscribers.remove(harborSessionId);
+    if (subscriber == null) {
       return null;
     }
-    var userId = session.getUserId();
+    subscriber.getLink().getSubscriberIds().remove(harborSessionId);
+    var userId = subscriber.getUserId();
     if (userId != null) {
-      sessionIdsByUser.computeIfPresent(
+      subscriberIdsByUser.computeIfPresent(
           userId,
           (key, ids) -> {
-            ids.remove(sessionId);
+            ids.remove(harborSessionId);
             return ids.isEmpty() ? null : ids;
           });
     }
-    for (var conversationId : session.getConversationIds()) {
-      sessionIdsByConversation.computeIfPresent(
+    for (var conversationId : subscriber.getConversationIds()) {
+      subscriberIdsByConversation.computeIfPresent(
           conversationId,
           (key, ids) -> {
-            ids.remove(sessionId);
+            ids.remove(harborSessionId);
             return ids.isEmpty() ? null : ids;
           });
     }
-    return session;
+    return subscriber;
   }
 
-  /** Mọi session cục bộ (local) của 1 user trên node này — rỗng nếu user chưa từng AUTH ở đây. */
-  public List<ChatSession> sessionsOf(UUID userId) {
-    var ids = sessionIdsByUser.get(userId);
+  /** Gỡ 1 link vật lý đã chết khỏi registry — gọi SAU khi mọi subscriber của nó đã được gỡ (xem ChatSessionManager.onClose). */
+  public void removeLink(String linkId) {
+    links.remove(linkId);
+  }
+
+  /** Mọi subscriber cục bộ (local) đang subscribe 1 conversationId trên node này. */
+  public List<ChatSubscriber> subscribersOfConversation(UUID conversationId) {
+    var ids = subscriberIdsByConversation.get(conversationId);
     if (ids == null || ids.isEmpty()) {
       return List.of();
     }
-    return ids.stream().map(sessions::get).filter(Objects::nonNull).toList();
+    return ids.stream().map(subscribers::get).filter(Objects::nonNull).toList();
   }
 
-  /** Mọi session cục bộ (local) đang subscribe 1 conversationId trên node này. */
-  public List<ChatSession> sessionsOfConversation(UUID conversationId) {
-    var ids = sessionIdsByConversation.get(conversationId);
-    if (ids == null || ids.isEmpty()) {
-      return List.of();
-    }
-    return ids.stream().map(sessions::get).filter(Objects::nonNull).toList();
-  }
-
-  /** Toàn bộ session đang sống, dùng cho việc quét idle định kỳ. Trả về bản copy, an toàn để iterate. */
-  public List<ChatSession> all() {
-    return List.copyOf(sessions.values());
+  /** Toàn bộ link vật lý đang sống, dùng cho việc quét idle định kỳ. Trả về bản copy, an toàn để iterate. */
+  public List<ChatLink> allLinks() {
+    return List.copyOf(links.values());
   }
 }
