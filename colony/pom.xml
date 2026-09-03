@@ -96,6 +96,13 @@
             <artifactId>disruptor</artifactId>
         </dependency>
         <dependency>
+            <!-- Hash password that (POST /register, /login, xem UserRegistry). Khong co lib hash
+                 password nao co san trong repo, jbcrypt la lua chon chuan, khong co transitive dep. -->
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>0.4</version>
+        </dependency>
+        <dependency>
             <groupId>com.pingo.namnv</groupId>
             <artifactId>discovery</artifactId>
             <version>1.0-SNAPSHOT</version>

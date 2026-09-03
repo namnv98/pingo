@@ -54,6 +54,7 @@ Tuỳ chỉnh qua biến môi trường (không cần sửa code):
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `PINGO_WS_URL` | `ws://localhost:31003/connect/websocket` | endpoint harbor |
+| `PINGO_API_URL` | `http://localhost:31002` | REST API của colony, dùng để `/register` tài khoản thật cho mỗi session (xem `lib.mjs#registerUser` — AUTH giờ đòi token JWT, không còn tự khai `fromUserId`) |
 | `PINGO_NAMESPACE` | `default` | namespace k8s |
 | `PINGO_COLONY_LABEL` | `app=colony` | label selector để tìm pod colony |
 | `PINGO_NUM_SESSIONS` | `50` | số session đồng thời |

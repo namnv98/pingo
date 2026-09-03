@@ -10,13 +10,13 @@
         .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
         .panel h3 { margin: 0 0 8px; font-size: 14px; color: #555; }
         label { font-size: 13px; color: #555; }
-        input[type=text] { padding: 5px 7px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; }
+        input[type=text], input[type=password] { padding: 5px 7px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; }
         button { padding: 5px 10px; border: 1px solid #bbb; border-radius: 5px; background: #f5f5f5; cursor: pointer; font-size: 13px; }
         button:hover { background: #ebebeb; }
         button.primary { background: #2563eb; color: white; border-color: #2563eb; }
         button.primary:hover { background: #1d4ed8; }
         .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-        .row input[type=text] { flex: 1; min-width: 120px; }
+        .row input[type=text], .row input[type=password] { flex: 1; min-width: 120px; }
         #status { font-weight: 600; }
         #status.ok { color: #16a34a; }
         #status.bad { color: #dc2626; }
@@ -45,28 +45,30 @@
 <h1>Pingo chat demo — User 1</h1>
 <div class="sub">Trạng thái: <span id="status" class="pending">đang kết nối...</span></div>
 
-<div class="panel">
-    <h3>Danh tính của bạn</h3>
+<div class="panel" id="authPanel">
+    <h3>Đăng nhập</h3>
     <div class="row">
-        <label>User id:</label>
-        <input type="text" id="myUserId" size="38">
-        <button onclick="randomizeMyId()">🎲 Ngẫu nhiên</button>
-        <button onclick="copyMyId()">📋 Copy</button>
+        <label>Username:</label>
+        <input type="text" id="authUsername" size="20" placeholder="vd: nam" autocomplete="username">
+        <label>Password:</label>
+        <input type="password" id="authPassword" size="20" placeholder="tối thiểu 8 ký tự" autocomplete="current-password">
     </div>
-    <div class="hint">Đổi xong bấm nút bên dưới để reconnect với danh tính mới. Giá trị được nhớ lại (localStorage), không cần gõ lại mỗi lần mở trang.</div>
-    <button onclick="reconnectWithNewId()">↻ Reconnect với id này</button>
-    <div class="row" style="margin-top:8px">
-        <label>Tên hiển thị:</label>
-        <input type="text" id="myUsername" size="20" placeholder="vd: Nam">
-        <button class="primary" onclick="saveUsername()">💾 Lưu tên</button>
+    <div class="row">
+        <button class="primary" onclick="login()">Đăng nhập</button>
+        <button onclick="register()">Đăng ký tài khoản mới</button>
     </div>
-    <div class="hint">Không phải đăng nhập thật (không có mật khẩu) — chỉ để người khác thấy tên thay vì UUID thô. Lưu xong tên sẽ hiện trong danh sách chọn bên dưới.</div>
-    <div class="hint" id="nameRequiredHint" style="display:none;color:#dc2626;font-weight:600">⚠ Danh tính này chưa đặt tên hiển thị — bắt buộc đặt tên (ở trên) trước khi có thể chat.</div>
+    <div class="hint">Tài khoản thật: password được hash (bcrypt) trước khi lưu ở server, không bao giờ lưu dạng thô. Đăng nhập/đăng ký xong server cấp 1 token, dùng token đó để xác thực WebSocket (không còn tự khai UUID nữa).</div>
+    <div class="hint" id="authError" style="display:none;color:#dc2626;font-weight:600"></div>
 </div>
 
 <div id="mainApp" style="display:none">
 <div class="panel">
     <h3>Bắt đầu trò chuyện</h3>
+    <div class="row">
+        <label style="min-width:110px">Đang đăng nhập:</label>
+        <span id="whoami" style="font-weight:600"></span>
+        <button onclick="logout()">Đăng xuất</button>
+    </div>
     <div class="row">
         <label style="min-width:110px">Nhắn 1-1 với:</label>
         <select id="dmPeerSelect" onchange="document.getElementById('dmPeerUserId').value = this.value"><option value="">— chọn từ danh sách —</option></select>
@@ -102,6 +104,8 @@
 <script>
 var ws = null;
 var myUserId = '';
+var myUsername = '';
+var authToken = '';
 var nextId = 0;
 var countSent = 0;
 var countReceived = 0;
@@ -109,9 +113,12 @@ var reconnectDelayMs = 1000;
 var RECONNECT_MAX_DELAY_MS = 8000;
 var conversations = {}; // conversationId -> { label, el, logEl }
 
-var STORAGE_KEY = 'pingoDemoUserId';
-var DEFAULT_MY_ID = '18fa45fe-ec91-11ec-a6c8-005056bedc66';
-var DEFAULT_PEER_ID = '18fa45fe-ec91-11ec-a6c8-005056bedc67'; // mặc định trỏ sang "User 2" (demo2.html)
+// localStorage: đăng nhập thật giờ giữ token JWT (do colony cấp lúc /register /login), KHÔNG còn
+// tự khai/tự chọn UUID như trước (id/username giờ do server trả về, chỉ cache lại để khỏi phải
+// đăng nhập lại mỗi lần mở trang, tới khi token hết hạn — xem AUTH_ERROR trong ws.onmessage).
+var STORAGE_TOKEN_KEY = 'pingoAuthToken';
+var STORAGE_ID_KEY = 'pingoUserId';
+var STORAGE_USERNAME_KEY = 'pingoUsername';
 
 // NodePort riêng của colony (không phải harbor) cho REST API — xem colony/helm/templates/services.yaml.
 // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại theo publicHttp.port trong colony/src/main/resources/app-local.yaml.
@@ -120,11 +127,9 @@ var HISTORY_API_BASE = 'http://localhost:31002';
 var knownUsers = []; // [{id, username, firstSeenAt}, ...] từ GET /users
 var usernameById = {}; // cache tra nhanh id -> username khi hiển thị chat log
 
-// users.username giờ là NOT NULL ở DB (xem postgres/helm schema.sql) — chặn thật ở UI cho khớp:
-// không cho vào phần chat (#mainApp ẩn) và KHÔNG mở WebSocket (connect() tự no-op) tới khi xác
-// nhận danh tính hiện tại đã có username đăng ký (qua PUT /users). Đặt cờ này riêng (không suy ra
-// trực tiếp từ usernameById mỗi lần) để reconnectWithNewId() có chỗ chủ động reset lại khi đổi
-// sang 1 danh tính khác, và để connect()/ws.onclose's auto-retry không vô tình mở kết nối sớm.
+// true kể từ khi enterApp() chạy (đăng nhập/đăng ký thành công, hoặc còn token hợp lệ trong
+// localStorage lúc mở trang) tới khi logout()/AUTH_ERROR — dùng để connect()/ws.onclose's
+// auto-retry biết có nên tự mở/giữ WebSocket hay không.
 var identityConfirmed = false;
 
 // Tên hiển thị cho 1 userId — username đã biết nếu có, ngược lại rút gọn UUID (8 ký tự đầu).
@@ -132,49 +137,97 @@ function displayName(userId) {
     return usernameById[userId] || (userId.substring(0, 8) + '…');
 }
 
-// Gọi lúc khởi động trang và mỗi khi đổi danh tính (reconnectWithNewId) — fetch /users, xác định
-// danh tính hiện tại đã có tên chưa, rồi mở khoá (hoặc tiếp tục khoá) #mainApp + việc kết nối WS.
-function checkIdentityThenStart() {
-    fetch(HISTORY_API_BASE + '/users')
-        .then(function (res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.json();
-        })
-        .then(function (list) {
-            knownUsers = list;
-            usernameById = {};
-            list.forEach(function (u) { if (u.username) usernameById[u.id] = u.username; });
-            renderUserPickers();
-            if (usernameById[myUserId]) {
-                document.getElementById('myUsername').value = usernameById[myUserId];
-                enterApp();
-            } else {
-                document.getElementById('myUsername').value = '';
-                showNameGate();
-            }
-        })
-        .catch(function (err) {
-            console.warn('không load được danh sách user', err);
-            showNameGate(); // an toàn: không chắc đã đặt tên hay chưa thì cứ bắt đặt lại
-        });
-}
-
-function showNameGate() {
+function showLoginForm() {
     identityConfirmed = false;
     document.getElementById('mainApp').style.display = 'none';
-    document.getElementById('nameRequiredHint').style.display = '';
-    setStatus('cần đặt tên trước khi chat', 'bad');
+    document.getElementById('authPanel').style.display = '';
+    setStatus('cần đăng nhập', 'bad');
 }
 
 function enterApp() {
     identityConfirmed = true;
+    document.getElementById('authPanel').style.display = 'none';
     document.getElementById('mainApp').style.display = '';
-    document.getElementById('nameRequiredHint').style.display = 'none';
+    document.getElementById('whoami').innerText = myUsername + ' (' + myUserId.substring(0, 8) + '…)';
+    refreshUserList();
     connect();
 }
 
-// Chỉ re-fetch + vẽ lại danh sách/picker (nút "🔄 Làm mới danh sách") — KHÔNG kiểm tra/khoá lại
-// #mainApp, khác checkIdentityThenStart() ở trên (dùng khi đã ở trong app rồi, không cần gate lại).
+function clearAuthError() {
+    var el = document.getElementById('authError');
+    el.style.display = 'none';
+    el.innerText = '';
+}
+
+function showAuthError(message) {
+    var el = document.getElementById('authError');
+    el.innerText = '⚠ ' + message;
+    el.style.display = '';
+}
+
+function saveAuth(id, username, token) {
+    myUserId = id;
+    myUsername = username;
+    authToken = token;
+    localStorage.setItem(STORAGE_ID_KEY, id);
+    localStorage.setItem(STORAGE_USERNAME_KEY, username);
+    localStorage.setItem(STORAGE_TOKEN_KEY, token);
+}
+
+function clearAuth() {
+    myUserId = '';
+    myUsername = '';
+    authToken = '';
+    localStorage.removeItem(STORAGE_ID_KEY);
+    localStorage.removeItem(STORAGE_USERNAME_KEY);
+    localStorage.removeItem(STORAGE_TOKEN_KEY);
+}
+
+// path: '/login' hoặc '/register' — cùng 1 body {username, password}, cùng cách xử lý kết quả.
+function doAuth(path) {
+    clearAuthError();
+    var username = document.getElementById('authUsername').value.trim();
+    var password = document.getElementById('authPassword').value;
+    if (!username || !password) {
+        showAuthError('nhập đủ username và password');
+        return;
+    }
+    fetch(HISTORY_API_BASE + path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username: username, password: password})
+    })
+        .then(function (res) {
+            return res.json().then(function (data) { return {ok: res.ok, data: data}; });
+        })
+        .then(function (result) {
+            if (!result.ok) {
+                showAuthError(result.data.error || ('HTTP ' + result.status));
+                return;
+            }
+            saveAuth(result.data.id, result.data.username, result.data.token);
+            enterApp();
+        })
+        .catch(function (err) {
+            showAuthError('lỗi kết nối: ' + err.message);
+        });
+}
+function login() { doAuth('/login'); }
+function register() { doAuth('/register'); }
+
+function logout() {
+    identityConfirmed = false; // truoc khi close() de ws.onclose khong tu retry
+    if (ws) { ws.close(); ws = null; }
+    clearAuth();
+    conversations = {};
+    document.getElementById('conversations').innerHTML = '';
+    document.getElementById('emptyHint').style.display = '';
+    document.getElementById('authUsername').value = '';
+    document.getElementById('authPassword').value = '';
+    showLoginForm();
+}
+
+// Re-fetch + vẽ lại danh sách/picker -- gọi lúc enterApp() và mỗi khi bấm nút "🔄 Làm mới danh sách".
 function refreshUserList() {
     fetch(HISTORY_API_BASE + '/users')
         .then(function (res) {
@@ -237,25 +290,6 @@ function toggleMember(userId, chipEl) {
     if (chipEl) chipEl.classList.toggle('selected', idx === -1);
 }
 
-function saveUsername() {
-    var username = document.getElementById('myUsername').value.trim();
-    if (!username || !myUserId) return;
-    fetch(HISTORY_API_BASE + '/users?id=' + encodeURIComponent(myUserId) + '&username=' + encodeURIComponent(username), {method: 'PUT'})
-        .then(function (res) {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.json();
-        })
-        .then(function () {
-            usernameById[myUserId] = username;
-            refreshUserList();
-            if (!identityConfirmed) enterApp(); // lần đầu đặt tên -- mở khoá + kết nối luôn
-        })
-        .catch(function (err) {
-            console.warn('không lưu được tên hiển thị', err);
-            alert('Không lưu được tên: ' + err.message);
-        });
-}
-
 function newId() {
     return 'demo-' + (nextId++) + '-' + Date.now();
 }
@@ -287,27 +321,8 @@ function dmId(a, b) {
     return halvesToUuid(ah[0] ^ bh[0], ah[1] ^ bh[1]);
 }
 
-function randomizeMyId() {
-    document.getElementById('myUserId').value = crypto.randomUUID();
-}
-function copyMyId() {
-    navigator.clipboard.writeText(document.getElementById('myUserId').value);
-}
 function generateGroupId() {
     document.getElementById('groupConversationId').value = crypto.randomUUID();
-}
-
-function reconnectWithNewId() {
-    var newVal = document.getElementById('myUserId').value.trim();
-    if (!newVal) return;
-    localStorage.setItem(STORAGE_KEY, newVal);
-    myUserId = newVal;
-    conversations = {};
-    document.getElementById('conversations').innerHTML = '';
-    document.getElementById('emptyHint').style.display = '';
-    identityConfirmed = false; // danh tinh moi co the chua dat ten -- connect() se tu no-op cho toi khi checkIdentityThenStart() xac nhan lai
-    if (ws) ws.close();
-    checkIdentityThenStart();
 }
 
 // --- UI cho 1 conversation (card riêng, log + ô gửi riêng) ---
@@ -415,9 +430,8 @@ function startGroup() {
 }
 
 function connect() {
-    // Chưa xác nhận danh tính hiện tại đã đặt tên (xem checkIdentityThenStart/enterApp) -- không
-    // tự mở WebSocket. No-op an toàn cho moi noi con lo goi connect() (vd ws.onclose auto-retry
-    // ben duoi, hoac code cu con sot) thay vi phai sua tung noi goi.
+    // Chưa đăng nhập (xem enterApp/showLoginForm) -- không tự mở WebSocket. No-op an toàn cho mọi
+    // nơi còn lỡ gọi connect() (vd ws.onclose auto-retry bên dưới) thay vì phải sửa từng nơi gọi.
     if (!identityConfirmed) return;
 
     // Dùng transport "raw websocket" của SockJS (bỏ qua cơ chế session polling) — không sao vì đây chỉ là client test thủ công.
@@ -428,7 +442,7 @@ function connect() {
     ws.onopen = function () {
         reconnectDelayMs = 1000; // reset backoff mỗi khi nối thành công
         setStatus('đã kết nối, đang xác thực...', 'pending');
-        send({type: "AUTH", id: newId(), fromUserId: myUserId});
+        send({type: "AUTH", id: newId(), token: authToken});
     };
 
     ws.onclose = function () {
@@ -443,10 +457,14 @@ function connect() {
         console.log(frame);
         switch (frame.type) {
             case "AUTH_OK":
-                setStatus('đã xác thực (user ' + myUserId.substring(0, 8) + '…)', 'ok');
+                setStatus('đã xác thực (' + myUsername + ')', 'ok');
                 break;
             case "AUTH_ERROR":
+                // Token thiếu/sai/hết hạn -- đăng nhập lại từ đầu thay vì auto-retry vô hạn với 1 token đã hỏng.
                 setStatus('auth lỗi: ' + frame.reason, 'bad');
+                clearAuth();
+                showLoginForm();
+                if (ws) ws.close();
                 break;
             case "SUBSCRIBE_OK":
                 logToConversation(frame.conversationId, '✓ subscribe thành công');
@@ -493,10 +511,16 @@ function connect() {
 }
 
 // --- init ---
-myUserId = localStorage.getItem(STORAGE_KEY) || DEFAULT_MY_ID;
-document.getElementById('myUserId').value = myUserId;
-document.getElementById('dmPeerUserId').value = DEFAULT_PEER_ID;
-checkIdentityThenStart();
+// Còn token từ lần đăng nhập trước (localStorage) thì vào thẳng app -- token sai/hết hạn sẽ tự lộ
+// ra qua AUTH_ERROR lúc connect() (xem ws.onmessage), lúc đó mới quay lại form đăng nhập.
+myUserId = localStorage.getItem(STORAGE_ID_KEY) || '';
+myUsername = localStorage.getItem(STORAGE_USERNAME_KEY) || '';
+authToken = localStorage.getItem(STORAGE_TOKEN_KEY) || '';
+if (authToken && myUserId) {
+    enterApp();
+} else {
+    showLoginForm();
+}
 </script>
 </body>
 </html>

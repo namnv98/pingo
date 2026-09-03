@@ -29,15 +29,17 @@
 // Cach chay (co the chinh qua env var, khong can sua code):
 //   node e2e/resilience-test.mjs
 //   PINGO_NUM_SESSIONS=15 PINGO_TOTAL_DURATION_MS=32000 PINGO_KILL_TIMES_MS=5000,15000,25000 node e2e/resilience-test.mjs
+//   PINGO_API_URL=http://localhost:31002 node e2e/resilience-test.mjs   # colony REST API, dung de /register moi session (mac dinh nhu tren)
 
 import { exec as execCb, execSync } from "child_process";
 import { promisify } from "util";
 import { homedir } from "os";
-import { uuid, connect, waitFor } from "./lib.mjs";
+import { uuid, connect, waitFor, registerUser, DEFAULT_API_BASE } from "./lib.mjs";
 
 const exec = promisify(execCb);
 
 const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect/websocket";
+const API_URL = process.env.PINGO_API_URL ?? DEFAULT_API_BASE;
 const NAMESPACE = process.env.PINGO_NAMESPACE ?? "default";
 const COLONY_LABEL = process.env.PINGO_COLONY_LABEL ?? "app=colony";
 const NUM_SESSIONS = Number(process.env.PINGO_NUM_SESSIONS ?? 50);
@@ -63,16 +65,23 @@ async function main() {
     );
   }
 
+  console.log(`== registering ${NUM_SESSIONS} tai khoan that qua ${API_URL} ==`);
+  const accounts = [];
+  for (let i = 0; i < NUM_SESSIONS; i++) {
+    accounts.push(await registerUser(API_URL));
+  }
+
   console.log(`== setting up ${NUM_SESSIONS} sessions toi ${URL} ==`);
   const sessions = [];
   for (let i = 0; i < NUM_SESSIONS; i++) {
+    const account = accounts[i];
     sessions.push(await connect(URL, `S${i}`).then(async (s) => {
       const authId = uuid();
-      s.ws.send(JSON.stringify({ type: "AUTH", id: authId, fromUserId: uuid() }));
+      s.ws.send(JSON.stringify({ type: "AUTH", id: authId, token: account.token }));
       await waitFor(s.received, (f) => f.type === "AUTH_OK" && f.id === authId);
       const conversationId = uuid();
       const subId = uuid();
-      s.ws.send(JSON.stringify({ type: "SUBSCRIBE", id: subId, conversationId, memberUserIds: [uuid()] }));
+      s.ws.send(JSON.stringify({ type: "SUBSCRIBE", id: subId, conversationId, memberUserIds: [account.id] }));
       const subResult = await waitFor(s.received, (f) => f.id === subId && (f.type === "SUBSCRIBE_OK" || f.type === "SUBSCRIBE_ERROR"));
       if (subResult.type === "SUBSCRIBE_ERROR") throw new Error(`${s.label} subscribe error: ${subResult.reason}`);
       s.conversationId = conversationId;

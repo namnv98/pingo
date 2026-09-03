@@ -12,6 +12,8 @@ import com.lego.colony.ws.ChatSocketServer;
 import com.lego.colony.ws.history.MessageHistoryRegistry;
 import com.lego.colony.ws.membership.ChannelMembershipRegistry;
 import com.lego.colony.ws.user.UserRegistry;
+import com.lego.namnv.core.common.token.JwtHelper;
+import com.auth0.jwt.algorithms.Algorithm;
 import io.vertx.core.Vertx;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.PgPool;
@@ -92,6 +94,18 @@ public class ColonyAppModule extends AbstractModule {
     return new UserRegistry(pgPool);
   }
 
+  /**
+   * Ký (POST /register, /login) và verify (PUT /users) token JWT xác thực client -- cùng secret
+   * dùng bên harbor để verify lúc AUTH (xem HarborAppModule), nên 2 bên PHẢI cấu hình cùng giá trị
+   * {@code authTokenSecret}. Tái dùng JwtHelper có sẵn trong core/commons-lang (transitive qua
+   * core/http), trước đây chưa được dùng ở đâu trong repo.
+   */
+  @Provides
+  @Singleton
+  private JwtHelper jwtHelper() {
+    return new JwtHelper(Algorithm.HMAC256(config.getAuthTokenSecret()));
+  }
+
   @Provides
   @Singleton
   private ChatSessionManager chatSessionManager(
@@ -114,8 +128,8 @@ public class ColonyAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private RestApiVerticle restApiVerticle(ChatSessionManager sessionManager, MessageHistoryRegistry history, UserRegistry users) {
-    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history, users);
+  private RestApiVerticle restApiVerticle(ChatSessionManager sessionManager, MessageHistoryRegistry history, UserRegistry users, JwtHelper jwtHelper) {
+    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history, users, jwtHelper);
   }
 
   @SneakyThrows

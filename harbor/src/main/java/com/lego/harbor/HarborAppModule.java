@@ -7,6 +7,8 @@ import com.lego.harbor.api.HealthCheckVerticle;
 import com.lego.namnv.connector.PingoConnector;
 import com.lego.namnv.core.boot.start.LegoConfig1;
 import com.lego.namnv.core.common.comp.LifeCycle;
+import com.lego.namnv.core.common.token.JwtHelper;
+import com.auth0.jwt.algorithms.Algorithm;
 import com.lego.harbor.ws.SockjsSocketManager;
 import com.lego.harbor.ws.SockjsSocketServer;
 import io.vertx.core.Vertx;
@@ -43,8 +45,20 @@ public class HarborAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private SockjsSocketManager sockjsSocketManager(PingoConnector connector) {
-    return new SockjsSocketManager(resolveServerId(), vertx, connector, config);
+  private SockjsSocketManager sockjsSocketManager(PingoConnector connector, JwtHelper jwtHelper) {
+    return new SockjsSocketManager(resolveServerId(), vertx, connector, config, jwtHelper);
+  }
+
+  /**
+   * Verify token JWT lúc AUTH (xem SockjsSocketManager#handleAuth) -- cùng secret dùng bên colony
+   * để ký lúc /register /login (xem ColonyAppModule), nên 2 bên PHẢI cấu hình cùng giá trị
+   * {@code authTokenSecret}. Tái dùng JwtHelper có sẵn trong core/commons-lang (transitive qua
+   * core/http), trước đây chưa được dùng ở đâu trong repo.
+   */
+  @Provides
+  @Singleton
+  private JwtHelper jwtHelper() {
+    return new JwtHelper(Algorithm.HMAC256(config.getAuthTokenSecret()));
   }
 
   @Provides

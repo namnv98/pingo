@@ -24,6 +24,8 @@ data:
       port: 9999
       path: /connect
       serviceName: eb_gossip_adm
+    # PHAI khop voi authTokenSecret cua harbor -- dung de ky/verify JWT xac thuc client.
+    authTokenSecret: pingo-local-dev-auth-secret
     database:
       parsedUri:
         databaseType: postgres
@@ -38,3 +40,4 @@ data:
           maxWaitQueueSize: 1024
   log4j2.xml: |
 {{ .Files.Get "config/log4j2.xml" | indent 4 }}
+

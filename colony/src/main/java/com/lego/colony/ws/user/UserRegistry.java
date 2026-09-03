@@ -2,37 +2,78 @@ package com.lego.colony.ws.user;
 
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.pgclient.PgException;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import lombok.RequiredArgsConstructor;
+import org.mindrot.jbcrypt.BCrypt;
 
 /**
- * Đăng ký username hiển thị cho 1 userId — KHÔNG phải hệ thống login (không có password/token gì
- * cả), cùng mức độ tin cậy với {@code fromUserId} client tự khai (xem ARCHITECTURE.md mục 8). Chỉ
- * để UI khỏi phải hiện UUID thô cho người dùng chọn (DM peer, thành viên group) — xem
- * {@code RestApiVerticle}.
+ * Đăng ký/xác thực tài khoản (username + password thật, hash bằng bcrypt) — xem
+ * {@code RestApiVerticle}'s {@code POST /register}/{@code POST /login}/{@code PUT /users}. Trước
+ * đây chỉ là "đăng ký tên hiển thị", không có password/token gì cả — giờ là hệ thống login thật,
+ * {@code id} do server tự sinh lúc {@link #registerUser}, không còn do client tự khai như trước.
  */
 @RequiredArgsConstructor
 public class UserRegistry {
 
+  /** Postgres unique_violation — https://www.postgresql.org/docs/current/errcodes-appendix.html */
+  private static final String UNIQUE_VIOLATION_SQLSTATE = "23505";
+
   private final Pool pool;
 
-  /** Client tự đặt/đổi tên hiển thị cho chính mình — upsert, không cần biết trước đã tồn tại hay chưa. */
-  public CompletionStage<Void> upsertUsername(UUID id, String username) {
-    return pool.preparedQuery("INSERT INTO users (id, username) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username")
-        .execute(Tuple.of(id, username))
-        .toCompletionStage()
-        .thenApply(unused -> null);
+  /** Username đã tồn tại (đăng ký trùng, hoặc đổi tên trùng người khác). */
+  public static class UsernameTakenException extends RuntimeException {
+    public UsernameTakenException(String username) {
+      super("username already taken: " + username);
+    }
   }
 
-  /** Toàn bộ user đã từng xuất hiện — dùng cho UI hiện danh sách để chọn (DM peer/thành viên group). */
+  /** Đăng ký tài khoản mới — id do server tự sinh, password được hash trước khi lưu, không bao giờ lưu dạng plaintext. */
+  public CompletionStage<JsonObject> registerUser(String username, String rawPassword) {
+    var id = UUID.randomUUID();
+    var passwordHash = BCrypt.hashpw(rawPassword, BCrypt.gensalt());
+    return pool.preparedQuery("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
+        .execute(Tuple.of(id, username, passwordHash))
+        .toCompletionStage()
+        .thenApply(unused -> new JsonObject().put("id", id.toString()).put("username", username))
+        .exceptionally(ex -> { throw isUniqueViolation(ex) ? new UsernameTakenException(username) : asUnchecked(ex); });
+  }
+
+  /** Xác thực username/password — Optional rỗng cho cả 2 trường hợp "không tồn tại" và "sai mật khẩu" (không lộ trường hợp nào). */
+  public CompletionStage<Optional<JsonObject>> verifyLogin(String username, String rawPassword) {
+    return pool.preparedQuery("SELECT id, username, password_hash FROM users WHERE username = $1")
+        .execute(Tuple.of(username))
+        .toCompletionStage()
+        .thenApply(
+            rows -> {
+              var row = rows.iterator();
+              if (!row.hasNext()) {
+                return Optional.<JsonObject>empty();
+              }
+              var r = row.next();
+              if (!BCrypt.checkpw(rawPassword, r.getString("password_hash"))) {
+                return Optional.<JsonObject>empty();
+              }
+              return Optional.of(new JsonObject().put("id", r.getUUID("id").toString()).put("username", r.getString("username")));
+            });
+  }
+
+  /** Đổi tên hiển thị của chính mình — id lấy từ token đã verify (xem RestApiVerticle), không còn là upsert (row phải đã tồn tại từ lúc register). */
+  public CompletionStage<Void> updateUsername(UUID id, String newUsername) {
+    return pool.preparedQuery("UPDATE users SET username = $2 WHERE id = $1")
+        .execute(Tuple.of(id, newUsername))
+        .toCompletionStage()
+        .thenApply(unused -> (Void) null)
+        .exceptionally(ex -> { throw isUniqueViolation(ex) ? new UsernameTakenException(newUsername) : asUnchecked(ex); });
+  }
+
+  /** Toàn bộ user đã từng xuất hiện — dùng cho UI hiện danh sách để chọn (DM peer/thành viên group). Không bao giờ trả password_hash. */
   public CompletionStage<JsonArray> listUsers() {
-    // Nguoi da co ten hien thi len truoc (theo alphabet), roi moi toi nguoi chua dat ten (moi xuat
-    // hien truoc) -- danh sach thuc te co the co rat nhieu UUID chua dat ten (vd tu load test), de
-    // no lan at nhung user "that" da dat ten se kho tim.
-    return pool.preparedQuery("SELECT id, username, first_seen_at FROM users ORDER BY (username IS NULL), username, first_seen_at DESC")
+    return pool.preparedQuery("SELECT id, username, first_seen_at FROM users ORDER BY username, first_seen_at DESC")
         .execute()
         .toCompletionStage()
         .thenApply(
@@ -47,5 +88,14 @@ public class UserRegistry {
               }
               return result;
             });
+  }
+
+  private static boolean isUniqueViolation(Throwable ex) {
+    var cause = ex instanceof java.util.concurrent.CompletionException ? ex.getCause() : ex;
+    return cause instanceof PgException pgEx && UNIQUE_VIOLATION_SQLSTATE.equals(pgEx.getSqlState());
+  }
+
+  private static RuntimeException asUnchecked(Throwable ex) {
+    return ex instanceof RuntimeException re ? re : new RuntimeException(ex);
   }
 }

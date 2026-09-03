@@ -19,15 +19,14 @@ data:
     -- ngay tu dau gan nhu khong ton chi phi gi, tranh phai them sau tren bang da co du lieu.
     CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members (user_id);
 
-    -- Chua co bang user nao truoc do trong he thong (AUTH chi tin fromUserId client tu khai, xem
-    -- ARCHITECTURE.md muc 8) -- bang nay chi la 1 so dang ky toi thieu "id nay da tung xuat hien",
-    -- KHONG phai he thong login (khong co password/token gi ca) -- username chi la ten hien thi
-    -- client tu khai bao (cung muc do tin cay voi fromUserId), de UI khoi phai hien UUID tho.
-    -- username la NOT NULL co chu dich: 1 dong trong bang nay chi ton tai SAU KHI client da tu dat
-    -- ten (qua PUT /users, xem UserRegistry) -- khong con kieu "dang ky rong" chi co id nhu truoc.
+    -- He thong login THAT: username + password (hash bang bcrypt, xem UserRegistry/RestApiVerticle
+    -- POST /register, /login) -- khong con la "dang ky ten hien thi" don thuan nhu truoc nua.
+    -- username la UNIQUE vi login tra cuu theo username. id do server tu sinh luc /register (khong
+    -- con do client tu khai/tu chon nhu truoc).
     CREATE TABLE IF NOT EXISTS users (
         id UUID NOT NULL PRIMARY KEY,
-        username TEXT NOT NULL,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
         first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 

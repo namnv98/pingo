@@ -4,6 +4,8 @@ import com.lego.namnv.connector.PingoConnector;
 import com.lego.namnv.core.boot.start.LegoConfig1;
 import com.lego.namnv.core.common.support.ConversationIds;
 import com.lego.namnv.core.common.support.UUIDUtils;
+import com.lego.namnv.core.common.token.JwtHelper;
+import com.lego.namnv.core.common.token.NdlTokenException;
 import com.lego.harbor.ws.backend.BackendLinkGateway;
 import com.lego.harbor.ws.dto.MessageType;
 import com.lego.harbor.ws.dto.SocketFrame;
@@ -44,14 +46,16 @@ public class SockjsSocketManager {
   private Vertx vertx;
   private BackendLinkGateway backendLinkGateway;
   private RoutingVersionSync routingVersionSync;
+  private JwtHelper jwtHelper;
   /** false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe (xem {@code HealthCheckVerticle}). */
   @Getter private volatile boolean ready = true;
 
-  public SockjsSocketManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config) {
+  public SockjsSocketManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper) {
     this.serverId = serverId;
     this.vertx = vertx;
     this.backendLinkGateway = new BackendLinkGateway(vertx, connector, config, sessions, this::sendToClient);
     this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendLinkGateway, sessions, this::sendToClient);
+    this.jwtHelper = jwtHelper;
     vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
   }
 
@@ -122,17 +126,28 @@ public class SockjsSocketManager {
     }
   }
 
-  /** Chỉ còn xác định danh tính (userId) cho session — xử lý cục bộ hoàn toàn, KHÔNG còn tự động mở kết nối xuống backend nữa (xem SUBSCRIBE). */
+  /**
+   * Xác định danh tính (userId) cho session bằng cách verify chữ ký token JWT do colony cấp lúc
+   * /register hoặc /login (xem UserRegistry/RestApiVerticle bên colony) — xử lý cục bộ hoàn toàn
+   * (chỉ verify chữ ký bằng secret dùng chung, KHÔNG gọi ngược lại colony), KHÔNG tự động mở kết
+   * nối xuống backend (xem SUBSCRIBE). Trước đây tin thẳng {@code fromUserId} client tự khai, không
+   * verify gì cả — đây là điểm khác biệt duy nhất so với trước, phần còn lại của giao thức không đổi.
+   */
   private void handleAuth(SockjsSocket session, SocketFrame frame) {
-    if (isBlank(frame.getFromUserId())) {
-      sendToClient(session, SocketFrames.error(frame.getId(), "missing fromUserId"));
+    if (isBlank(frame.getToken())) {
+      sendToClient(session, SocketFrames.authError(frame.getId(), "missing token"));
       return;
     }
     UUID userId;
     try {
-      userId = UUID.fromString(frame.getFromUserId());
-    } catch (IllegalArgumentException e) {
-      sendToClient(session, SocketFrames.error(frame.getId(), "invalid fromUserId"));
+      var decoded = jwtHelper.decode(frame.getToken());
+      userId = decoded.getUUID("userId");
+    } catch (NdlTokenException e) {
+      sendToClient(session, SocketFrames.authError(frame.getId(), "invalid or expired token"));
+      return;
+    }
+    if (userId == null) {
+      sendToClient(session, SocketFrames.authError(frame.getId(), "invalid token"));
       return;
     }
     session.setUserId(userId);

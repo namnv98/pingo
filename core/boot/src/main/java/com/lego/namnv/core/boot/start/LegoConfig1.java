@@ -40,6 +40,14 @@ public class LegoConfig1 {
    * lại 1 session ồn ào có thể ảnh hưởng tới ~1/N session khác đang rơi vào cùng shard.
    */
   @Builder.Default private int chatBackendShardsPerPod = 4;
+  /**
+   * Secret dùng chung để ký (colony, lúc /register /login) và verify (harbor, lúc AUTH) token JWT
+   * xác thực client — xem {@code com.lego.namnv.core.common.token.JwtHelper}. BẮT BUỘC harbor và
+   * colony phải cấu hình CÙNG 1 giá trị, nếu không mọi AUTH sẽ fail verify chữ ký. Có default để
+   * local dev không cần khai báo gì cũng chạy được (cả 2 phía cùng rơi vào default giống nhau) —
+   * production thật nên override bằng giá trị riêng, bí mật.
+   */
+  @Builder.Default private String authTokenSecret = "dev-insecure-shared-secret-change-me";
   private DbConfig database;
   private InvalidateCacheConfig invalidateCacheConfig;
   private KafkaConfig kafka;

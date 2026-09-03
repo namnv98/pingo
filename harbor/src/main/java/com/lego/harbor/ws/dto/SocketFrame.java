@@ -31,6 +31,16 @@ public class SocketFrame {
   private String fromUserId;
 
   /**
+   * Chỉ có ý nghĩa với AUTH: token JWT do colony cấp lúc /register hoặc /login — harbor verify chữ
+   * ký tại chỗ, không đụng tới colony (xem SockjsSocketManager#handleAuth). Field này vẫn được
+   * serialize (dù null) trên MỌI frame harbor gửi xuống colony (SUBSCRIBE/MESSAGE/...), nên bản
+   * copy SocketFrame bên colony cũng phải khai báo field này (dù không bao giờ đọc) — nếu không
+   * Jackson (FAIL_ON_UNKNOWN_PROPERTIES mặc định = true) sẽ làm colony decode lỗi ÂM THẦM mọi frame
+   * từ harbor, không riêng gì AUTH.
+   */
+  private String token;
+
+  /**
    * User id của người nhận — chỉ còn mang tính tiện lợi cho client (hiển thị/tương thích cũ) với
    * MESSAGE dạng DM, KHÔNG còn dùng để route nữa (xem {@link #conversationId}). Không bắt buộc nếu
    * đã có {@code conversationId}.

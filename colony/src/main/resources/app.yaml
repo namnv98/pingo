@@ -30,6 +30,8 @@ chatSocket:
 invalidateCacheConfig:
   eventBusAddress: lego-invalid-cache-info
 basePackage: com.lego.namnv
+# PHAI khop voi authTokenSecret cua harbor (app-local.yaml) -- dung de ky/verify JWT xac thuc client.
+authTokenSecret: pingo-local-dev-auth-secret
 
 database:
   # Postgres cua chinh cum k3s local (xem postgres/helm), truy cap tu ngoai qua NodePort 31005 --

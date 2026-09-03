@@ -7,11 +7,12 @@
 //
 // Cach chay:
 //   node e2e/demux-test.mjs
-//   PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/demux-test.mjs   # local dev, khong qua k3s
+//   PINGO_WS_URL=ws://localhost:8888/connect/websocket PINGO_API_URL=http://localhost:8085 node e2e/demux-test.mjs   # local dev, khong qua k3s
 
-import { uuid, connect, waitFor } from "./lib.mjs";
+import { uuid, connect, waitFor, registerUser, DEFAULT_API_BASE } from "./lib.mjs";
 
 const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect/websocket";
+const API_URL = process.env.PINGO_API_URL ?? DEFAULT_API_BASE;
 
 function send(ws, label, frame) {
   console.log(`[${label}] ->`, JSON.stringify(frame));
@@ -19,8 +20,11 @@ function send(ws, label, frame) {
 }
 
 async function main() {
-  const userA = uuid();
-  const userB = uuid();
+  console.log(`== registering 2 tai khoan that qua ${API_URL} ==`);
+  const accountA = await registerUser(API_URL);
+  const accountB = await registerUser(API_URL);
+  const userA = accountA.id;
+  const userB = accountB.id;
   const convA = uuid();
   const convB = uuid();
 
@@ -28,8 +32,8 @@ async function main() {
   const A = await connect(URL, "A");
   const B = await connect(URL, "B");
 
-  send(A.ws, "A", { type: "AUTH", id: uuid(), fromUserId: userA });
-  send(B.ws, "B", { type: "AUTH", id: uuid(), fromUserId: userB });
+  send(A.ws, "A", { type: "AUTH", id: uuid(), token: accountA.token });
+  send(B.ws, "B", { type: "AUTH", id: uuid(), token: accountB.token });
   await waitFor(A.received, (f) => f.type === "AUTH_OK");
   await waitFor(B.received, (f) => f.type === "AUTH_OK");
 

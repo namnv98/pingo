@@ -30,5 +30,7 @@ data:
     chatBackend:
       port: 9999
       path: /connect
+    # PHAI khop voi authTokenSecret cua colony -- dung de ky/verify JWT xac thuc client.
+    authTokenSecret: pingo-local-dev-auth-secret
   log4j2.xml: |
 {{ .Files.Get "config/log4j2.xml" | indent 4 }}

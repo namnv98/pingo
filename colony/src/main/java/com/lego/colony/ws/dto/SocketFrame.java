@@ -31,6 +31,16 @@ public class SocketFrame {
   private String fromUserId;
 
   /**
+   * Chỉ có ý nghĩa với AUTH (client&lt;-&gt;harbor) — colony KHÔNG BAO GIỜ đọc field này (AUTH không
+   * đi tới colony). Field này vẫn phải khai báo ở đây (dù luôn null trên mọi frame harbor gửi
+   * xuống colony) vì Jackson mặc định {@code FAIL_ON_UNKNOWN_PROPERTIES=true} — thiếu field này sẽ
+   * làm colony decode lỗi ÂM THẦM (log debug, không thấy) mọi frame harbor gửi xuống (kể cả
+   * SUBSCRIBE/MESSAGE, không chỉ AUTH), vì lớp {@code SocketFrame} bên harbor giờ luôn serialize ra
+   * cả field này (dù giá trị null) trên MỌI frame nó gửi đi, không riêng gì AUTH.
+   */
+  private String token;
+
+  /**
    * User id của người nhận — chỉ còn mang tính tiện lợi cho client (hiển thị/tương thích cũ) với
    * MESSAGE dạng DM, KHÔNG còn dùng để route nữa (xem {@link #conversationId}). Không bắt buộc nếu
    * đã có {@code conversationId}.
