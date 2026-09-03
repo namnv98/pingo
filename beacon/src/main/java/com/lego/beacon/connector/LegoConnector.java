@@ -3,7 +3,7 @@ package com.lego.beacon.connector;
 import com.lego.namnv.discovery.k8s.K8sClientConfig;
 import com.lego.namnv.discovery.router.Destination;
 import com.lego.namnv98.event.EventObservable;
-import com.lego.beacon.discovery.keeper.Keeper;
+import com.lego.beacon.discovery.Keeper;
 import io.vertx.core.eventbus.EventBus;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
