@@ -128,8 +128,9 @@ public class ColonyAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private RestApiVerticle restApiVerticle(ChatSessionManager sessionManager, MessageHistoryRegistry history, UserRegistry users, JwtHelper jwtHelper) {
-    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history, users, jwtHelper);
+  private RestApiVerticle restApiVerticle(
+      ChatSessionManager sessionManager, MessageHistoryRegistry history, UserRegistry users, JwtHelper jwtHelper, ChannelMembershipRegistry membership) {
+    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history, users, jwtHelper, membership);
   }
 
   @SneakyThrows

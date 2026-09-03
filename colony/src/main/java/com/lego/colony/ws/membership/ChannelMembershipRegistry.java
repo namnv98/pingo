@@ -1,8 +1,11 @@
 package com.lego.colony.ws.membership;
 
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Set;
 import java.util.UUID;
@@ -67,5 +70,38 @@ public class ChannelMembershipRegistry {
             .thenApply(rows -> StreamSupport.stream(rows.spliterator(), false)
                 .map(row -> row.getUUID("user_id"))
                 .collect(Collectors.toUnmodifiableSet()));
+    }
+
+    /**
+     * Toan bo conversation ma userId dang la thanh vien -- dung cho UI hien "danh sach hoi thoai
+     * cua ban" (xem RestApiVerticle's GET /conversations). Kem theo full member list cua tung
+     * conversation (client tu suy ra label: DM hien ten nguoi con lai, group hien so thanh vien --
+     * khong can round-trip rieng goi getMembers cho tung cai), va thoi diem tin nhan gan nhat (LEFT
+     * JOIN tuong quan, tan dung idx_messages_conversation_created da co san) de sap xep theo hoat
+     * dong gan day nhat truoc, giong inbox cua cac app chat that.
+     */
+    public CompletionStage<JsonArray> listConversationsForUser(UUID userId) {
+        return pool.preparedQuery(
+                "SELECT cm.conversation_id, array_agg(cm.user_id) AS member_ids, "
+                    + "(SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = cm.conversation_id) AS last_message_at "
+                    + "FROM conversation_members cm "
+                    + "WHERE cm.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = $1) "
+                    + "GROUP BY cm.conversation_id "
+                    + "ORDER BY last_message_at DESC NULLS LAST")
+            .execute(Tuple.of(userId))
+            .toCompletionStage()
+            .thenApply(rows -> {
+                var result = new JsonArray();
+                for (var row : rows) {
+                    var memberIds = new JsonArray(Arrays.stream(row.getArrayOfUUIDs("member_ids")).map(UUID::toString).toList());
+                    var lastMessageAt = row.getOffsetDateTime("last_message_at");
+                    result.add(
+                        new JsonObject()
+                            .put("conversationId", row.getUUID("conversation_id").toString())
+                            .put("memberUserIds", memberIds)
+                            .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli()));
+                }
+                return result;
+            });
     }
 }

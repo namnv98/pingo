@@ -1,6 +1,7 @@
 package com.lego.colony.api;
 
 import com.lego.colony.ws.history.MessageHistoryRegistry;
+import com.lego.colony.ws.membership.ChannelMembershipRegistry;
 import com.lego.colony.ws.user.UserRegistry;
 import com.lego.namnv.core.common.token.JwtHelper;
 import com.lego.namnv.core.common.token.NdlTokenException;
@@ -26,8 +27,10 @@ import lombok.extern.slf4j.Slf4j;
  * (xem {@link MessageHistoryRegistry}); {@code POST /register}/{@code POST /login} đăng ký/đăng
  * nhập tài khoản thật (username + password, trả về token JWT — xem {@link JwtHelper}); {@code GET
  * /users} liệt kê user; {@code PUT /users} đổi tên hiển thị của CHÍNH mình (bắt buộc {@code
- * Authorization: Bearer <token>}) — xem {@link UserRegistry}. Chỉ vài route đơn giản nên vẫn giữ
- * phong cách {@code HttpServer} thuần (không dùng {@code vertx-web} Router).
+ * Authorization: Bearer <token>}) — xem {@link UserRegistry}; {@code GET /conversations} (cũng bắt
+ * buộc Bearer token) liệt kê các conversation mà chính mình đang là thành viên, cho UI hiện "danh
+ * sách hội thoại của bạn" — xem {@link ChannelMembershipRegistry}. Chỉ vài route đơn giản nên vẫn
+ * giữ phong cách {@code HttpServer} thuần (không dùng {@code vertx-web} Router).
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -45,6 +48,7 @@ public class RestApiVerticle extends AbstractVerticle {
   private final MessageHistoryRegistry history;
   private final UserRegistry users;
   private final JwtHelper jwtHelper;
+  private final ChannelMembershipRegistry membership;
 
   @Override
   public void start(Promise<Void> promise) {
@@ -84,6 +88,10 @@ public class RestApiVerticle extends AbstractVerticle {
     }
     if (request.method() == HttpMethod.PUT && "/users".equals(request.path())) {
       handleSetUsername(request);
+      return;
+    }
+    if (request.method() == HttpMethod.GET && "/conversations".equals(request.path())) {
+      handleListConversations(request);
       return;
     }
     if (request.method() == HttpMethod.POST && "/register".equals(request.path())) {
@@ -252,6 +260,25 @@ public class RestApiVerticle extends AbstractVerticle {
                 log.error("failed to update username for user {}", id, ex);
                 response.setStatusCode(500).end(err("internal error"));
               }
+              return null;
+            });
+  }
+
+  /** {@code GET /conversations} (bắt buộc {@code Authorization: Bearer <token>}) — mọi conversation mà CHÍNH mình đang là thành viên, mới hoạt động gần đây trước. */
+  private void handleListConversations(HttpServerRequest request) {
+    var response = jsonResponse(request);
+    var userId = authenticatedUserId(request);
+    if (userId.isEmpty()) {
+      response.setStatusCode(401).end(err("missing/invalid/expired token"));
+      return;
+    }
+    membership
+        .listConversationsForUser(userId.get())
+        .thenAccept(list -> response.setStatusCode(200).end(list.encode()))
+        .exceptionally(
+            ex -> {
+              log.error("failed to list conversations for user {}", userId.get(), ex);
+              response.setStatusCode(500).end(err("internal error"));
               return null;
             });
   }
