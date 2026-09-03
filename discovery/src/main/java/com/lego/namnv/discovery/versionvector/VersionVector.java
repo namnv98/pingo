@@ -58,7 +58,17 @@ public class VersionVector {
     // to serve that one redundant call.
     var consistentRouter = Router.newConsistent(keeper);
     var podVersion = versions.get(currentVersion);
-    if (version > 1 && nonNull(podVersion)) {
+    // Truoc day co them dieu kien "version > 1" o day, dua tren gia tri TUYET DOI cua version
+    // MOI nhan tu beacon -- sai: beacon la 1 JVM rieng, version cua no reset ve 0 moi lan beacon
+    // restart (RoutingGossipPublisher.version, chi song trong memory, khong persist dau ca), nen
+    // sau moi lan beacon restart, gossip incremental DAU TIEN luon mang version=1 -- dung luc do
+    // "version > 1" fail, lam rot mat toan bo destination da tich luy truoc do (podVersion khong
+    // ROI la null, chi la bi dieu kien nay chan khong cho copy sang) -- day chinh la nguyen nhan
+    // "No route to host" lap lai moi khi beacon restart giua luc colony/harbor van dang song.
+    // nonNull(podVersion) tu no da du de phan biet dung "lan dau tien thuc su" (chua tung co
+    // podVersion nao, vd truoc ca beacon_init) voi "beacon vua restart nhung ben nay van con nho
+    // state cu" -- khong can them dieu kien nao ve gia tri cua version nua.
+    if (nonNull(podVersion)) {
       keeper.addDestinations(podVersion.getKeeper().listingDestinations());
     }
     keeper.addDestinationChangeEvent(destinationChangeEvents);
