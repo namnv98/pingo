@@ -1,6 +1,7 @@
 package com.lego.colony.api;
 
 import com.lego.colony.ws.history.MessageHistoryRegistry;
+import com.lego.colony.ws.user.UserRegistry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpMethod;
@@ -13,11 +14,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 2 endpoint: {@code GET /healthcheck} cho k8s {@code readinessProbe} (trả 200 lúc bình thường,
- * 503 kể từ khi {@code ChatSessionManager.drain()} bắt đầu — scale down/rolling update, để k8s
- * ngừng route session mới vào pod đang rút lui), và {@code GET /messages} để lấy lịch sử tin nhắn
- * của 1 conversation (xem {@link MessageHistoryRegistry}) — chỉ mới có 1 route trước đây nên vẫn
- * giữ nguyên phong cách {@code HttpServer} thuần (không dùng {@code vertx-web} Router).
+ * {@code GET /healthcheck} cho k8s {@code readinessProbe} (trả 200 lúc bình thường, 503 kể từ khi
+ * {@code ChatSessionManager.drain()} bắt đầu — scale down/rolling update, để k8s ngừng route
+ * session mới vào pod đang rút lui); {@code GET /messages} lấy lịch sử tin nhắn của 1 conversation
+ * (xem {@link MessageHistoryRegistry}); {@code GET /users}/{@code PUT /users} liệt kê/đặt username
+ * hiển thị (xem {@link UserRegistry}) — chỉ vài route đơn giản nên vẫn giữ phong cách
+ * {@code HttpServer} thuần (không dùng {@code vertx-web} Router).
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -25,10 +27,12 @@ public class RestApiVerticle extends AbstractVerticle {
 
   private static final int DEFAULT_LIMIT = 50;
   private static final int MAX_LIMIT = 200;
+  private static final int MAX_USERNAME_LENGTH = 64;
 
   private final int port;
   private final BooleanSupplier ready;
   private final MessageHistoryRegistry history;
+  private final UserRegistry users;
 
   @Override
   public void start(Promise<Void> promise) {
@@ -48,6 +52,14 @@ public class RestApiVerticle extends AbstractVerticle {
     }
     if (request.method() == HttpMethod.GET && "/messages".equals(request.path())) {
       handleListMessages(request);
+      return;
+    }
+    if (request.method() == HttpMethod.GET && "/users".equals(request.path())) {
+      handleListUsers(request);
+      return;
+    }
+    if (request.method() == HttpMethod.PUT && "/users".equals(request.path())) {
+      handleSetUsername(request);
       return;
     }
     request.response().putHeader("Content-Type", "text/plain").setStatusCode(404).end("not found");
@@ -82,6 +94,48 @@ public class RestApiVerticle extends AbstractVerticle {
         .exceptionally(
             ex -> {
               log.error("failed to list messages for conversation {}", conversationId, ex);
+              response.setStatusCode(500).end(new JsonObject().put("error", "internal error").encode());
+              return null;
+            });
+  }
+
+  private void handleListUsers(HttpServerRequest request) {
+    var response = request.response().putHeader("Content-Type", "application/json").putHeader("Access-Control-Allow-Origin", "*");
+    users
+        .listUsers()
+        .thenAccept(list -> response.setStatusCode(200).end(list.encode()))
+        .exceptionally(
+            ex -> {
+              log.error("failed to list users", ex);
+              response.setStatusCode(500).end(new JsonObject().put("error", "internal error").encode());
+              return null;
+            });
+  }
+
+  /** {@code PUT /users?id=<uuid>&username=<ten hien thi>} — client tu dat/doi ten cho chinh minh, KHONG phai login (xem UserRegistry). */
+  private void handleSetUsername(HttpServerRequest request) {
+    var response = request.response().putHeader("Content-Type", "application/json").putHeader("Access-Control-Allow-Origin", "*");
+    UUID id;
+    try {
+      id = UUID.fromString(request.getParam("id"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      response.setStatusCode(400).end(new JsonObject().put("error", "missing/invalid id").encode());
+      return;
+    }
+    var rawUsername = request.getParam("username");
+    if (rawUsername == null || rawUsername.isBlank()) {
+      response.setStatusCode(400).end(new JsonObject().put("error", "missing username").encode());
+      return;
+    }
+    var stripped = rawUsername.strip();
+    var username = stripped.length() > MAX_USERNAME_LENGTH ? stripped.substring(0, MAX_USERNAME_LENGTH) : stripped;
+
+    users
+        .upsertUsername(id, username)
+        .thenAccept(unused -> response.setStatusCode(200).end(new JsonObject().put("id", id.toString()).put("username", username).encode()))
+        .exceptionally(
+            ex -> {
+              log.error("failed to set username for user {}", id, ex);
               response.setStatusCode(500).end(new JsonObject().put("error", "internal error").encode());
               return null;
             });

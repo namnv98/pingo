@@ -51,26 +51,35 @@
     </div>
     <div class="hint">Đổi xong bấm nút bên dưới để reconnect với danh tính mới. Giá trị được nhớ lại (localStorage), không cần gõ lại mỗi lần mở trang.</div>
     <button onclick="reconnectWithNewId()">↻ Reconnect với id này</button>
+    <div class="row" style="margin-top:8px">
+        <label>Tên hiển thị:</label>
+        <input type="text" id="myUsername" size="20" placeholder="vd: Peer">
+        <button class="primary" onclick="saveUsername()">💾 Lưu tên</button>
+    </div>
+    <div class="hint">Không phải đăng nhập thật (không có mật khẩu) — chỉ để người khác thấy tên thay vì UUID thô. Lưu xong tên sẽ hiện trong danh sách chọn bên dưới.</div>
 </div>
 
 <div class="panel">
     <h3>Bắt đầu trò chuyện</h3>
     <div class="row">
         <label style="min-width:110px">Nhắn 1-1 với:</label>
-        <input type="text" id="dmPeerUserId" size="38" placeholder="user id của người kia">
+        <input type="text" id="dmPeerUserId" size="38" list="userList" placeholder="gõ tên hoặc chọn từ danh sách, hoặc dán user id">
         <button class="primary" onclick="startDm()">Bắt đầu DM</button>
+        <button onclick="refreshUserList()">🔄 Làm mới danh sách</button>
     </div>
+    <datalist id="userList"></datalist>
     <div class="row">
         <label style="min-width:110px">Group id:</label>
         <input type="text" id="groupConversationId" size="38" placeholder="để trống = tự tạo mới">
         <button onclick="generateGroupId()">Tạo mới</button>
     </div>
-    <div class="row">
+    <div class="row" style="align-items:flex-start">
         <label style="min-width:110px">Thành viên:</label>
         <input type="text" id="groupMembers" size="50" placeholder="user id, cách nhau bởi dấu phẩy (không cần tự thêm mình)">
         <button class="primary" onclick="startGroup()">Tham gia / Tạo group</button>
     </div>
-    <div class="hint">DM: chỉ cần user id của người kia, hệ thống tự tính conversationId. Group: để trống ô id + bấm "Tạo mới" nếu bạn là người tạo, hoặc dán id group có sẵn nếu tham gia group người khác đã tạo (vd id do demo.html - User 1 - tạo).</div>
+    <div class="row" id="memberPicker"></div>
+    <div class="hint">DM: gõ tên/user id của người kia (có gợi ý từ danh sách đã biết) — hệ thống tự tính conversationId. Group: để trống ô id + bấm "Tạo mới" nếu bạn là người tạo, hoặc dán id group có sẵn nếu tham gia group người khác đã tạo (vd id do demo.html - User 1 - tạo); bấm vào tên trong danh sách bên dưới ô "Thành viên" để thêm/bớt nhanh.</div>
 </div>
 
 <div class="panel">
@@ -96,6 +105,79 @@ var DEFAULT_PEER_ID = '18fa45fe-ec91-11ec-a6c8-005056bedc66'; // mặc định t
 // NodePort riêng của colony (không phải harbor) cho REST API — xem colony/helm/templates/services.yaml.
 // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại theo publicHttp.port trong colony/src/main/resources/app-local.yaml.
 var HISTORY_API_BASE = 'http://localhost:31002';
+
+var knownUsers = []; // [{id, username, firstSeenAt}, ...] từ GET /users
+var usernameById = {}; // cache tra nhanh id -> username khi hiển thị chat log
+
+// Tên hiển thị cho 1 userId — username đã biết nếu có, ngược lại rút gọn UUID (8 ký tự đầu).
+function displayName(userId) {
+    return usernameById[userId] || (userId.substring(0, 8) + '…');
+}
+
+function refreshUserList() {
+    fetch(HISTORY_API_BASE + '/users')
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (list) {
+            knownUsers = list;
+            usernameById = {};
+            var datalist = document.getElementById('userList');
+            var picker = document.getElementById('memberPicker');
+            datalist.innerHTML = '';
+            picker.innerHTML = '';
+            list.forEach(function (u) {
+                if (u.username) usernameById[u.id] = u.username;
+                if (u.id === myUserId && u.username && !document.getElementById('myUsername').value) {
+                    document.getElementById('myUsername').value = u.username;
+                }
+                var label = u.username ? u.username : (u.id.substring(0, 8) + '…');
+
+                var option = document.createElement('option');
+                option.value = u.id;
+                option.label = label + (u.username ? '' : ' (chưa đặt tên)');
+                datalist.appendChild(option);
+
+                if (u.id === myUserId) return; // không cần tự chọn chính mình làm thành viên
+                var chip = document.createElement('button');
+                chip.type = 'button';
+                chip.innerText = label;
+                chip.title = u.id;
+                chip.onclick = function () { toggleMember(u.id); };
+                picker.appendChild(chip);
+            });
+        })
+        .catch(function (err) {
+            console.warn('không load được danh sách user', err);
+        });
+}
+
+function toggleMember(userId) {
+    var input = document.getElementById('groupMembers');
+    var current = input.value.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+    var idx = current.indexOf(userId);
+    if (idx === -1) current.push(userId); else current.splice(idx, 1);
+    input.value = current.join(', ');
+}
+
+function saveUsername() {
+    var username = document.getElementById('myUsername').value.trim();
+    if (!username || !myUserId) return;
+    fetch(HISTORY_API_BASE + '/users?id=' + encodeURIComponent(myUserId) + '&username=' + encodeURIComponent(username), {method: 'PUT'})
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function () {
+            usernameById[myUserId] = username;
+            refreshUserList();
+        })
+        .catch(function (err) {
+            console.warn('không lưu được tên hiển thị', err);
+            alert('Không lưu được tên: ' + err.message);
+        });
+}
 
 function newId() {
     return 'demo2-' + (nextId++) + '-' + Date.now();
@@ -213,7 +295,7 @@ function loadHistory(conversationId) {
                 var mine = m.fromUserId === myUserId;
                 logToConversation(
                     conversationId,
-                    (mine ? 'Bạn' : m.fromUserId.substring(0, 8) + '…') + ': ' + (m.body && m.body.message !== undefined ? m.body.message : JSON.stringify(m.body)),
+                    (mine ? 'Bạn' : displayName(m.fromUserId)) + ': ' + (m.body && m.body.message !== undefined ? m.body.message : JSON.stringify(m.body)),
                     'msg ' + (mine ? 'mine' : 'theirs')
                 );
             });
@@ -301,7 +383,7 @@ function connect() {
                 var mine = frame.fromUserId === myUserId;
                 logToConversation(
                     frame.conversationId,
-                    (mine ? 'Bạn' : frame.fromUserId.substring(0, 8) + '…') + ': ' + (frame.body && frame.body.message !== undefined ? frame.body.message : JSON.stringify(frame.body)),
+                    (mine ? 'Bạn' : displayName(frame.fromUserId)) + ': ' + (frame.body && frame.body.message !== undefined ? frame.body.message : JSON.stringify(frame.body)),
                     'msg ' + (mine ? 'mine' : 'theirs')
                 );
                 break;
@@ -329,6 +411,7 @@ function connect() {
 myUserId = localStorage.getItem(STORAGE_KEY) || DEFAULT_MY_ID;
 document.getElementById('myUserId').value = myUserId;
 document.getElementById('dmPeerUserId').value = DEFAULT_PEER_ID;
+refreshUserList();
 connect();
 </script>
 </body>

@@ -11,6 +11,7 @@ import com.lego.colony.ws.ChatSessionManager;
 import com.lego.colony.ws.ChatSocketServer;
 import com.lego.colony.ws.history.MessageHistoryRegistry;
 import com.lego.colony.ws.membership.ChannelMembershipRegistry;
+import com.lego.colony.ws.user.UserRegistry;
 import io.vertx.core.Vertx;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.PgPool;
@@ -87,6 +88,12 @@ public class ColonyAppModule extends AbstractModule {
 
   @Provides
   @Singleton
+  private UserRegistry userRegistry(PgPool pgPool) {
+    return new UserRegistry(pgPool);
+  }
+
+  @Provides
+  @Singleton
   private ChatSessionManager chatSessionManager(
       PingoConnector pingoConnector, ChannelMembershipRegistry membership, MessageHistoryRegistry history) {
     return new ChatSessionManager(resolveServerId(), vertx, pingoConnector, membership, history);
@@ -107,8 +114,8 @@ public class ColonyAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private RestApiVerticle restApiVerticle(ChatSessionManager sessionManager, MessageHistoryRegistry history) {
-    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history);
+  private RestApiVerticle restApiVerticle(ChatSessionManager sessionManager, MessageHistoryRegistry history, UserRegistry users) {
+    return new RestApiVerticle(config.getPublicHttp().getPort(), sessionManager::isReady, history, users);
   }
 
   @SneakyThrows
