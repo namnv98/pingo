@@ -23,6 +23,28 @@ node e2e/demux-test.mjs                                                         
 env PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/demux-test.mjs       # local dev, không qua k3s (bash lẫn fish đều chạy được)
 ```
 
+## `load-test.mjs` — đo throughput (TPS) + độ trễ, không kill gì cả
+
+Câu hỏi khác hẳn `resilience-test.mjs` — không phải "có mất tin khi chaos không" mà "hệ thống thực
+sự xử lý được bao nhiêu tin/giây, và mất bao lâu (latency) cho 1 lượt gửi/nhận". N session gửi liên
+tục theo chu kỳ cấu hình được, TPS được tính từ số `MESSAGE` echo **thực sự nhận lại được** chia cho
+thời gian (không phải số lần gọi `ws.send()` — đó là tốc độ client gửi, không phải tốc độ hệ thống
+xử lý xong), kèm phân phối độ trễ (p50/p95/p99/max).
+
+Không cần k8s/kill pod gì cả — chạy được với bất kỳ `harbor`/`colony` nào đang sống, kể cả local dev.
+
+```bash
+node e2e/load-test.mjs                                                              # 50 session, chu kỳ 20ms/session ~= 2500 msg/s mục tiêu, 20s
+env PINGO_NUM_SESSIONS=100 PINGO_SEND_INTERVAL_MS=10 PINGO_TOTAL_DURATION_MS=30000 node e2e/load-test.mjs   # tải nặng hơn, chạy lâu hơn
+```
+
+Biến môi trường: `PINGO_WS_URL`, `PINGO_API_URL` (giống các script khác), `PINGO_NUM_SESSIONS`
+(mặc định `50`), `PINGO_SEND_INTERVAL_MS` (mặc định `20`), `PINGO_TOTAL_DURATION_MS` (mặc định
+`20000`). Target TPS ≈ `PINGO_NUM_SESSIONS × 1000 / PINGO_SEND_INTERVAL_MS` — nếu TPS đo được rõ
+ràng thấp hơn nhiều so với target, hoặc `errored`/`silent` > 0, hoặc p95/p99 tăng vọt, đó là dấu
+hiệu đã vượt ngưỡng xử lý thoải mái ở mức tải đó — giảm `PINGO_NUM_SESSIONS`/tăng
+`PINGO_SEND_INTERVAL_MS` để tìm ngưỡng ổn định, hoặc ngược lại để dò giới hạn trên.
+
 ## `resilience-test.mjs` — test tải + kill pod thật trên k3s
 
 N session gửi tin liên tục, giữa chừng **kill lần lượt TOÀN BỘ pod `colony` gốc** (chốt danh sách
