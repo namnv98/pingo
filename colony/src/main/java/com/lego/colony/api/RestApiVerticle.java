@@ -63,7 +63,9 @@ public class RestApiVerticle extends AbstractVerticle {
   }
 
   private void handleListMessages(HttpServerRequest request) {
-    var response = request.response().putHeader("Content-Type", "application/json");
+    // CORS: cho phep goi tu browser dang mo demo.html (file:// hoac 1 origin khac han port nay) --
+    // request GET don gian, khong co custom header nen khong can xu ly preflight OPTIONS rieng.
+    var response = request.response().putHeader("Content-Type", "application/json").putHeader("Access-Control-Allow-Origin", "*");
     UUID conversationId;
     try {
       conversationId = UUID.fromString(request.getParam("conversationId"));

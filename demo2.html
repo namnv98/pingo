@@ -93,6 +93,10 @@ var STORAGE_KEY = 'pingoDemoUserId2'; // key RIÊNG với demo.html — file:// 
 var DEFAULT_MY_ID = '18fa45fe-ec91-11ec-a6c8-005056bedc67';
 var DEFAULT_PEER_ID = '18fa45fe-ec91-11ec-a6c8-005056bedc66'; // mặc định trỏ sang "User 1" (demo.html)
 
+// NodePort riêng của colony (không phải harbor) cho REST API — xem colony/helm/templates/services.yaml.
+// Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại theo publicHttp.port trong colony/src/main/resources/app-local.yaml.
+var HISTORY_API_BASE = 'http://localhost:31002';
+
 function newId() {
     return 'demo2-' + (nextId++) + '-' + Date.now();
 }
@@ -189,6 +193,38 @@ function logToConversation(conversationId, text, cssClass) {
     entry.logEl.scrollTop = entry.logEl.scrollHeight;
 }
 
+// Load lịch sử tin nhắn (GET /messages trên colony, không phải harbor — xem MessageHistoryRegistry)
+// ngay sau khi SUBSCRIBE_OK, tránh gọi lặp nếu SUBSCRIBE_OK lỡ tới nhiều lần cho cùng 1 conversation.
+function loadHistory(conversationId) {
+    var entry = ensureConversationCard(conversationId, 'Conversation');
+    if (entry.historyLoaded) return;
+    entry.historyLoaded = true;
+
+    fetch(HISTORY_API_BASE + '/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=50')
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (messages) {
+            if (!messages.length) return;
+            logToConversation(conversationId, '── lịch sử (' + messages.length + ' tin) ──');
+            // API trả mới nhất trước (ORDER BY created_at DESC) — đảo lại để hiển thị đúng thứ tự thời gian.
+            messages.slice().reverse().forEach(function (m) {
+                var mine = m.fromUserId === myUserId;
+                logToConversation(
+                    conversationId,
+                    (mine ? 'Bạn' : m.fromUserId.substring(0, 8) + '…') + ': ' + (m.body && m.body.message !== undefined ? m.body.message : JSON.stringify(m.body)),
+                    'msg ' + (mine ? 'mine' : 'theirs')
+                );
+            });
+            logToConversation(conversationId, '── hết lịch sử ──');
+        })
+        .catch(function (err) {
+            console.warn('không load được lịch sử cho ' + conversationId, err);
+            logToConversation(conversationId, '(không load được lịch sử: ' + err.message + ')');
+        });
+}
+
 function startDm() {
     var peerUserId = document.getElementById('dmPeerUserId').value.trim();
     if (!peerUserId) return;
@@ -247,6 +283,7 @@ function connect() {
                 break;
             case "SUBSCRIBE_OK":
                 logToConversation(frame.conversationId, '✓ subscribe thành công');
+                loadHistory(frame.conversationId);
                 break;
             case "SUBSCRIBE_ERROR":
                 logToConversation(frame.conversationId, '✗ subscribe lỗi: ' + frame.reason);
@@ -276,6 +313,7 @@ function connect() {
                 // subscribe ngầm hộ rồi (không rớt tin), card này chỉ để hiển thị cho biết.
                 ensureConversationCard(frame.conversationId, 'Mới: ' + frame.conversationId.substring(0, 8) + '…');
                 logToConversation(frame.conversationId, '🔔 bạn vừa được thêm vào cuộc trò chuyện này');
+                loadHistory(frame.conversationId);
                 break;
             case "GOAWAY":
                 // Gateway đang chuẩn bị tắt (scale down/rolling update) — chủ động đóng và
