@@ -27,23 +27,20 @@ public class MessageHistoryRegistry {
    * Đây là log lịch sử, không phải durability guarantee cho việc delivery — cùng triết lý ưu tiên
    * độ trễ thấp đã áp dụng cho toàn bộ tầng transport này (xem ARCHITECTURE.md mục 9).
    *
-   * <p>Upsert {@code users} trước (ON CONFLICT DO NOTHING — chỉ đăng ký "id này đã từng xuất
-   * hiện", không có gì để update), rồi mới insert dòng {@code messages} — không cần FK, chỉ tuần
-   * tự cho gọn.
+   * <p>KHÔNG còn tự upsert {@code users} ở đây nữa — {@code users.username} giờ là {@code NOT
+   * NULL} (bắt buộc phải có tên, xem {@code UserRegistry}), nên không còn cách nào "đăng ký" 1 id
+   * mà không có tên đi kèm. {@code from_user_id} vẫn KHÔNG có FK (giữ đúng quy ước loose-schema có
+   * sẵn) — nếu 1 client gửi MESSAGE mà chưa từng gọi {@code PUT /users} đặt tên (vd script test
+   * qua thẳng WebSocket, bỏ qua UI), tin nhắn vẫn được lưu bình thường, chỉ là {@code from_user_id}
+   * đó không khớp dòng nào trong {@code users} — chấp nhận được, UI là nơi ép buộc đặt tên trước,
+   * không phải giao thức (client vẫn chưa cần "login" thật, xem ARCHITECTURE.md mục 8).
    */
   public CompletionStage<Void> saveMessage(UUID id, UUID conversationId, UUID fromUserId, Object body, long tsEpochMillis) {
-    var upsertUser =
-        pool.preparedQuery("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")
-            .execute(Tuple.of(fromUserId))
-            .toCompletionStage();
-    return upsertUser
-        .thenCompose(
-            unused ->
-                pool.preparedQuery(
-                        "INSERT INTO messages (id, conversation_id, from_user_id, body, created_at) "
-                            + "VALUES ($1, $2, $3, $4, to_timestamp($5 / 1000.0))")
-                    .execute(Tuple.of(id, conversationId, fromUserId, Json.encode(body), tsEpochMillis))
-                    .toCompletionStage())
+    return pool.preparedQuery(
+            "INSERT INTO messages (id, conversation_id, from_user_id, body, created_at) "
+                + "VALUES ($1, $2, $3, $4, to_timestamp($5 / 1000.0))")
+        .execute(Tuple.of(id, conversationId, fromUserId, Json.encode(body), tsEpochMillis))
+        .toCompletionStage()
         .thenApply(unused -> null);
   }
 

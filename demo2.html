@@ -61,8 +61,10 @@
         <button class="primary" onclick="saveUsername()">💾 Lưu tên</button>
     </div>
     <div class="hint">Không phải đăng nhập thật (không có mật khẩu) — chỉ để người khác thấy tên thay vì UUID thô. Lưu xong tên sẽ hiện trong danh sách chọn bên dưới.</div>
+    <div class="hint" id="nameRequiredHint" style="display:none;color:#dc2626;font-weight:600">⚠ Danh tính này chưa đặt tên hiển thị — bắt buộc đặt tên (ở trên) trước khi có thể chat.</div>
 </div>
 
+<div id="mainApp" style="display:none">
 <div class="panel">
     <h3>Bắt đầu trò chuyện</h3>
     <div class="row">
@@ -95,6 +97,7 @@
     <div id="conversations"></div>
     <div class="hint" id="emptyHint">Chưa có cuộc trò chuyện nào — bắt đầu 1 cái ở trên, hoặc chờ ai đó nhắn cho bạn (sẽ tự xuất hiện ở đây nhờ CONVERSATION_ADDED).</div>
 </div>
+</div><!-- /mainApp -->
 
 <script>
 var ws = null;
@@ -117,11 +120,61 @@ var HISTORY_API_BASE = 'http://localhost:31002';
 var knownUsers = []; // [{id, username, firstSeenAt}, ...] từ GET /users
 var usernameById = {}; // cache tra nhanh id -> username khi hiển thị chat log
 
+// users.username giờ là NOT NULL ở DB (xem postgres/helm schema.sql) — chặn thật ở UI cho khớp:
+// không cho vào phần chat (#mainApp ẩn) và KHÔNG mở WebSocket (connect() tự no-op) tới khi xác
+// nhận danh tính hiện tại đã có username đăng ký (qua PUT /users). Đặt cờ này riêng (không suy ra
+// trực tiếp từ usernameById mỗi lần) để reconnectWithNewId() có chỗ chủ động reset lại khi đổi
+// sang 1 danh tính khác, và để connect()/ws.onclose's auto-retry không vô tình mở kết nối sớm.
+var identityConfirmed = false;
+
 // Tên hiển thị cho 1 userId — username đã biết nếu có, ngược lại rút gọn UUID (8 ký tự đầu).
 function displayName(userId) {
     return usernameById[userId] || (userId.substring(0, 8) + '…');
 }
 
+// Gọi lúc khởi động trang và mỗi khi đổi danh tính (reconnectWithNewId) — fetch /users, xác định
+// danh tính hiện tại đã có tên chưa, rồi mở khoá (hoặc tiếp tục khoá) #mainApp + việc kết nối WS.
+function checkIdentityThenStart() {
+    fetch(HISTORY_API_BASE + '/users')
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (list) {
+            knownUsers = list;
+            usernameById = {};
+            list.forEach(function (u) { if (u.username) usernameById[u.id] = u.username; });
+            renderUserPickers();
+            if (usernameById[myUserId]) {
+                document.getElementById('myUsername').value = usernameById[myUserId];
+                enterApp();
+            } else {
+                document.getElementById('myUsername').value = '';
+                showNameGate();
+            }
+        })
+        .catch(function (err) {
+            console.warn('không load được danh sách user', err);
+            showNameGate(); // an toàn: không chắc đã đặt tên hay chưa thì cứ bắt đặt lại
+        });
+}
+
+function showNameGate() {
+    identityConfirmed = false;
+    document.getElementById('mainApp').style.display = 'none';
+    document.getElementById('nameRequiredHint').style.display = '';
+    setStatus('cần đặt tên trước khi chat', 'bad');
+}
+
+function enterApp() {
+    identityConfirmed = true;
+    document.getElementById('mainApp').style.display = '';
+    document.getElementById('nameRequiredHint').style.display = 'none';
+    connect();
+}
+
+// Chỉ re-fetch + vẽ lại danh sách/picker (nút "🔄 Làm mới danh sách") — KHÔNG kiểm tra/khoá lại
+// #mainApp, khác checkIdentityThenStart() ở trên (dùng khi đã ở trong app rồi, không cần gate lại).
 function refreshUserList() {
     fetch(HISTORY_API_BASE + '/users')
         .then(function (res) {
@@ -131,12 +184,7 @@ function refreshUserList() {
         .then(function (list) {
             knownUsers = list;
             usernameById = {};
-            list.forEach(function (u) {
-                if (u.username) usernameById[u.id] = u.username;
-                if (u.id === myUserId && u.username && !document.getElementById('myUsername').value) {
-                    document.getElementById('myUsername').value = u.username;
-                }
-            });
+            list.forEach(function (u) { if (u.username) usernameById[u.id] = u.username; });
             renderUserPickers();
         })
         .catch(function (err) {
@@ -200,6 +248,7 @@ function saveUsername() {
         .then(function () {
             usernameById[myUserId] = username;
             refreshUserList();
+            if (!identityConfirmed) enterApp(); // lần đầu đặt tên -- mở khoá + kết nối luôn
         })
         .catch(function (err) {
             console.warn('không lưu được tên hiển thị', err);
@@ -256,8 +305,9 @@ function reconnectWithNewId() {
     conversations = {};
     document.getElementById('conversations').innerHTML = '';
     document.getElementById('emptyHint').style.display = '';
+    identityConfirmed = false; // danh tinh moi co the chua dat ten -- connect() se tu no-op cho toi khi checkIdentityThenStart() xac nhan lai
     if (ws) ws.close();
-    else connect();
+    checkIdentityThenStart();
 }
 
 // --- UI cho 1 conversation (card riêng, log + ô gửi riêng) ---
@@ -364,6 +414,11 @@ function startGroup() {
 }
 
 function connect() {
+    // Chưa xác nhận danh tính hiện tại đã đặt tên (xem checkIdentityThenStart/enterApp) -- không
+    // tự mở WebSocket. No-op an toàn cho moi noi con lo goi connect() (vd ws.onclose auto-retry
+    // ben duoi, hoac code cu con sot) thay vi phai sua tung noi goi.
+    if (!identityConfirmed) return;
+
     // Dùng transport "raw websocket" của SockJS (bỏ qua cơ chế session polling) — không sao vì đây chỉ là client test thủ công.
     // Đang trỏ tới NodePort của harbor trên cụm k3s local (xem harbor/helm/templates/services.yaml).
     // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại thành ws://localhost:8888/connect/websocket
@@ -376,6 +431,7 @@ function connect() {
     };
 
     ws.onclose = function () {
+        if (!identityConfirmed) return; // dong chu dong vi dang doi dat/xac nhan lai ten -- khong phai mat ket noi that, khong can bao/retry
         setStatus('mất kết nối, thử lại sau ' + (reconnectDelayMs / 1000) + 's...', 'bad');
         setTimeout(connect, reconnectDelayMs);
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
@@ -439,8 +495,7 @@ function connect() {
 myUserId = localStorage.getItem(STORAGE_KEY) || DEFAULT_MY_ID;
 document.getElementById('myUserId').value = myUserId;
 document.getElementById('dmPeerUserId').value = DEFAULT_PEER_ID;
-refreshUserList();
-connect();
+checkIdentityThenStart();
 </script>
 </body>
 </html>

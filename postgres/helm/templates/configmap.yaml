@@ -23,9 +23,11 @@ data:
     -- ARCHITECTURE.md muc 8) -- bang nay chi la 1 so dang ky toi thieu "id nay da tung xuat hien",
     -- KHONG phai he thong login (khong co password/token gi ca) -- username chi la ten hien thi
     -- client tu khai bao (cung muc do tin cay voi fromUserId), de UI khoi phai hien UUID tho.
+    -- username la NOT NULL co chu dich: 1 dong trong bang nay chi ton tai SAU KHI client da tu dat
+    -- ten (qua PUT /users, xem UserRegistry) -- khong con kieu "dang ky rong" chi co id nhu truoc.
     CREATE TABLE IF NOT EXISTS users (
         id UUID NOT NULL PRIMARY KEY,
-        username TEXT,
+        username TEXT NOT NULL,
         first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
