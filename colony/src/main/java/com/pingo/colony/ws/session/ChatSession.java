@@ -1,6 +1,6 @@
 package com.pingo.colony.ws.session;
 
-import com.pingo.namnv.discovery.grpc.Frame;
+import com.pingo.chat.grpc.Frame;
 import io.vertx.grpc.server.GrpcServerResponse;
 import java.util.Set;
 import java.util.UUID;

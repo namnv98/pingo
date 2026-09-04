@@ -10,7 +10,7 @@ import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.core.common.token.JwtHelper;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.pingo.harbor.ws.HarborSessionManager;
-import com.pingo.harbor.ws.HarborSocketServer;
+import com.pingo.core.socket.LegoSocketServer;
 import io.vertx.core.Vertx;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -57,14 +57,13 @@ public class HarborAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private HarborSocketServer socketUpstreamHandler(HarborSessionManager sessionManager) {
+  private LegoSocketServer socketUpstreamHandler(HarborSessionManager sessionManager) {
     var chatSocket = config.getChatSocket();
-    return HarborSocketServer.builder() //
+    return LegoSocketServer.builder() //
         .path(chatSocket.getPath())
         .host(chatSocket.getHost()) //
         .port(chatSocket.getPort()) //
-        .serverId(resolveServerId()) //
-        .sessionManager(sessionManager)
+        .socketHandler(sessionManager::onConnection)
         .build();
   }
 

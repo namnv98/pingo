@@ -100,6 +100,13 @@
             <artifactId>h2</artifactId>
             <version>2.1.214</version>
         </dependency>
+        <!-- Driver JDBC that cho vertx-jdbc-client (DatabaseType.POSTGRES): thieu truoc do, JdbcConnectionSupplier
+             se fail runtime ("No suitable driver") khi mo JDBC URL jdbc:postgresql:... neu khong co cai nay. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.3</version>
+        </dependency>
 
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>

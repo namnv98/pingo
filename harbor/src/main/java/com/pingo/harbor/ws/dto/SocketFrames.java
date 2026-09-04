@@ -1,7 +1,7 @@
 package com.pingo.harbor.ws.dto;
 
-import com.pingo.namnv.discovery.grpc.Frame;
-import com.pingo.namnv.discovery.grpc.FrameType;
+import com.pingo.chat.grpc.Frame;
+import com.pingo.chat.grpc.FrameType;
 import io.vertx.core.json.Json;
 
 /**

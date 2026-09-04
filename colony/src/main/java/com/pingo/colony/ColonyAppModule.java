@@ -8,10 +8,11 @@ import com.pingo.connector.PingoConnector;
 import com.pingo.core.boot.start.LegoConfig1;
 import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.colony.ws.ChatSessionManager;
-import com.pingo.colony.ws.ChatSocketServer;
-import com.pingo.colony.domain.history.MessageHistoryRegistry;
-import com.pingo.colony.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
+import com.pingo.core.grpc.server.LegoGrpcServer;
+import com.pingo.chat.grpc.LinkGrpc;
 import io.vertx.core.Vertx;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -43,11 +44,12 @@ public class ColonyAppModule extends AbstractModule {
   }
 
   /**
-   * {@code database.parsedUri} trong config (databaseType/scheme/addresses...) đã đúng hình dạng
-   * {@code JdbcConfig.from(ParsedUri)} cần — dùng thẳng {@link JdbcConnectionSupplier} (core/commons-lang,
-   * đã async sẵn qua {@code CompletionStage}, có thêm master/slave routing + health-sensing) thay vì
-   * tự tay dựng {@code PgPool} như trước (xem ARCHITECTURE.md mục 14).
+   * Ket noi Postgres qua JdbcConnectionSupplier (core/commons-lang, vertx-jdbc-client) -- framework
+   * dung chung cho ca du an thay vi tung service tu mo pool rieng (xem ARCHITECTURE.md muc 14).
+   * config.getDatabase().getParsedUri() dung dung shape ma JdbcConfig.from() can (scheme: steady,
+   * databaseType: postgres, addresses/user/password).
    */
+  @SneakyThrows
   @Provides
   @Singleton
   private JdbcConnectionSupplier jdbcConnectionSupplier() {
@@ -77,14 +79,12 @@ public class ColonyAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private ChatSocketServer socketUpstreamHandler(ChatSessionManager sessionManager) {
+  private LegoGrpcServer socketUpstreamHandler(ChatSessionManager sessionManager) {
     var chatSocket = config.getChatSocket();
-    return ChatSocketServer.builder() //
-        .path(chatSocket.getPath()) //
+    return LegoGrpcServer.builder() //
         .host(chatSocket.getHost()) //
         .port(chatSocket.getPort()) //
-        .serverId(resolveServerId()) //
-        .sessionManager(sessionManager)
+        .registrar(grpcServer -> grpcServer.callHandler(LinkGrpc.getStreamMethod(), sessionManager::onConnection))
         .build();
   }
 

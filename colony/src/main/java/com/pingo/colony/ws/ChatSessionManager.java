@@ -2,11 +2,11 @@ package com.pingo.colony.ws;
 
 import com.pingo.connector.PingoConnector;
 import com.pingo.core.common.support.UUIDUtils;
-import com.pingo.namnv.discovery.grpc.Frame;
-import com.pingo.namnv.discovery.grpc.FrameType;
+import com.pingo.chat.grpc.Frame;
+import com.pingo.chat.grpc.FrameType;
 import com.pingo.colony.ws.delivery.MessageDelivery;
-import com.pingo.colony.domain.history.MessageHistoryRegistry;
-import com.pingo.colony.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.colony.ws.routing.RoutingVersionSync;
 import com.pingo.colony.ws.session.ChatSession;
 import com.pingo.colony.ws.session.SessionRegistry;
@@ -90,7 +90,7 @@ public class ChatSessionManager {
     return delayed;
   }
 
-  void onConnection(GrpcServerRequest<Frame, Frame> request) {
+  public void onConnection(GrpcServerRequest<Frame, Frame> request) {
     var session = new ChatSession(generateSessionId(), request.response());
     registry.register(session);
     request.handler(frame -> onMessage(session, frame));

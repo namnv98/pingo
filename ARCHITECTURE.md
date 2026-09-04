@@ -1,7 +1,7 @@
 # Kiến trúc hệ thống Pingo Chat
 
 Tài liệu này mô tả tổng thể kiến trúc, luồng dữ liệu, và các quyết định thiết kế của hệ thống chat
-gồm 6 module: `discovery`, `beacon`, `harbor`, `colony`, `hall`, `colony-domain`.
+gồm 6 module: `discovery`, `beacon`, `harbor`, `colony`, `hall`, `chat-domain`.
 
 ## 1. Tổng quan
 
@@ -21,10 +21,10 @@ gồm 6 module: `discovery`, `beacon`, `harbor`, `colony`, `hall`, `colony-domai
   với đúng 1 gRPC stream — nhiều subscriber vẫn có thể cùng multiplex chung 1 connection HTTP/2. Chỉ
   còn lo đúng chặng chat real-time — REST API đã tách sang `hall` (xem mục 13).
 - `hall` là service REST độc lập (auth, lịch sử tin nhắn, danh sách conversation/user) — KHÔNG
-  cluster Hazelcast, không giữ trạng thái chat, chỉ đọc/ghi Postgres qua `colony-domain` (xem mục 13).
+  cluster Hazelcast, không giữ trạng thái chat, chỉ đọc/ghi Postgres qua `chat-domain` (xem mục 13).
 - `discovery` là thư viện dùng chung (routing, versioning, connector) — không phải service độc lập,
-  không có `main()`. `colony-domain` cùng vai trò nhưng riêng cho domain "colony" (registry Postgres
-  dùng chung giữa `colony` và `hall`).
+  không có `main()`. `chat-domain` cùng vai trò nhưng cho domain chat (registry Postgres dùng chung
+  giữa `colony` và `hall`, cộng `link.proto` — hợp đồng gRPC dùng chung giữa `colony` và `harbor`).
 
 ```mermaid
 graph TB
@@ -67,8 +67,8 @@ graph TB
 | `beacon` | Có | Control-plane duy nhất nói chuyện trực tiếp với **k8s API** (`K8SKeeper`, watch pod colony theo label `app=colony`) — CHỈ watch pod `colony` (chat), không đụng gì tới `hall`. Healthcheck pod colony qua `admHttp` (8086, `/healthcheck`) trước khi coi là destination hợp lệ. Gossip danh sách destination qua EventBus (`RoutingGossipPublisher`). Không đụng gì tới việc đổi routing key sang `conversationId` — chỉ gossip topology pod (ADD/REMOVE), không biết gì về conversation. Chạy local (không k8s) thì dùng `LocalKeeper` với 1 destination cố định. |
 | `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) 1 gRPC stream xuống đúng pod colony sở hữu conversation đó (1 stream riêng cho mỗi cặp (session, pod), xem mục 12), relay frame 2 chiều. `BackendStreamGateway` chỉ còn giữ CHUNG 1 `GrpcClient` (= 1 pool connection HTTP/2 vật lý)/pod colony — HTTP/2 tự multiplex mọi stream của mọi session trên đó. |
 | `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — nhận kết nối gRPC (`Link.Stream`) từ harbor, 1 `ChatSession` = 1 gRPC stream = 1 harbor session, port 9999 không public ra ngoài (xem mục 12). Chỉ còn đúng 1 route HTTP nội bộ (`HealthCheckVerticle`, `admHttp:8086/healthcheck`) — mọi REST khác đã tách sang `hall`. |
-| `hall` | Có | REST API (auth, lịch sử tin nhắn, danh sách conversation/user) — service ĐỘC LẬP với `colony`, không cluster Hazelcast/EventBus (mọi route chỉ đọc/ghi Postgres qua `colony-domain`, không cần biết pod colony nào đang sống). Public trên `publicHttp:8085` (NodePort 31002, giữ nguyên từ trước khi tách). |
-| `colony-domain` | Không (thư viện) | `ConversationMembershipRegistry`/`MessageHistoryRegistry` (dùng chung bởi CẢ `colony` lẫn `hall` — mỗi service tự mở `PgPool` riêng, không gọi mạng qua lại) và `UserRegistry` (chỉ `hall` dùng, để chung cho gọn 1 "colony persistence layer"). |
+| `hall` | Có | REST API (auth, lịch sử tin nhắn, danh sách conversation/user) — service ĐỘC LẬP với `colony`, không cluster Hazelcast/EventBus (mọi route chỉ đọc/ghi Postgres qua `chat-domain`, không cần biết pod colony nào đang sống). Public trên `publicHttp:8085` (NodePort 31002, giữ nguyên từ trước khi tách). |
+| `chat-domain` | Không (thư viện) | `ConversationMembershipRegistry`/`MessageHistoryRegistry` (dùng chung bởi CẢ `colony` lẫn `hall` — mỗi service tự mở `JdbcConnectionSupplier` riêng, không gọi mạng qua lại), `UserRegistry` (chỉ `hall` dùng), cộng `link.proto`/`Frame`/`LinkGrpc` (dùng chung bởi CẢ `colony` lẫn `harbor`, chặng gRPC, xem mục 12) — gọi là "chat-domain" vì không thuộc riêng service nào, không đặt tên theo 1 service cụ thể. |
 
 ## 3. Giao thức `SocketFrame` (chặng client↔harbor)
 
@@ -561,7 +561,7 @@ Slack (Gateway Server tách khỏi web/API tier).
 
 ### Thiết kế mới
 
-- **`colony-domain`** (thư viện dùng chung, không có `main()`): `ConversationMembershipRegistry`,
+- **`chat-domain`** (thư viện dùng chung, không có `main()`): `ConversationMembershipRegistry`,
   `MessageHistoryRegistry`, `UserRegistry` — logic đọc/ghi Postgres, dùng chung giữa `colony` và
   `hall` để tránh duplicate code (2 service vẫn tự mở `PgPool` riêng, KHÔNG share connection
   pool hay gọi mạng qua lại — chỉ share code + cùng schema).
@@ -610,3 +610,58 @@ thật sự dùng nó trước `hall` (không phải vì nó không dùng đư�
   cũ qua test tay trực tiếp, cộng `demux-test.mjs`/`load-test.mjs` pass như thường. Riêng route
   không tồn tại trả `405` thay vì `404` cũ (do route `OPTIONS /*` khớp path nhưng không khớp method —
   đúng chuẩn HTTP hơn, không ảnh hưởng gì vì không client/test nào phụ thuộc status code này).
+
+## 14. `colony`/`hall` chuyển từ `PgPool` (vertx-pg-client) sang `JdbcConnectionSupplier` (core/commons-lang, vertx-jdbc-client)
+
+### Vì sao đổi
+
+`core/commons-lang` sẵn có `jdbcpool` — 1 framework kết nối DB async thật (không block event loop,
+mọi API trả `CompletionStage`), hỗ trợ sẵn master/slave routing (`SteadyConnectionSupplier`) và
+health-sensing tự động chọn primary/secondary (`SensingConnectionSupplier`) — nhưng chưa service nào
+dùng, `colony`/`hall` đều tự mở `PgPool` riêng (vertx-pg-client) như code mẫu ban đầu. Mục tiêu: phát
+triển `core/*` thành framework dùng chung xuyên suốt dự án (giống Spring cho Java "truyền thống"),
+không dừng lại ở mức code đơn giản ăn ngay cho xong — `core/api`/`core/http` đã áp dụng cho `hall`
+(mục 13), `jdbcpool` là bước tiếp theo, áp dụng cho persistence layer của cả `colony` lẫn `hall`
+(`chat-domain`'s 3 registry: `ConversationMembershipRegistry`, `MessageHistoryRegistry`,
+`UserRegistry`).
+
+### 3 bug JDBC-specific gặp thật khi migrate — không phải bug thư viện, mà là khác biệt hành vi giữa 2 client
+
+Chuyển thẳng SQL nguyên bản từ vertx-pg-client (wire-protocol Postgres thuần) sang vertx-jdbc-client
+(bọc `java.sql.PreparedStatement` chuẩn JDBC) không "chạy ngay" — 3 khác biệt hành vi cụ thể đã gây
+lỗi thật, phải sửa từng cái:
+
+1. **Placeholder `$1/$2` (native Postgres) → `ArrayIndexOutOfBoundsException`.** vertx-jdbc-client gọi
+   `Connection.prepareStatement(sql)` chuẩn JDBC, tự đếm số dấu `?` trong text SQL để biết có bao
+   nhiêu tham số. SQL copy nguyên từ vertx-pg-client dùng `$1, $2, ...` — driver đếm ra 0 tham số, rồi
+   `getParameterMetaData()` (gọi bởi chính vertx-jdbc-client để bind tham số) ném
+   `ArrayIndexOutOfBoundsException` khi cố set kiểu cho tham số 1 trên 1 mảng rỗng. Fix: đổi toàn bộ
+   placeholder trong SQL từ `$1,$2,...` sang `?,?,...` — vì `?` không mang số thứ tự, thứ tự xuất hiện
+   trong text SQL phải khớp đúng thứ tự tham số trong `Tuple` (khác `$N`, có thể tham chiếu lại theo
+   số bất kể vị trí — xem `UserRegistry.updateUsername`, phải đảo cả SQL lẫn `Tuple.of(...)` cho khớp).
+2. **Mảng Java (`UUID[]`) bind qua `Tuple` không tự thành `java.sql.Array`.** `unnest(?::uuid[])` —
+   cách cũ union nhiều dòng vào 1 câu INSERT — luôn ra tập rỗng (0 dòng được chèn, KHÔNG báo lỗi) vì
+   vertx-jdbc-client bind tham số bằng `PreparedStatement.setObject()` chuẩn JDBC, không tự chuyển 1
+   mảng Java thành `java.sql.Array` (khác vertx-pg-client, hiểu native mảng Postgres qua wire
+   protocol). Fix: bỏ hẳn `unnest()`, INSERT nhiều dòng bằng 1 câu `VALUES (?,?),(?,?),...` dựng động
+   theo số phần tử (xem `ConversationMembershipRegistry.addMembers`).
+3. **`rows.rowCount()` luôn là `-1` cho SELECT.** vertx-jdbc-client lấy `rowCount()` từ
+   `Statement.getUpdateCount()` chuẩn JDBC — theo spec JDBC, giá trị này LUÔN là `-1` khi kết quả hiện
+   tại là 1 `ResultSet` (tức mọi câu SELECT), bất kể query trả về bao nhiêu dòng. Code kiểm tra
+   `rows.rowCount() > 0` để biết "có dòng nào không" (`ConversationMembershipRegistry.isMember`) luôn
+   ra `false` dù dòng thật sự tồn tại trong DB — bug này không ném exception, chỉ âm thầm trả sai kết
+   quả, phát hiện qua `e2e/demux-test.mjs` báo "not a member of this conversation" dù insert đã xác
+   nhận thành công qua `psql` trực tiếp. Fix: dùng `rows.iterator().hasNext()` thay vì `rowCount()` để
+   kiểm tra sự tồn tại của dòng.
+
+### Bài học
+
+Không có bug nào ở trên là lỗi thư viện — cả 3 đều là khác biệt hành vi thật giữa "wire-protocol
+Postgres thuần" (vertx-pg-client) và "bọc JDBC chuẩn" (vertx-jdbc-client), lộ ra vì SQL/logic được
+viết/copy cho vertx-pg-client rồi chuyển thẳng sang mà không rà lại từng điểm khác biệt. Route đầu
+tiên (lần thử adoption đầu) đã bị revert nhầm về `PgPool` sau khi gặp bug #1 và kết luận vội là
+"không fix được" — sai, cả 3 bug đều fix được và đã fix, không cần revert. Verify: build sạch,
+`register`/`login`/duplicate-register(409)/missing-password(400)/`GET /conversations`/`PUT /users`/
+`GET /users`/`GET /messages` qua `hall` đều đúng qua DB thật; `e2e/demux-test.mjs`,
+`e2e/resilience-test.mjs` (kill 3/3 pod `colony`, 0% mất tin), `e2e/load-test.mjs` (2 lần chạy sạch,
+~2480 tin/s, 0 errored/silent, p99 ~25ms) đều pass.

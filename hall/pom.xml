@@ -30,7 +30,7 @@
     <dependencies>
         <dependency>
             <groupId>com.pingo.namnv</groupId>
-            <artifactId>colony-domain</artifactId>
+            <artifactId>chat-domain</artifactId>
             <version>1.0-SNAPSHOT</version>
         </dependency>
         <dependency>

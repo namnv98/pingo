@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <artifactId>pingo</artifactId>
+        <groupId>com.pingo.namnv</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <!-- Domain chat dung chung, khong thuoc rieng colony hay harbor: 3 registry Postgres
+         (ConversationMembershipRegistry/MessageHistoryRegistry dung boi ca colony va hall,
+         UserRegistry chi hall dung) CONG link.proto (hop dong gRPC chang harbor/colony, xem
+         ARCHITECTURE.md muc 12), ca 2 deu la "khai niem chat" dung chung nhieu service, khong
+         nen ten theo 1 service cu the (truoc day goi la colony-domain, sai vi hall/harbor cung
+         dung, da doi ten).
+
+         Dung JdbcConnectionSupplier (core/commons-lang, qua vertx-jdbc-client) thay PgPool
+         (vertx-pg-client), theo huong "framework dung chung cho ca du an" (xem ARCHITECTURE.md
+         muc 14) thay vi tung service tu mo pool rieng kieu cu. SQL dung placeholder "?" (chuan
+         JDBC), khong dung "$1/$2" (native Postgres, chi vertx-pg-client hieu), xem javadoc
+         ConversationMembershipRegistry de biet chi tiet loi da gap va cach fix. -->
+    <artifactId>chat-domain</artifactId>
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <protoc.version>${protobuf.version}</protoc.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>commons-lang</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <!-- Hash password (UserRegistry). -->
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>0.4</version>
+        </dependency>
+
+        <!-- Frame/FrameType/LinkGrpc sinh tu link.proto; chi can protobuf-java (runtime message) +
+             grpc-stub/grpc-protobuf (class LinkGrpc sinh ra tham chieu MethodDescriptor/marshaller,
+             du harbor/colony khong dung ImplBase/Stub cua no). KHONG can vertx-grpc-server/client o
+             day, vi 2 cai do chi harbor (client)/colony (server) dung truc tiep. -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tomcat</groupId>
+            <artifactId>annotations-api</artifactId>
+            <version>6.0.53</version>
+            <scope>provided</scope>
+            <!-- grpc-stub's generated @Generated annotation needs javax.annotation.Generated, removed
+                 from java.base since JDK 9; ban toi thieu de compile, khong chay luc runtime. -->
+        </dependency>
+    </dependencies>
+
+    <build>
+        <extensions>
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>1.7.1</version>
+            </extension>
+        </extensions>
+        <plugins>
+            <plugin>
+                <groupId>org.xolstice.maven.plugins</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>0.6.1</version>
+                <configuration>
+                    <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}</protocArtifact>
+                    <pluginId>grpc-java</pluginId>
+                    <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                            <goal>compile-custom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,31 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <parent>
+        <artifactId>core</artifactId>
+        <groupId>com.pingo.namnv</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+    <artifactId>grpc</artifactId>
+
+    <!-- LegoGrpcServer/GrpcClientPool: mount va connect boilerplate dung chung cho service noi bo
+         qua gRPC (hien tai: harbor va colony, xem ARCHITECTURE.md muc 12). KHONG phu thuoc
+         grpc-stub/protobuf-java/discovery, vi MethodDescriptor cu the la cua caller (sinh tu .proto
+         rieng cua tung nghiep vu), module nay chi biet Vertx GrpcServer/GrpcClient generic. -->
+
+    <dependencies>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-grpc-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-grpc-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

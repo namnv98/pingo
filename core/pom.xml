@@ -10,7 +10,6 @@
     <packaging>pom</packaging>
     <version>1.0-SNAPSHOT</version>
     <modules>
-<!--        <module>discovery</module>-->
         <module>commons-lang</module>
         <module>cache</module>
         <module>kafka</module>
@@ -21,5 +20,8 @@
         <module>async</module>
         <module>http</module>
         <module>boot</module>
+        <module>discovery</module>
+        <module>socket</module>
+        <module>grpc</module>
     </modules>
 </project>

@@ -6,6 +6,7 @@ import com.pingo.core.common.support.ConversationIds;
 import com.pingo.core.common.support.UUIDUtils;
 import com.pingo.core.common.token.JwtHelper;
 import com.pingo.core.common.token.NdlTokenException;
+import com.pingo.core.grpc.client.GrpcClientPool;
 import com.pingo.harbor.ws.backend.BackendStreamGateway;
 import com.pingo.harbor.ws.dto.MessageType;
 import com.pingo.harbor.ws.dto.SocketFrame;
@@ -57,7 +58,7 @@ public class HarborSessionManager {
     public HarborSessionManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper) {
         this.serverId = serverId;
         this.vertx = vertx;
-        this.backendStreamGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient);
+        this.backendStreamGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient, new GrpcClientPool(vertx));
         this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendStreamGateway, sessions, this::sendToClient);
         this.jwtHelper = jwtHelper;
         vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
@@ -78,7 +79,7 @@ public class HarborSessionManager {
         return delayed;
     }
 
-    void onConnection(SockJSSocket socket) {
+    public void onConnection(SockJSSocket socket) {
         var id = generateSessionId();
         var session = new HarborSession(id, serverId, socket);
         sessions.put(id, session);

@@ -10,9 +10,8 @@
         <module>core</module>
         <module>harbor</module>
         <module>colony</module>
-        <module>colony-domain</module>
+        <module>chat-domain</module>
         <module>hall</module>
-        <module>discovery</module>
         <module>beacon</module>
     </modules>
     <properties>

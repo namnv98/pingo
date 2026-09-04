@@ -5,23 +5,21 @@ import com.pingo.connector.RouteByConversationIdRequest;
 import com.pingo.connector.RouteResp;
 import com.pingo.core.boot.start.LegoConfig1;
 import com.pingo.core.common.support.UUIDUtils;
-import com.pingo.namnv.discovery.grpc.Frame;
-import com.pingo.namnv.discovery.grpc.FrameType;
-import com.pingo.namnv.discovery.grpc.LinkGrpc;
+import com.pingo.core.grpc.client.GrpcClientPool;
+import com.pingo.chat.grpc.Frame;
+import com.pingo.chat.grpc.FrameType;
+import com.pingo.chat.grpc.LinkGrpc;
 import com.pingo.harbor.ws.dto.SocketFrame;
 import com.pingo.harbor.ws.dto.SocketFrames;
 import com.pingo.harbor.ws.session.BackendStream;
 import com.pingo.harbor.ws.session.HarborSession;
 import io.vertx.core.Vertx;
 import io.vertx.core.net.SocketAddress;
-import io.vertx.grpc.client.GrpcClient;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,9 +27,10 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Quản lý backend gRPC stream (chặng harbor↔colony) — thay thế thiết kế "N-shard-link" cũ (raw
  * WebSocket dùng chung theo hash session): gRPC/HTTP2 tự multiplex nhiều stream trên 1 connection
- * vật lý, nên mỗi (session, pod) có 1 {@link BackendStream} riêng. {@link #clients} (1
- * {@code GrpcClient}/pod, dùng chung cho mọi session) là nơi duy nhất còn "chia sẻ connection vật
- * lý" — ở tầng transport, không phải logic tự viết. Xem ARCHITECTURE.md mục 12.
+ * vật lý, nên mỗi (session, pod) có 1 {@link BackendStream} riêng. {@link #grpcClientPool} (1
+ * {@code GrpcClient}/pod, dùng chung cho mọi session, xem {@code core/grpc}) là nơi duy nhất còn
+ * "chia sẻ connection vật lý" — ở tầng transport, không phải logic tự viết. Xem ARCHITECTURE.md
+ * mục 12.
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -45,9 +44,7 @@ public class BackendStreamGateway {
   private final PingoConnector connector;
   private final LegoConfig1 config;
   private final BiConsumer<HarborSession, SocketFrame> relayToClient;
-
-  /** 1 {@code GrpcClient} (= 1 pool HTTP/2 connection) dùng CHUNG cho mọi session tới cùng 1 pod colony. */
-  private final Map<String, GrpcClient> clients = new ConcurrentHashMap<>();
+  private final GrpcClientPool grpcClientPool;
 
   /** Client chủ động SUBSCRIBE 1 conversationId — mở/dùng lại stream xuống đúng pod sở hữu nó. */
   public CompletionStage<Void> subscribe(
@@ -163,10 +160,10 @@ public class BackendStreamGateway {
    */
   private CompletionStage<BackendStream> doConnect(HarborSession session, RouteResp routeResp) {
     var podName = routeResp.getPodName();
-    var client = clients.computeIfAbsent(podName, key -> newClient());
+    var client = grpcClientPool.get(podName);
     var addr = SocketAddress.inetSocketAddress(config.getChatBackend().getPort(), routeResp.getIp());
     var result = new CompletableFuture<BackendStream>();
-    withTimeout(result, CONNECT_TIMEOUT_MS, "timed out opening backend stream to pod " + podName, () -> evictClient(podName));
+    withTimeout(result, CONNECT_TIMEOUT_MS, "timed out opening backend stream to pod " + podName, () -> grpcClientPool.evict(podName));
 
     client
         .request(addr, LinkGrpc.getStreamMethod())
@@ -199,7 +196,7 @@ public class BackendStreamGateway {
             })
         .onFailure(
             ex -> {
-              evictClient(podName);
+              grpcClientPool.evict(podName);
               result.completeExceptionally(ex);
             });
 
@@ -227,35 +224,6 @@ public class BackendStreamGateway {
   }
 
   /**
-   * KHÔNG set {@code setHttp2KeepAliveTimeout} — bug thật đã gặp: option này làm
-   * {@code request.response()} trễ ĐÚNG BẰNG thời gian cấu hình dù colony đã xử lý xong gần như
-   * ngay lập tức (đo được: colony xử lý SUBSCRIBE trong 148ms, nhưng response() phía harbor không
-   * resolve tới ~29s sau, khớp keepalive 30s cũ) — nghi quirk của vertx-grpc-client 4.5.5 với
-   * bidi-streaming, không phải lỗi logic của pingo.
-   *
-   * <p>CŨNG KHÔNG set {@code setIdleTimeout} — tệ hơn: đóng CẢ connection (không phân biệt stream
-   * nào còn sống) sau N giây không traffic, mà 1 session chat im lặng lâu hơn N giây là bình thường
-   * — đo được thật: đặt {@code setIdleTimeout(20)} thì đúng 20000ms sau, 1 session đang sống bị
-   * đóng theo. Vì nhiều session share 1 connection (multiplex), giết nhầm kiểu này ảnh hưởng dây
-   * chuyền tới mọi session khác trên cùng connection.
-   *
-   * <p>Dùng option mặc định hoàn toàn. Để đối phó pooled connection chết ngầm (VD k3s CNI/conntrack
-   * rớt kết nối rảnh) mà client không biết: khi 1 stream chứng minh được là hỏng (end/error tự
-   * nhiên, SUBSCRIBE timeout ở {@link #sendSubscribeAndAwait}, hoặc MESSAGE ack timeout ở
-   * {@link #onMessageAckTimeout} — cả 3 đều qua {@link #failStream}), evict {@link GrpcClient} của
-   * pod đó khỏi {@link #clients} — lần {@code ensureStream} kế tiếp mở connection mới thay vì tiếp
-   * tục tin connection cũ. Chỉ phản ứng theo bằng chứng thật, không đoán mò theo thời gian rảnh.
-   */
-  private GrpcClient newClient() {
-    return GrpcClient.client(vertx);
-  }
-
-  /** Bỏ {@code GrpcClient} đang cache cho pod này — chỉ gọi khi đã có bằng chứng cụ thể connection hỏng. */
-  private void evictClient(String podName) {
-    clients.remove(podName);
-  }
-
-  /**
    * Điểm dọn dẹp DUY NHẤT khi 1 stream bị coi là chết (end/error tự nhiên, hoặc timeout ở
    * {@link #sendSubscribeAndAwait}/{@link #onMessageAckTimeout}) — báo lỗi cho MỌI SUBSCRIBE/MESSAGE
    * đang chờ trên nó (1 stream có thể gánh nhiều conversationId cùng route tới 1 pod), gỡ khỏi
@@ -263,7 +231,7 @@ public class BackendStreamGateway {
    */
   private void failStream(BackendStream stream, String reason) {
     stream.getSession().getBackendStreams().remove(stream.getPodName(), stream);
-    evictClient(stream.getPodName());
+    grpcClientPool.evict(stream.getPodName());
     for (var pending : stream.getPendingSubscribes().values()) {
       pending.future().completeExceptionally(new RuntimeException(reason));
     }

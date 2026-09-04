@@ -5,7 +5,7 @@ import com.pingo.colony.api.HealthCheckVerticle;
 import com.pingo.core.common.comp.AutoStopLifeCycle;
 import com.pingo.core.common.support.Fulfilled;
 import com.pingo.colony.ws.ChatSessionManager;
-import com.pingo.colony.ws.ChatSocketServer;
+import com.pingo.core.grpc.server.LegoGrpcServer;
 import io.vertx.core.Vertx;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -17,7 +17,7 @@ import lombok.RequiredArgsConstructor;
 public class ColonyApp extends AutoStopLifeCycle {
 
   private final @NonNull Vertx vertx;
-  private final @NonNull ChatSocketServer upstreamVertical;
+  private final @NonNull LegoGrpcServer upstreamVertical;
   private final @NonNull HealthCheckVerticle healthCheckVerticle;
   private final @NonNull ChatSessionManager sessionManager;
 

@@ -14,7 +14,7 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * Service REST thuần, KHÔNG cluster Hazelcast (không cần EventBus xuyên node — mọi route chỉ đọc/
- * ghi Postgres qua {@code colony-domain}), nên đơn giản hơn hẳn {@code HarborApp}/{@code ColonyApp}:
+ * ghi Postgres qua {@code chat-domain}), nên đơn giản hơn hẳn {@code HarborApp}/{@code ColonyApp}:
  * không có bước join/leave cluster, chỉ deploy 1 verticle rồi đóng {@code Vertx} khi dừng. Route
  * dispatch qua {@code LegoHttpServer} (core/http) — quét {@code @RegisterHandler} trong
  * {@code HallApiHandlers}, không tự viết {@code Router} tay như trước.

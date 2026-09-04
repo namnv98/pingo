@@ -5,21 +5,20 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
-import com.pingo.colony.domain.history.MessageHistoryRegistry;
-import com.pingo.colony.domain.membership.ConversationMembershipRegistry;
-import com.pingo.colony.domain.user.UserRegistry;
+import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.registry.IApiRegistry;
 import com.pingo.core.boot.start.LegoConfig1;
+import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.core.common.token.JwtHelper;
 import com.pingo.core.http.LegoHttpServer;
 import com.pingo.core.http.config.HttpStatusErrorMapping;
 import io.vertx.core.Vertx;
-import io.vertx.pgclient.PgConnectOptions;
-import io.vertx.pgclient.PgPool;
-import io.vertx.sqlclient.PoolOptions;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
+import lombok.SneakyThrows;
 
 @AllArgsConstructor
 public class HallAppModule extends AbstractModule {
@@ -42,44 +41,35 @@ public class HallAppModule extends AbstractModule {
   }
 
   /**
-   * Pool Postgres riêng của hall — KHÔNG dùng chung instance với {@code colony} (2 service
-   * độc lập, chạy trên pod khác nhau), chỉ dùng chung schema/database. Xem {@code ColonyAppModule}
-   * bên colony để so sánh — cùng cách setup, tách bản ghi vì không share process.
+   * Kết nối Postgres riêng của hall qua {@link JdbcConnectionSupplier} — KHÔNG dùng chung instance
+   * với {@code colony} (2 service độc lập, chạy trên pod khác nhau), chỉ dùng chung schema/database.
+   * Cùng framework dùng chung cho toàn dự án (xem ARCHITECTURE.md mục 14).
    */
+  @SneakyThrows
   @Provides
   @Singleton
-  private PgPool pgPool() {
-    var db = config.getDatabase().getParsedUri();
-    var address = db.getAddresses().get(0);
-    var sepIndex = address.indexOf(':');
-    var host = sepIndex == -1 ? address : address.substring(0, sepIndex);
-    var port = sepIndex == -1 ? 5432 : Integer.parseInt(address.substring(sepIndex + 1));
-    var connectOptions = new PgConnectOptions()
-        .setHost(host)
-        .setPort(port)
-        .setDatabase(db.getPath())
-        .setUser(db.getUser())
-        .setPassword(db.getPassword());
-    var poolOptions = new PoolOptions().setMaxSize(8);
-    return PgPool.pool(vertx, connectOptions, poolOptions);
+  private JdbcConnectionSupplier jdbcConnectionSupplier() {
+    var supplier = JdbcConnectionSupplier.from(config.getDatabase().getParsedUri(), vertx);
+    supplier.startSync();
+    return supplier;
   }
 
   @Provides
   @Singleton
-  private ConversationMembershipRegistry conversationMembershipRegistry(PgPool pgPool) {
-    return new ConversationMembershipRegistry(pgPool);
+  private ConversationMembershipRegistry conversationMembershipRegistry(JdbcConnectionSupplier supplier) {
+    return new ConversationMembershipRegistry(supplier);
   }
 
   @Provides
   @Singleton
-  private MessageHistoryRegistry messageHistoryRegistry(PgPool pgPool) {
-    return new MessageHistoryRegistry(pgPool);
+  private MessageHistoryRegistry messageHistoryRegistry(JdbcConnectionSupplier supplier) {
+    return new MessageHistoryRegistry(supplier);
   }
 
   @Provides
   @Singleton
-  private UserRegistry userRegistry(PgPool pgPool) {
-    return new UserRegistry(pgPool);
+  private UserRegistry userRegistry(JdbcConnectionSupplier supplier) {
+    return new UserRegistry(supplier);
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */

@@ -5,7 +5,7 @@ import com.pingo.harbor.api.HealthCheckVerticle;
 import com.pingo.core.common.comp.AutoStopLifeCycle;
 import com.pingo.core.common.support.Fulfilled;
 import com.pingo.harbor.ws.HarborSessionManager;
-import com.pingo.harbor.ws.HarborSocketServer;
+import com.pingo.core.socket.LegoSocketServer;
 import io.vertx.core.Vertx;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -17,7 +17,7 @@ import lombok.RequiredArgsConstructor;
 public class HarborApp extends AutoStopLifeCycle {
 
   private final @NonNull Vertx vertx;
-  private final @NonNull HarborSocketServer upstreamVertical;
+  private final @NonNull LegoSocketServer upstreamVertical;
   private final @NonNull HealthCheckVerticle healthCheckVerticle;
   private final @NonNull HarborSessionManager sessionManager;
 

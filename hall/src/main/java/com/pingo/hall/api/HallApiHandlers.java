@@ -1,9 +1,9 @@
 package com.pingo.hall.api;
 
 import com.google.inject.Inject;
-import com.pingo.colony.domain.history.MessageHistoryRegistry;
-import com.pingo.colony.domain.membership.ConversationMembershipRegistry;
-import com.pingo.colony.domain.user.UserRegistry;
+import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.IRequest;
 import com.pingo.core.api.annotaion.ApiMethod;
 import com.pingo.core.api.annotaion.RegisterHandler;

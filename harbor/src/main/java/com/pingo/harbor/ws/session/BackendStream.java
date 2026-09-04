@@ -1,6 +1,6 @@
 package com.pingo.harbor.ws.session;
 
-import com.pingo.namnv.discovery.grpc.Frame;
+import com.pingo.chat.grpc.Frame;
 import io.vertx.grpc.client.GrpcClientRequest;
 import java.util.Map;
 import java.util.Set;
