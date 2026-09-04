@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Chart.Name }}-config-files
+data:
+  app.yaml: |
+    basePackage: com.lego.namnv
+    hazelcast:
+      file: /hazelcast-files/hazelcast.xml
+      props: { }
+    admEventBus:
+      address: ${HOSTNAME}
+      tags: private
+      printStackTrace: false
+    admHttp:
+      tags: private
+      port: 8086
+      path:
+      headers:
+        content-type: application/json
+    chatSocket:
+      host: 0.0.0.0
+      port: 9999
+      path: /connect
+      serviceName: eb_gossip_adm
+    # Khong con dung o colony de ky/verify JWT nua tu khi tach RestApiVerticle sang hall,
+    # giu lai chi vi LegoConfig1 dung chung.
+    authTokenSecret: pingo-local-dev-auth-secret
+    database:
+      parsedUri:
+        databaseType: postgres
+        scheme: steady
+        addresses:
+          - postgres:5432
+        path: pingo
+        user: pingo
+        password: pingo-local-dev
+        params:
+          maxSize: 8
+          maxWaitQueueSize: 1024
+  log4j2.xml: |
+{{ .Files.Get "config/log4j2.xml" | indent 4 }}
+

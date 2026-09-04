@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package com.lego.namnv.discovery.grpc;
+package com.pingo.namnv.discovery.grpc;
 
-option java_package = "com.lego.namnv.discovery.grpc";
+option java_package = "com.pingo.namnv.discovery.grpc";
 option java_multiple_files = true;
 
 // Envelope + service duy nhất cho chặng harbor<->colony (KHONG dung cho client<->harbor -- cai do

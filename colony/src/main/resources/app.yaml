@@ -1,0 +1,43 @@
+hazelcast:
+  file: colony/src/main/resources/hazelcast-local.xml
+  props: { }
+admEventBus:
+  address: eb_gossip_adm
+  tags: private
+  printStackTrace: false
+msgEventBus:
+  address: eb_gossip_adm
+  tags: private
+  printStackTrace: false
+admHttp:
+  tags: private
+  port: 8086
+  path:
+  headers:
+    content-type: application/json
+chatSocket:
+  host: 0.0.0.0
+  port: 9999
+  path: /connect
+  serviceName: eb_gossip_adm # định danh fallback dùng cho local dev; khi chạy production, HOSTNAME (tên pod k8s) sẽ được ưu tiên dùng thay
+invalidateCacheConfig:
+  eventBusAddress: lego-invalid-cache-info
+basePackage: com.lego.namnv
+# PHAI khop voi authTokenSecret cua harbor va hall (khong con dung o colony de ky/verify JWT
+# nua tu khi tach RestApiVerticle sang hall, giu lai o day chi vi LegoConfig1 dung chung).
+authTokenSecret: pingo-local-dev-auth-secret
+
+database:
+  # Postgres cua chinh cum k3s local (xem postgres/helm), truy cap tu ngoai qua NodePort 31005 --
+  # dung khi chay local bang "mvn exec:java" (khong o trong k8s nen khong resolve duoc DNS "postgres").
+  parsedUri:
+    databaseType: postgres
+    scheme: steady
+    addresses:
+      - localhost:31005
+    path: pingo
+    user: pingo
+    password: pingo-local-dev
+    params:
+      maxSize: 8
+      maxWaitQueueSize: 1024

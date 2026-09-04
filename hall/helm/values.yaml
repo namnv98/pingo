@@ -1,0 +1,8 @@
+imageId: nnv98/hall:1.0.0
+
+istio:
+  sidecar_inject: true
+
+global:
+  environment: dev
+  baseDomain: lego.dev

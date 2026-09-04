@@ -13,7 +13,7 @@
 <!--        <module>discovery</module>-->
         <module>commons-lang</module>
         <module>cache</module>
-        <module>lego-kafka</module>
+        <module>kafka</module>
         <module>eventbus</module>
         <module>event</module>
         <module>api</module>

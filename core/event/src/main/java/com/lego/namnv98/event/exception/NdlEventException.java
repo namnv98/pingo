@@ -1,6 +1,6 @@
 package com.lego.namnv98.event.exception;
 
-import com.lego.namnv.core.common.exception.LegoException;
+import com.pingo.core.common.exception.LegoException;
 
 public class NdlEventException extends LegoException {
 

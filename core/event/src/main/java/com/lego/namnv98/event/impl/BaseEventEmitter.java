@@ -3,7 +3,7 @@ package com.lego.namnv98.event.impl;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import com.lego.namnv.core.common.support.Disposable;
+import com.pingo.core.common.support.Disposable;
 import com.lego.namnv98.event.EventConsumer;
 import com.lego.namnv98.event.ExceptionHandler;
 import com.lego.namnv98.event.Event;

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hall
+description: REST API cho domain colony (auth, lich su tin nhan, danh sach conversation/user) -- vi nhu "toa thi chinh", tach khoi colony (chat gRPC)
+type: application
+version: 0.0.1
+appVersion: "0.0.1"

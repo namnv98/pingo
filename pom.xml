@@ -8,8 +8,10 @@
 
     <modules>
         <module>core</module>
-        <module>harbor-gw</module>
-        <module>colony-cs</module>
+        <module>harbor</module>
+        <module>colony</module>
+        <module>colony-domain</module>
+        <module>hall</module>
         <module>discovery</module>
         <module>beacon</module>
     </modules>

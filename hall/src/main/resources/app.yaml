@@ -1,0 +1,24 @@
+publicHttp:
+  tags: public
+  port: 8085
+  path:
+  headers:
+    content-type: application/json
+  printStackTrace: false
+# PHAI khop voi authTokenSecret cua harbor (app-local.yaml) va colony -- dung de ky/verify JWT xac thuc client.
+authTokenSecret: pingo-local-dev-auth-secret
+
+database:
+  # Postgres cua chinh cum k3s local (xem postgres/helm), truy cap tu ngoai qua NodePort 31005 --
+  # dung khi chay local bang "mvn exec:java" (khong o trong k8s nen khong resolve duoc DNS "postgres").
+  parsedUri:
+    databaseType: postgres
+    scheme: steady
+    addresses:
+      - localhost:31005
+    path: pingo
+    user: pingo
+    password: pingo-local-dev
+    params:
+      maxSize: 8
+      maxWaitQueueSize: 1024

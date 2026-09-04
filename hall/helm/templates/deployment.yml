@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app: {{ .Chart.Name }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+        {{- if .Values.istio.sidecar_inject }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: config-files
+          configMap:
+            name: {{ .Chart.Name }}-config-files
+#      imagePullSecrets:
+#        - name: {{ .Values.global.dockerImagePullSecret }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ .Values.imageId }}
+          imagePullPolicy: {{ .Values.imagePullPolicy | default "IfNotPresent" }}
+          volumeMounts:
+            - name: config-files
+              mountPath: /config
+          env:
+            - name: CONFIG_FILE
+              value: /config/app.yaml
+            - name: LOG4J2_CONFIG
+              value: /config/log4j2.xml
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xdebug -agentlib:jdwp=transport=dt_socket,address=0.0.0.0:5005,server=y,suspend=n"
+          ports:
+            - name: http
+              containerPort: 8085
+              protocol: TCP
+            - name: debug-port
+              containerPort: 5005
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            periodSeconds: 5
+            failureThreshold: 1
+          lifecycle:
+            preStop:
+              exec:
+                # REST khong long-lived connection, chi can it giay cho kube-proxy rut endpoint
+                # truoc khi SIGTERM thuc su duoc gui.
+                command: ["sh", "-c", "sleep 3"]

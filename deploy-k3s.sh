@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build code (Maven) -> build Docker image -> push len registry local -> deploy Helm chart,
-# cho ca 3 service (beacon, colony, harbor) len 1 cum k3s chay local.
+# cho ca 4 service (beacon, colony, hall, harbor) len 1 cum k3s chay local.
 #
 # Khong dung Docker Hub o buoc nao ca (khong docker login/push len Hub) -- image build local roi
 # push len 1 registry chay ngay tren may (localhost:5000). Tranh dung build-image.sh cua tung module
@@ -22,7 +22,7 @@
 #   ./deploy-k3s.sh --skip-install   # da co k3s/helm san roi, bo qua buoc cai dat
 #   ./deploy-k3s.sh --skip-build     # dung dist/ da build san, chi build lai image + deploy
 #   ./deploy-k3s.sh --skip-image     # dung image da push san, chi deploy lai helm (vd sua chart)
-#   ./deploy-k3s.sh --uninstall      # go 3 helm release + configmap (KHONG go k3s, KHONG go registry)
+#   ./deploy-k3s.sh --uninstall      # go 4 helm release + configmap (KHONG go k3s, KHONG go registry)
 #
 # Bien moi truong (tuy chon):
 #   NAMESPACE   namespace k8s de deploy (mac dinh: default -- xem ghi chu trong ensure_namespace())
@@ -37,13 +37,10 @@ IMAGE_TAG="${IMAGE_TAG:-local}"
 # gom nhom de xem trang thai (print_summary), khong con dung cho Hazelcast discovery nua.
 CLUSTER_LABEL_KEY="lego/vertx-cluster"
 CLUSTER_LABEL_VALUE="vertx-land-cluster"
-MODULES=(beacon colony harbor) # ten helm release / docker image -- GIU NGUYEN du thu muc source da
-  # doi ten (xem MODULE_DIR ben duoi), vi phai khop voi release dang chay that (deploy/harbor,
-  # deploy/colony) va voi Chart.yaml `name:` cua tung chart. Thu tu deploy: control-plane (beacon)
-  # truoc, khong bat buoc nhung hop ly.
-declare -A MODULE_DIR=([beacon]=beacon [colony]=colony-cs [harbor]=harbor-gw) # ten thu muc source
-  # thuc te tren dia (sau khi tach harbor -> harbor-gw, colony -> colony-cs) -- dung cho moi thao tac
-  # dong tram file (mvn -pl, docker build context, duong dan chart helm/).
+MODULES=(beacon colony hall harbor) # thu tu deploy: control-plane (beacon) truoc, khong bat
+  # buoc nhung hop ly. hall la service REST rieng (tach khoi colony, xem ARCHITECTURE.md muc
+  # 2/13) -- KHONG mang label Hazelcast cluster (khong clustered), nen print_summary() phai list pod
+  # theo "app in (...)" thay vi theo CLUSTER_LABEL_KEY nhu 3 service kia.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -112,10 +109,8 @@ install_helm() {
 # ============================================================================
 
 build_code() {
-  log "mvn clean package (beacon, colony-cs, harbor-gw + core/discovery)..."
-  local dirs=""
-  for m in "${MODULES[@]}"; do dirs="${dirs:+$dirs,}${MODULE_DIR[$m]}"; done
-  (cd "$REPO_ROOT" && mvn -q clean package -pl "$dirs" -am -DskipTests)
+  log "mvn clean package (beacon, colony, hall, harbor + core/discovery)..."
+  (cd "$REPO_ROOT" && mvn -q clean package -pl beacon,colony,hall,harbor -am -DskipTests)
 }
 
 # ============================================================================
@@ -151,7 +146,7 @@ ensure_local_registry() {
 build_images() {
   for m in "${MODULES[@]}"; do
     log "docker build ${REGISTRY}/${m}:${IMAGE_TAG}"
-    docker build -t "${REGISTRY}/${m}:${IMAGE_TAG}" "$REPO_ROOT/${MODULE_DIR[$m]}"
+    docker build -t "${REGISTRY}/${m}:${IMAGE_TAG}" "$REPO_ROOT/$m"
   done
 }
 
@@ -203,7 +198,7 @@ ensure_namespace() {
 }
 
 # ============================================================================
-# 5. Deploy 3 helm chart, tro image ve tag local vua build
+# 5. Deploy 4 helm chart, tro image ve tag local vua build
 # ============================================================================
 
 deploy_helm() {
@@ -212,7 +207,7 @@ deploy_helm() {
     # imagePullPolicy=Always: tag ":local" la mutable (push de len cung tag moi lan build), IfNotPresent
     # (mac dinh cua chart, hop ly cho prod voi tag version co dinh) se khien kubelet dung ban cache cu
     # sau lan pull dau tien, khong bao gio thay code moi. Deploy local nen luon force pull lai.
-    helm upgrade -i "$m" "$REPO_ROOT/${MODULE_DIR[$m]}/helm" \
+    helm upgrade -i "$m" "$REPO_ROOT/$m/helm" \
       -n "$NAMESPACE" \
       --set imageId="${REGISTRY}/${m}:${IMAGE_TAG}" \
       --set imagePullPolicy=Always \
@@ -222,13 +217,15 @@ deploy_helm() {
 
 print_summary() {
   log "Trang thai pod:"
-  kubectl get pods -n "$NAMESPACE" -l "${CLUSTER_LABEL_KEY}=${CLUSTER_LABEL_VALUE}" -o wide
+  local apps
+  apps="$(IFS=,; echo "${MODULES[*]}")"
+  kubectl get pods -n "$NAMESPACE" -l "app in (${apps})" -o wide
   cat <<EOF
 
 Test thu:
   - Mo demo.html tren trinh duyet, doi URL WebSocket thanh:
       ws://localhost:31003/connect/websocket
-    (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor-gw/helm/templates/services.yaml)
+    (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor/helm/templates/services.yaml)
   - Xem log 1 pod:  kubectl logs -n ${NAMESPACE} deploy/harbor -f
   - Xoa sach:        ./deploy-k3s.sh --uninstall
 EOF
@@ -239,11 +236,11 @@ EOF
 # ============================================================================
 
 do_uninstall() {
-  log "Go 5 helm release (namespace=${NAMESPACE})..."
+  log "Go 6 helm release (namespace=${NAMESPACE})..."
   for m in "${MODULES[@]}" hazelcast postgres; do
     helm uninstall "$m" -n "$NAMESPACE" --ignore-not-found || true
   done
-  log "Da go xong 5 helm release (beacon/colony/harbor + hazelcast + postgres)."
+  log "Da go xong 6 helm release (beacon/colony/hall/harbor + hazelcast + postgres)."
   echo "PersistentVolumeClaim postgres-data KHONG tu bi xoa (du lieu conversation_members van con) --"
   echo "xoa tay neu muon mat het du lieu that su: kubectl delete pvc postgres-data -n ${NAMESPACE}"
   echo "k3s ban than KHONG bi go. Neu muon go han k3s: sudo /usr/local/bin/k3s-uninstall.sh"

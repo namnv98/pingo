@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <artifactId>pingo</artifactId>
+        <groupId>com.pingo.namnv</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <!-- Thu vien dung chung giua colony (chat/gRPC) va hall (REST): 2 service doc lap, moi
+         ben tu mo 1 JdbcConnectionSupplier rieng (xem core/commons-lang), nhung cung logic doc/ghi
+         Postgres (bang conversation_members, messages, users) nen khong duplicate code.
+         ConversationMembershipRegistry/MessageHistoryRegistry dung boi ca 2 (colony can cho
+         handleSubscribe/persistMessage, hall can cho GET /conversations, GET /messages).
+         UserRegistry chi hall dung, van de day cho gon 1 cho "colony persistence layer" thay vi
+         tach le. -->
+    <artifactId>colony-domain</artifactId>
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+    <dependencies>
+        <dependency>
+            <!-- JdbcConnectionSupplier + vertx-jdbc-client/vertx-pg-client/vertx-sql-client deu di kem theo day. -->
+            <groupId>com.pingo.namnv</groupId>
+            <artifactId>commons-lang</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <!-- Hash password (UserRegistry). -->
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>0.4</version>
+        </dependency>
+    </dependencies>
+</project>

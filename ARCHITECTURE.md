@@ -1,7 +1,7 @@
 # Kiến trúc hệ thống Pingo Chat
 
 Tài liệu này mô tả tổng thể kiến trúc, luồng dữ liệu, và các quyết định thiết kế của hệ thống chat
-gồm 4 module: `discovery`, `beacon`, `harbor`, `colony`.
+gồm 6 module: `discovery`, `beacon`, `harbor`, `colony`, `hall`, `colony-domain`.
 
 ## 1. Tổng quan
 
@@ -13,17 +13,18 @@ gồm 4 module: `discovery`, `beacon`, `harbor`, `colony`.
   lượng pod colony thay đổi, chỉ một phần nhỏ conversation bị "route lại", không phải toàn bộ.
 - `beacon` là control-plane: theo dõi pod colony nào đang sống, phát (gossip) danh sách đó
   cho `harbor` và `colony`.
-- `harbor` là cửa ngõ public (client kết nối vào qua SockJS/WebSocket), không giữ trạng
-  thái chat — chỉ relay. Với mỗi pod colony, giữ **N link song song (shard) dùng chung cho MỌI
-  client session trên node harbor này** (không phải 1 link/session, cũng không phải 1 link/pod —
-  xem mục 12) — chọn shard theo hash ổn định của session id, nên 1 session luôn rơi vào đúng 1 shard
-  trong suốt vòng đời của nó.
-- `colony` là nơi thật sự giữ subscriber (không phải "session theo user") của từng conversation và
-  deliver tin nhắn cho đúng subscriber cục bộ, hoặc forward sang đúng pod đang sở hữu conversation đó.
-  Từ mục 12, 1 subscriber ứng với 1 harbor session cụ thể chứ không còn ứng với 1 connection WebSocket
-  vật lý — nhiều subscriber có thể cùng dùng chung 1 connection.
+- `harbor` là cửa ngõ public (client kết nối vào qua SockJS/WebSocket), không giữ trạng thái chat —
+  chỉ relay. Chặng harbor↔colony chạy gRPC: mỗi (session, pod colony) có đúng 1 stream riêng, nhiều
+  stream của nhiều session cùng multiplex trên CHUNG 1 connection HTTP/2 vật lý/pod (xem mục 12).
+- `colony` là nơi thật sự giữ subscriber của từng conversation và deliver tin nhắn cho đúng subscriber
+  cục bộ, hoặc forward sang đúng pod đang sở hữu conversation đó. 1 subscriber (`ChatSession`) ứng
+  với đúng 1 gRPC stream — nhiều subscriber vẫn có thể cùng multiplex chung 1 connection HTTP/2. Chỉ
+  còn lo đúng chặng chat real-time — REST API đã tách sang `hall` (xem mục 13).
+- `hall` là service REST độc lập (auth, lịch sử tin nhắn, danh sách conversation/user) — KHÔNG
+  cluster Hazelcast, không giữ trạng thái chat, chỉ đọc/ghi Postgres qua `colony-domain` (xem mục 13).
 - `discovery` là thư viện dùng chung (routing, versioning, connector) — không phải service độc lập,
-  không có `main()`.
+  không có `main()`. `colony-domain` cùng vai trò nhưng riêng cho domain "colony" (registry Postgres
+  dùng chung giữa `colony` và `hall`).
 
 ```mermaid
 graph TB
@@ -47,7 +48,7 @@ graph TB
     K8S["k8s API<br/>(watch pod colony)"]
 
     Browser -- "1 WebSocket/SockJS<br/>AUTH, SUBSCRIBE, MESSAGE, PING" --> GW1
-    GW1 -- "N shard link/pod<br/>(dùng chung cho MỌI session trên harbor này)" --> MC1
+    GW1 -- "gRPC: 1 stream/(session,pod)<br/>multiplex trên 1 connection HTTP/2/pod" --> MC1
     GW1 -.->|"nếu conversation khác hash ra pod khác"| MC2
 
     SIG -- "watch pods" --> K8S
@@ -63,9 +64,11 @@ graph TB
 | Module | Có `main()`? | Vai trò |
 |---|---|---|
 | `discovery` | Không (thư viện) | `PingoConnector`/`VersionVector`/`Router` (Maglev) — client-side: tra routing table biết `conversationId` thuộc pod nào, gửi tin nhắn cross-node qua EventBus. `Router`/`Maglev`/`VersionVector` hoàn toàn generic (route theo `RoutingKey.hash()`, không biết gì về userId/conversationId) — sự khác biệt nằm ở `RouteByUserIdRequest`/`RouteByConversationIdRequest`, 2 implementation cụ thể của `RoutingKey`. Định nghĩa chung `SocketFrame`-adjacent DTO cho gossip (`Payload`, `SignalingResponse`), `Destination`, `Keeper` (snapshot). |
-| `beacon` | Có | Control-plane duy nhất nói chuyện trực tiếp với **k8s API** (`K8SKeeper`, watch pod colony theo label `app=colony`). Gossip danh sách destination qua EventBus (`RoutingGossipPublisher`). Không đụng gì tới việc đổi routing key sang `conversationId` — chỉ gossip topology pod (ADD/REMOVE), không biết gì về conversation. Chạy local (không k8s) thì dùng `LocalKeeper` với 1 destination cố định. |
-| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) 1 gRPC stream xuống đúng pod colony sở hữu conversation đó (1 stream riêng cho mỗi cặp (session, pod), xem mục 12), relay frame 2 chiều. `BackendLinkGateway` chỉ còn giữ CHUNG 1 `GrpcClient` (= 1 pool connection HTTP/2 vật lý)/pod colony — HTTP/2 tự multiplex mọi stream của mọi session trên đó, không còn cần tự chia shard. |
-| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — nhận kết nối gRPC (`Link.Stream`) từ harbor, 1 `ChatSession` = 1 gRPC stream = 1 harbor session, port 9999 không public ra ngoài (xem mục 12). |
+| `beacon` | Có | Control-plane duy nhất nói chuyện trực tiếp với **k8s API** (`K8SKeeper`, watch pod colony theo label `app=colony`) — CHỈ watch pod `colony` (chat), không đụng gì tới `hall`. Healthcheck pod colony qua `admHttp` (8086, `/healthcheck`) trước khi coi là destination hợp lệ. Gossip danh sách destination qua EventBus (`RoutingGossipPublisher`). Không đụng gì tới việc đổi routing key sang `conversationId` — chỉ gossip topology pod (ADD/REMOVE), không biết gì về conversation. Chạy local (không k8s) thì dùng `LocalKeeper` với 1 destination cố định. |
+| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) 1 gRPC stream xuống đúng pod colony sở hữu conversation đó (1 stream riêng cho mỗi cặp (session, pod), xem mục 12), relay frame 2 chiều. `BackendStreamGateway` chỉ còn giữ CHUNG 1 `GrpcClient` (= 1 pool connection HTTP/2 vật lý)/pod colony — HTTP/2 tự multiplex mọi stream của mọi session trên đó. |
+| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — nhận kết nối gRPC (`Link.Stream`) từ harbor, 1 `ChatSession` = 1 gRPC stream = 1 harbor session, port 9999 không public ra ngoài (xem mục 12). Chỉ còn đúng 1 route HTTP nội bộ (`HealthCheckVerticle`, `admHttp:8086/healthcheck`) — mọi REST khác đã tách sang `hall`. |
+| `hall` | Có | REST API (auth, lịch sử tin nhắn, danh sách conversation/user) — service ĐỘC LẬP với `colony`, không cluster Hazelcast/EventBus (mọi route chỉ đọc/ghi Postgres qua `colony-domain`, không cần biết pod colony nào đang sống). Public trên `publicHttp:8085` (NodePort 31002, giữ nguyên từ trước khi tách). |
+| `colony-domain` | Không (thư viện) | `ConversationMembershipRegistry`/`MessageHistoryRegistry` (dùng chung bởi CẢ `colony` lẫn `hall` — mỗi service tự mở `PgPool` riêng, không gọi mạng qua lại) và `UserRegistry` (chỉ `hall` dùng, để chung cho gọn 1 "colony persistence layer"). |
 
 ## 3. Giao thức `SocketFrame` (chặng client↔harbor)
 
@@ -90,7 +93,7 @@ Client↔harbor dùng 1 envelope JSON:
 
 Gửi dạng **TEXT frame** (không phải binary) — bắt buộc, vì browser/JS `WebSocket` mặc định trả
 `event.data` là `Blob` cho binary frame, `JSON.parse()` sẽ lỗi ngay (xem
-`harbor-gw/.../session/SockjsSocket.java`).
+`harbor/.../session/HarborSession.java`).
 
 **`AUTH` tách hẳn khỏi việc mở kết nối backend** (khác thiết kế ban đầu): giờ chỉ xác định danh
 tính (`userId`) cho session, xử lý 100% cục bộ tại `harbor`, không đụng gì tới `colony`. `SUBSCRIBE`
@@ -131,7 +134,7 @@ sequenceDiagram
     A->>GW: SUBSCRIBE {conversationId: dmId(A,B), memberUserIds: [A,B]}
     GW->>GW: routing(dmId(A,B)) qua PingoConnector (Maglev, key = conversationId)
     GW->>MC_A: mở/dùng lại backend link theo POD + SUBSCRIBE {fromUserId:A, conversationId, memberUserIds}
-    MC_A->>MC_A: union memberUserIds vào ChannelMembershipRegistry, check isMember(A)
+    MC_A->>MC_A: union memberUserIds vào ConversationMembershipRegistry, check isMember(A)
     MC_A-->>GW: SUBSCRIBE_OK
     GW-->>A: SUBSCRIBE_OK
 
@@ -191,34 +194,39 @@ topology pod, không biết gì về conversation/user.
 Cả 2 module tổ chức package theo cùng 1 quy ước để đọc là hiểu ngay vai trò:
 
 ```
-harbor-gw/ws/           colony-cs/ws/
+harbor/ws/           colony/ws/
   dto/                              (không còn dto/ — colony không có wire format
     MessageType                      riêng nào nữa, chặng harbor↔colony dùng thẳng
     SocketFrame                      Frame/FrameType sinh từ discovery/*.proto)
     SocketFrames   (frame builder)
   session/                          session/
-    SockjsSocket   (1 client conn,     ChatSession    (1 gRPC stream = 1 harbor
+    HarborSession  (1 client conn,     ChatSession    (1 gRPC stream = 1 harbor
      giữ backendStreams: Map<pod,       session, giữ userId/conversationIds
      BackendStream>)                    riêng, send() = response.write(Frame))
     BackendStream  (1 gRPC stream      SessionRegistry (1 tầng: tra theo
      = 1 cặp (session,pod))              userId VÀ conversationId)
     MessageSocket  (interface)
   backend/                          delivery/
-    BackendLinkGateway                 MessageDelivery
+    BackendStreamGateway               MessageDelivery
     (1 GrpcClient/pod dùng CHUNG        (deliver local / forward EventBus,
      cho mọi session — HTTP/2 tự        payload giờ là Frame.toByteArray(),
      multiplex; single-flight           không phải JSON — xem mục 12)
      connect, evict-on-proven-       membership/
-     failure — xem mục 12)              ChannelMembershipRegistry
+     failure — xem mục 12)              ConversationMembershipRegistry
   routing/                              (Postgres, ai thuộc conversation nào)
     RoutingVersionSync                routing/
     (đồng bộ version + re-subscribe    RoutingVersionSync
      từng (session,conversationId)     (đồng bộ version, không cần di chuyển
      đang mở khi pod sở hữu đổi)        gì — chat không chủ động dial ra)
-  SockjsSocketManager (cửa trước)   ChatSessionManager (cửa trước)
-  SockjsSocketServer  (verticle)    ChatSocketServer   (verticle, mount GrpcServer
+  HarborSessionManager (cửa trước) ChatSessionManager (cửa trước)
+  HarborSocketServer   (verticle)  ChatSocketServer   (verticle, mount GrpcServer
                                      lên HttpServer HTTP/2 thuần — xem mục 12)
 ```
+
+Phần chung cho việc đồng bộ routing version (`signalingInit`, lắng nghe broadcast "beacon", track
+`currentVersion`) nằm ở `discovery/.../router/RoutingVersionTracker.java` (abstract, template method
+`onSignalingChanged`) — `RoutingVersionSync` ở cả 2 module chỉ còn phần riêng (harbor: di chuyển
+session; colony: track version đơn thuần), tránh 2 bản copy tự trôi khác nhau theo thời gian.
 
 - **`dto`** (chỉ còn ở harbor) — định dạng frame trên dây cho chặng client↔harbor (JSON). Chặng
   harbor↔colony không còn dto riêng — dùng thẳng `Frame`/`FrameType` sinh từ
@@ -227,7 +235,7 @@ harbor-gw/ws/           colony-cs/ws/
   `BackendStream`/`ChatSession` trên CHUNG 1 connection vật lý, nên không còn cần tách connection vật
   lý khỏi subscriber logic như thời N-shard-link nữa (xem mục 12).
 - **`backend`/`delivery`** — quyết định tin nhắn phải đi đâu và đưa nó đi.
-- **`membership`** (chỉ colony) — ai thuộc conversation nào, lưu bền trong Postgres (xem mục 8).
+- **`membership`** (chỉ colony, `ConversationMembershipRegistry`) — ai thuộc conversation nào, lưu bền trong Postgres (xem mục 8).
 - **`routing`** — biết pod nào đang sở hữu conversation nào (dựa trên gossip từ beacon).
 - File ở gốc package (`*Manager`, `*Server`) — nơi ráp mọi thứ lại, là "cửa trước" nhận connection
   và dispatch protocol.
@@ -238,9 +246,9 @@ Cả 3 service (`beacon`, `colony`, `harbor`) chạy độc lập trên cùng m�
 cụm Hazelcast qua multicast (không cần cấu hình thêm):
 
 ```bash
-mvn -pl beacon exec:java -Dexec.mainClass=com.lego.beacon.BeaconBoot
-mvn -pl colony exec:java -Dexec.mainClass=com.lego.colony.ColonyBoot
-mvn -pl harbor exec:java -Dexec.mainClass=com.lego.harbor.HarborBoot
+mvn -pl beacon exec:java -Dexec.mainClass=com.pingo.beacon.BeaconBoot
+mvn -pl colony exec:java -Dexec.mainClass=com.pingo.colony.ColonyBoot
+mvn -pl harbor exec:java -Dexec.mainClass=com.pingo.harbor.HarborBoot
 ```
 
 Client test thủ công: mở `demo.html` (ở root repo) trong browser (SockJS raw-websocket transport
@@ -262,24 +270,23 @@ không ảnh hưởng chức năng nhưng dễ gây nhầm khi debug.
   vì cả 2 phía đều phải subscribe). Cố tình để vậy — client tự dedupe qua `id` nếu cần, tránh thêm
   1 tầng phức tạp cho lợi ích nhỏ.
 - **Không có persistence lịch sử tin nhắn** — chỉ tin nhắn "đang bay" được deliver real-time, không
-  lưu lại đâu để replay/xem lịch sử. `ChannelMembershipRegistry` (ai thuộc conversation nào) **đã**
-  chuyển sang lưu bền (persistent) trong Postgres — mọi pod colony đều đọc/ghi thẳng bảng
+  lưu lại đâu để replay/xem lịch sử. `ConversationMembershipRegistry` (ai thuộc conversation nào)
+  **đã** chuyển sang lưu bền (persistent) trong Postgres — mọi pod colony đều đọc/ghi thẳng bảng
   `conversation_members`, không còn in-memory-theo-pod như thiết kế ban đầu ở mục 11 nữa. `harbor`
-  vẫn giữ cơ chế "nhớ" lại `memberUserIds` (`SockjsSocket.membersByConversation`) và gửi kèm mỗi lần
+  vẫn giữ cơ chế "nhớ" lại `memberUserIds` (`HarborSession.membersByConversation`) và gửi kèm mỗi lần
   SUBSCRIBE/reconnect như một lớp phòng hộ thêm (không còn bắt buộc để khôi phục membership sau khi
   pod restart như trước, vì DB đã giữ), nhưng vẫn hữu ích để giảm 1 vòng query cho lần subscribe lại.
-- **Heartbeat**: gateway↔client và gateway↔backend đều có PING/PONG riêng. Phía backend, từ khi link
-  được sharded và dùng chung cho nhiều session (xem mục 12), heartbeat theo từng **shard link**
-  (không phải theo session, và không còn theo từng session như bản trước đó của tài liệu này) — 1
-  shard link không phản hồi trong ~60s bị coi là chết và dọn dẹp, kéo theo mọi subscriber logic đang
-  "cưỡi" trên nó bị colony tự gỡ khi nó phát hiện TCP đóng.
-- **DTO lặp có chủ đích**: `MessageType`/`SocketFrame` (envelope tầng ws) cố tình duplicate giữa
-  `colony` và `harbor` thay vì gộp lên `discovery` — giữ 2 module độc lập nhau ở tầng
-  giao thức chat, dù cùng chung định dạng. Ngược lại, `Payload`/`SignalingResponse`/`Destination`/...
-  (tầng gossip/routing) đã được gộp về `discovery`, dùng chung thật sự. **Ngoại lệ duy nhất**:
-  `ConversationIds.dmId(...)` (`core/commons-lang`) dùng chung thật giữa harbor và (gián tiếp) mọi
-  nơi cần tính `conversationId` của DM — vì đây là 1 thuật toán 2 phía bắt buộc phải khớp
-  bit-for-bit, không phải 1 DTO tầng wire.
+- **Heartbeat**: client↔harbor có PING/PONG + quét session client idle (`CLIENT_IDLE_TIMEOUT_MS=60s`,
+  `HarborSessionManager.heartbeatSweep`). Chặng harbor↔colony (gRPC) **không** dùng heartbeat/PING-PONG
+  nữa — HTTP/2 giữ connection sống, và 1 stream chỉ bị coi là hỏng khi có bằng chứng cụ thể (timeout mở
+  connection/SUBSCRIBE/message-ack, hoặc stream tự end/error) — xem mục 12.
+- **DTO không còn lặp ở chặng harbor↔colony**: trước đây `MessageType`/`SocketFrame` từng cố tình
+  duplicate giữa `colony` và `harbor`; từ khi chuyển sang gRPC (mục 12), colony bỏ hẳn `dto/` riêng —
+  chặng harbor↔colony dùng thẳng `Frame`/`FrameType` sinh từ `discovery/*.proto` (1 schema, compile 1
+  lần). `harbor` vẫn giữ `MessageType`/`SocketFrame` riêng, nhưng giờ CHỈ cho chặng client↔harbor
+  (JSON) — không còn lý do phải khớp với colony nữa. `ConversationIds.dmId(...)` (`core/commons-lang`)
+  vẫn dùng chung thật giữa harbor và mọi nơi cần tính `conversationId` của DM — 1 thuật toán 2 phía
+  bắt buộc khớp bit-for-bit, không phải DTO tầng wire.
 
 ## 9. Vì sao không route tin nhắn qua Kafka
 
@@ -321,7 +328,7 @@ nó giữ **nhiều bản routing table cũ cùng lúc** (mặc định tối đ
 nhất), không chỉ đúng bản mới nhất. Lý do: mỗi khi `beacon` gossip ra 1 thay đổi (pod thêm/bớt),
 `colony` cập nhật routing table gần như NGAY (chỉ là update 1 hashtable trong bộ nhớ), nhưng
 `harbor` cần **thời gian thật** (network round-trip) để re-subscribe từng conversation đang mở sang
-đúng pod colony mới (`BackendLinkGateway.reconnectConversationToVersion`, gọi từ
+đúng pod colony mới (`BackendStreamGateway.reconnectConversationToVersion`, gọi từ
 `RoutingVersionSync.reconnectSessionsToNewVersion` — lặp theo từng cặp `(session, conversationId)`,
 không phải theo session, vì 1 session giờ có thể có nhiều conversation nằm trên nhiều pod khác nhau)
 — việc này không thể tức thời nếu có hàng nghìn session/conversation. Giữ lại các version cũ cho
@@ -360,15 +367,14 @@ migration ở `harbor`) đổi trạng thái với **tốc độ khác nhau hẳ
    càng chờ lâu càng nhiều tin nhắn tiếp tục bị route nhầm vào pod không còn tồn tại. Giờ REMOVE
    được publish ngay (`executor.execute`), chỉ ADD (pod mới, chưa ai cần route gấp) mới còn chờ batch
    — thu hẹp cửa sổ mà cả hệ thống còn "chưa biết" pod đã chết.
-3. **Không đóng backend link cũ cho tới khi link mới SUBSCRIBE_OK** (`BackendLinkGateway.ensureLinkAndSubscribe`
-   / `sendSubscribeAndAwait`) — trước đây (và vẫn giữ nguyên tinh thần sau khi đổi model đa-link) link
-   cũ chỉ bị đóng SAU khi nhận được xác nhận từ node mới, KHÔNG phải ngay khi TCP connect() xong.
-   Nếu handshake lỗi/timeout, link cũ (nếu có, CÙNG pod) được giữ nguyên hoàn toàn
-   (`SockjsSocket.putLink` chỉ đóng link cũ của đúng pod đang thay thế, không đụng link của pod khác).
-4. **Harbor "nhớ" lại `memberUserIds` và gửi lại mỗi lần SUBSCRIBE/reconnect** (`SockjsSocket.rememberMembers`/
-   `getRememberedMembers`, dùng trong `BackendLinkGateway.reconnectConversationToVersion`) — phát
-   hiện qua test thật (không phải suy luận): vì `ChannelMembershipRegistry` chỉ in-memory theo từng
-   pod (xem mục 8), khi 1 conversation chuyển sang pod MỚI (pod cũ restart/scale), pod đó hoàn toàn
+3. **Không đóng stream cũ cho tới khi stream mới mở xong** (`BackendStreamGateway.ensureStreamAndSubscribe`
+   / `sendSubscribeAndAwait`) — mỗi pod có 1 stream riêng (`backendStreams: Map<podName, BackendStream>`),
+   nên việc mở stream sang pod mới không đụng gì tới stream đang sống của các pod khác; chỉ khi 1
+   `doConnect` mới thành công cho ĐÚNG podName đó mới thay thế/đóng bản cũ (`BackendStreamGateway#doConnect`).
+4. **Harbor "nhớ" lại `memberUserIds` và gửi lại mỗi lần SUBSCRIBE/reconnect** (`HarborSession.rememberMembers`/
+   `getRememberedMembers`, dùng trong `BackendStreamGateway.reconnectConversationToVersion`) — phát
+   hiện qua test thật (không phải suy luận): vì `ConversationMembershipRegistry` khi đó chỉ in-memory
+   theo từng pod (xem mục 8, đã chuyển sang Postgres), khi 1 conversation chuyển sang pod MỚI (pod cũ restart/scale), pod đó hoàn toàn
    không biết membership — nếu harbor không tự gửi lại `memberUserIds` đã biết, SUBSCRIBE sẽ bị từ
    chối ("not a member") **vĩnh viễn**, dù client vẫn hợp lệ. Đã verify bằng test thật: xoá colony
    pod giữa lúc đang chat, gửi 20 tin liên tục trong 40s — trước fix này mất tin từ lúc pod cũ biến
@@ -399,8 +405,9 @@ path riêng).
    người. Hệ quả: harbor phải hỗ trợ nhiều backend link/session (1 link/pod đích, dùng chung cho N
    conversation cùng pod) thay vì 1 link/session như trước — ảnh hưởng TOÀN BỘ traffic, kể cả DM.
 2. **Membership lưu in-memory** — `colony` chưa có kết nối DB thật nào (xem mục 8). Không đấu nối
-   Postgres ở lần đổi này; `ChannelMembershipRegistry` mất khi pod restart, vá tạm bằng cơ chế
-   "harbor tự nhớ và gửi lại memberUserIds" (mục 10, fix #4).
+   Postgres ở lần đổi này; membership mất khi pod restart, vá tạm bằng cơ chế "harbor tự nhớ và gửi
+   lại memberUserIds" (mục 10, fix #4) — đã chuyển sang Postgres (`ConversationMembershipRegistry`)
+   ở lần đổi sau, xem mục 8.
 3. **DM tự suy `conversationId` từ `toUserId`** (`ConversationIds.dmId`, XOR 2 nửa UUID, đối xứng) —
    client vẫn gửi `toUserId` như cũ, không bắt buộc phải tự tính `conversationId`. Group: client tự
    chọn/hardcode `conversationId` — hệ thống chưa có flow "tạo group" thật, nhất quán với việc chưa
@@ -473,8 +480,8 @@ service Link {
 ```
 
 - **1 (session, pod) = 1 `BackendStream`** (harbor)/**`ChatSession`** (colony) — trực tiếp, không
-  qua tầng shard trung gian nào. `SockjsSocket.backendStreams: Map<podName, BackendStream>`.
-- **1 pod colony = 1 `GrpcClient` dùng CHUNG** (`BackendLinkGateway.clients: Map<podName,
+  qua tầng shard trung gian nào. `HarborSession.backendStreams: Map<podName, BackendStream>`.
+- **1 pod colony = 1 `GrpcClient` dùng CHUNG** (`BackendStreamGateway.clients: Map<podName,
   GrpcClient>`) — đây là nơi DUY NHẤT còn tính chất "chia sẻ connection vật lý", và nó nằm ở tầng
   transport (HTTP/2 tự multiplex), không phải logic tự viết. Không còn `harborSessionId`/
   `SESSION_CLOSED`/`ChatLink`/`ChatSubscriber` — đóng 1 session giờ chỉ là đóng đúng 1 `BackendStream`
@@ -491,7 +498,7 @@ lúc compile hay review code:
 **1. Deadlock do đợi `response()` trước khi coi stream "sẵn sàng ghi".** Colony (bidi-streaming
 server) chỉ thật sự gửi response headers SAU KHI nhận frame đầu tiên từ client — nếu harbor gate
 việc "stream sẵn sàng" trên `request.response()` xong, 2 phía deadlock chờ nhau vĩnh viễn, không
-log lỗi gì cả (cả 2 bên đều đang "chờ" hợp lệ). Fix: `BackendLinkGateway.doConnect` resolve NGAY khi
+log lỗi gì cả (cả 2 bên đều đang "chờ" hợp lệ). Fix: `BackendStreamGateway.doConnect` resolve NGAY khi
 có `request` (đã ghi được), gắn response handler song song không chặn.
 
 **2. `setHttp2KeepAliveTimeout` (client) làm `response()` trễ ĐÚNG BẰNG giá trị cấu hình.** Đặt
@@ -520,7 +527,7 @@ Thay vào đó, phản ứng dựa trên BẰNG CHỨNG cụ thể thay vì đo�
   chung (tranh chấp tạm thời khi nhiều stream cũ đóng đồng loạt, không phải rò rỉ vĩnh viễn).
 - Khi `client.request()` timeout, hoặc 1 stream đã mở chứng minh hỏng thật (SUBSCRIBE không được ack
   trong `HANDSHAKE_TIMEOUT_MS`, hoặc response end/error) → evict `GrpcClient` của pod đó khỏi
-  `clients` (`BackendLinkGateway.evictClient`) — lần `ensureStream` kế tiếp tự mở connection MỚI.
+  `clients` (`BackendStreamGateway.evictClient`) — lần `ensureStream` kế tiếp tự mở connection MỚI.
   Tự phục hồi trong 1 chu kỳ retry, không cần can thiệp tay.
 - `BackendStream.end()` phải dùng `cancel()` (không phải `end()`) cho 1 stream chưa từng `write()`
   lần nào (VD: `client.request()` trả về TRỄ, sau khi đã timeout và bị bỏ) — `end()` trên gRPC
@@ -537,5 +544,69 @@ gặp đúng kịch bản contention ở trên — tự phục hồi ở lần c
 tranh chấp tạm thời như mô tả ở bug #3 — bị chặn (bounded) bởi `CONNECT_TIMEOUT_MS` và tự phục hồi,
 nhưng nếu vấn đề này chứng minh ảnh hưởng thật ở quy mô production, có thể cân nhắc tune thêm
 `Http2Settings.setMaxConcurrentStreams` (phía server, `ChatSocketServer`/colony) và
-`http2MultiplexingLimit`/`http2MaxPoolSize` (phía client, `BackendLinkGateway`/harbor) — đã thảo luận
+`http2MultiplexingLimit`/`http2MaxPoolSize` (phía client, `BackendStreamGateway`/harbor) — đã thảo luận
 trong quá trình làm migration này nhưng chưa implement, chỉ ghi lại làm gợi ý.
+
+## 13. Tách REST API khỏi `colony` — service `hall` riêng, giống Slack tách Gateway Server khỏi web API tier
+
+### Vì sao tách
+
+`colony` ban đầu gánh 2 việc có đặc tính khác hẳn nhau trong cùng 1 process: chặng chat real-time
+(gRPC, giữ stream sống, cần cluster Hazelcast để forward tin nhắn cross-node) và REST API (auth,
+lịch sử tin nhắn, danh sách conversation/user — request/response thuần, không trạng thái). 2 phần
+này scale theo nhu cầu khác nhau (REST traffic tăng theo lượt UI action, chat traffic tăng theo số
+session đang mở), và REST hoàn toàn không cần Hazelcast/EventBus — gộp chung 1 process buộc REST
+phải "gánh" luôn overhead cluster mà nó không dùng tới. Đúng theo kiến trúc real-time messaging của
+Slack (Gateway Server tách khỏi web/API tier).
+
+### Thiết kế mới
+
+- **`colony-domain`** (thư viện dùng chung, không có `main()`): `ConversationMembershipRegistry`,
+  `MessageHistoryRegistry`, `UserRegistry` — logic đọc/ghi Postgres, dùng chung giữa `colony` và
+  `hall` để tránh duplicate code (2 service vẫn tự mở `PgPool` riêng, KHÔNG share connection
+  pool hay gọi mạng qua lại — chỉ share code + cùng schema).
+- **`colony`**: chỉ còn lo đúng chặng chat gRPC + healthcheck riêng (`HealthCheckVerticle`, mới thêm
+  — trước đây healthcheck "ăn theo" REST API cũ, giờ REST API không còn ở đây nữa).
+- **`hall`**: toàn bộ `RestApiVerticle` dời sang, KHÔNG cluster Hazelcast (`HallBoot`
+  không set `hazelcast:` trong config — `LegoBootStart#initVertx` tự nhận ra và fallback về
+  `Vertx.vertx()` thuần), đơn giản hơn hẳn `colony`/`harbor`.
+- NodePort REST API (31002) giữ nguyên — `hall` claim lại đúng port đó, `e2e/lib.mjs` và
+  `demo.html` không cần đổi gì.
+
+### Bug thật gặp khi deploy — beacon healthcheck pod colony sai port
+
+Sau khi tách, `demux-test.mjs`/`load-test.mjs` treo ở bước SUBSCRIBE với
+`NullPointerException: Cannot invoke "Destination.ip()" because "route" is null` phía harbor — router
+Maglev không có destination nào để route dù `colony` đang chạy khoẻ mạnh. Nguyên nhân: `beacon`
+(`K8SKeeper.addPod`) chỉ thêm 1 pod vào routing table SAU KHI healthcheck nó qua — `BeaconAppModule`
+hardcode default healthcheck port là `8085` (`publicHttp` CŨ của `colony`, nơi `/healthcheck` từng
+sống). Từ khi `RestApiVerticle` (và route `/healthcheck` của nó) dời hẳn sang `hall`, `colony`
+không còn serve gì trên `8085` nữa — healthcheck của beacon tới cổng đó luôn thất bại (âm thầm, pod
+bị kẹt vĩnh viễn trong `prePods`, `K8SKeeper` không hề log gì vì log chỉ chạy ở nhánh thành công) →
+routing table của beacon còn **0 destination** dù pod colony thật sự đang `Running`. Fix: đổi default
+`healthcheckPort` trong `BeaconAppModule` sang `8086` (`admHttp`, nơi `HealthCheckVerticle` mới của
+`colony` thật sự lắng nghe). Bài học: mọi thứ "ăn theo" 1 port/route cụ thể của 1 service (kể cả
+service KHÁC, như beacon healthcheck colony) phải rà lại toàn bộ khi route đó bị dời đi — không chỉ
+rà trong chính module đang sửa.
+
+### `hall` dùng lại framework `core/api`+`core/http` (`LegoHttpServer`) thay vì tự viết routing tay
+
+Sau khi `hall` tách ra, route dispatch ban đầu vẫn là `HttpServer` + `Map<RouteKey, Consumer>` tự
+viết tay (giống `RestApiVerticle` cũ). Đã chuyển sang dùng `core/api`/`core/http`'s framework có sẵn
+trong repo — annotation `@RegisterHandler`/`@RegisterIApi` (quét classpath lúc khởi động, dispatch
+qua Guice `Injector`) đúng kiểu Spring's `@RequestMapping` + component scan, chỉ khác là chưa ai
+thật sự dùng nó trước `hall` (không phải vì nó không dùng được — chỉ vì chưa có service nào làm).
+
+- `HallApiHandlers` (`hall/api/`): mỗi route giờ là 1 method `@RegisterHandler`, KHÔNG còn tự quản
+  route map. Trả về `byte[]` (JSON thô) thay vì để framework tự bọc `{"data": ...}` — giữ NGUYÊN
+  wire format cũ để không phải đổi `e2e/lib.mjs`/`demo.html`.
+- Lỗi nghiệp vụ ném qua `LegoBusinessException(key, message)`, status code tra theo `key` qua
+  `HallErrorKeys` (annotation `@RegisterErrorMapper` trên field String, quét cùng lúc với
+  `@RegisterHandler`) — không còn set status code tay ở từng chỗ.
+- `HallAppModule` bind `IApiRegistry`/`HttpStatusErrorMapping` (đều quét package `com.pingo.hall`)
+  và `LegoHttpServer` (thay `RestApiVerticle` cũ) — không cần sửa gì ở `core/api`/`core/http`, dùng
+  nguyên bản có sẵn.
+- Verify: build sạch, mọi route + status code (400/401/409/200) + CORS preflight đều khớp behavior
+  cũ qua test tay trực tiếp, cộng `demux-test.mjs`/`load-test.mjs` pass như thường. Riêng route
+  không tồn tại trả `405` thay vì `404` cũ (do route `OPTIONS /*` khớp path nhưng không khớp method —
+  đúng chuẩn HTTP hơn, không ảnh hưởng gì vì không client/test nào phụ thuộc status code này).

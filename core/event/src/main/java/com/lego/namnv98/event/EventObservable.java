@@ -1,6 +1,6 @@
 package com.lego.namnv98.event;
 
-import com.lego.namnv.core.common.support.Disposable;
+import com.pingo.core.common.support.Disposable;
 import com.lego.namnv98.event.impl.BaseEventConsumer;
 
 import java.util.function.Consumer;
