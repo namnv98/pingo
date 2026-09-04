@@ -1,0 +1,255 @@
+package com.lego.harbor.ws;
+
+import com.lego.namnv.connector.PingoConnector;
+import com.lego.namnv.core.boot.start.LegoConfig1;
+import com.lego.namnv.core.common.support.ConversationIds;
+import com.lego.namnv.core.common.support.UUIDUtils;
+import com.lego.namnv.core.common.token.JwtHelper;
+import com.lego.namnv.core.common.token.NdlTokenException;
+import com.lego.harbor.ws.backend.BackendStreamGateway;
+import com.lego.harbor.ws.dto.MessageType;
+import com.lego.harbor.ws.dto.SocketFrame;
+import com.lego.harbor.ws.dto.SocketFrames;
+import com.lego.harbor.ws.routing.RoutingVersionSync;
+import com.lego.harbor.ws.session.HarborSession;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.ext.web.handler.sockjs.SockJSSocket;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Quản lý các SockJS session công khai (public) từ client, đóng vai trò "cửa trước": nhận
+ * connection, dispatch protocol AUTH/MESSAGE/PING, và dọn dẹp session bị idle. Việc thật sự nói
+ * chuyện với backend colony được giao hẳn cho {@link BackendStreamGateway}; việc đồng bộ
+ * routing table version được giao cho {@link RoutingVersionSync} — 2 lớp này trước đây gộp chung
+ * vào class này, tách ra để mỗi class chỉ lo đúng 1 việc.
+ */
+@Slf4j
+@NoArgsConstructor
+public class HarborSessionManager {
+
+    private static final long HEARTBEAT_SWEEP_INTERVAL_MS = 15_000;
+    private static final long CLIENT_IDLE_TIMEOUT_MS = 60_000;
+    private static final long DRAIN_GRACE_MS = 2_000;
+
+    @Getter
+    private String serverId;
+    private final Map<String, HarborSession> sessions = new ConcurrentHashMap<>();
+    private Vertx vertx;
+    private BackendStreamGateway backendLinkGateway;
+    private RoutingVersionSync routingVersionSync;
+    private JwtHelper jwtHelper;
+    /**
+     * false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe (xem {@code HealthCheckVerticle}).
+     */
+    @Getter
+    private volatile boolean ready = true;
+
+    public HarborSessionManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper) {
+        this.serverId = serverId;
+        this.vertx = vertx;
+        this.backendLinkGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient);
+        this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendLinkGateway, sessions, this::sendToClient);
+        this.jwtHelper = jwtHelper;
+        vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
+    }
+
+    /**
+     * Gọi lúc pod chuẩn bị tắt (xem {@code HarborApp.doStop()}): đánh dấu not-ready ngay (cho
+     * readinessProbe fail sớm), báo GOAWAY cho mọi client đang mở để họ chủ động reconnect sang pod
+     * khác, rồi chờ 1 khoảng ngắn cho kịp trước khi caller đóng hẳn {@code Vertx}.
+     */
+    public CompletionStage<Void> drain() {
+        ready = false;
+        log.info("draining {} client session(s) before shutdown", sessions.size());
+        var goAway = SocketFrame.builder().type(MessageType.GOAWAY).id(UUIDUtils.timeBasedUuidAsString()).reason("gateway shutting down").ts(System.currentTimeMillis()).build();
+        for (var session : sessions.values()) {
+            sendToClient(session, goAway);
+        }
+        var delayed = new CompletableFuture<Void>();
+        vertx.setTimer(DRAIN_GRACE_MS, tid -> delayed.complete(null));
+        return delayed;
+    }
+
+    void onConnection(SockJSSocket socket) {
+        var id = generateSessionId();
+        var session = new HarborSession(id, serverId, socket);
+        sessions.put(id, session);
+
+        socket.handler(buffer -> onClientFrame(session, buffer));
+        socket.closeHandler(any -> onClose(session));
+        socket.exceptionHandler(ex -> onException(session, ex));
+    }
+
+    private void onClose(HarborSession closedSession) {
+        var session = sessions.remove(closedSession.getId());
+        if (session == null) {
+            return;
+        }
+        backendLinkGateway.closeAllStreams(session);
+        session.cleanUpAfterClose();
+    }
+
+    private void onException(HarborSession session, Throwable ex) {
+        log.error("an error occurred while reading socket of session {}", session.getId(), ex);
+    }
+
+    /**
+     * Chỉ còn quét session client idle — liveness của backend gRPC stream giờ do HTTP/2 keepalive tự
+     * lo (xem {@code BackendStreamGateway#newClient}), không cần quét PING/PONG tay theo shard nữa.
+     */
+    private void heartbeatSweep() {
+        var now = System.currentTimeMillis();
+        for (var session : List.copyOf(sessions.values())) {
+            if (now - session.getLastSeenAt() > CLIENT_IDLE_TIMEOUT_MS) {
+                log.info("closing idle client session {} (userId={})", session.getId(), session.getUserId());
+                session.close();
+            }
+        }
+    }
+
+    private void onClientFrame(HarborSession session, Buffer buffer) {
+        session.setLastSeenAt(System.currentTimeMillis());
+        var frameOpt = SocketFrame.decode(buffer);
+        if (frameOpt.isEmpty()) {
+            log.debug("dropping undecodable frame from client session {}", session.getId());
+            return;
+        }
+        var frame = frameOpt.get();
+        switch (frame.getType()) {
+            case AUTH -> handleAuth(session, frame);
+            case SUBSCRIBE -> handleSubscribe(session, frame);
+            case MESSAGE -> handleMessage(session, frame);
+            case PING -> sendToClient(session, SocketFrames.pong(frame.getId()));
+            default -> log.debug("unsupported frame type {} from client session {}", frame.getType(), session.getId());
+        }
+    }
+
+    /**
+     * Xác định danh tính (userId) cho session bằng cách verify chữ ký token JWT do colony cấp lúc
+     * /register hoặc /login (xem UserRegistry/RestApiVerticle bên colony) — xử lý cục bộ hoàn toàn
+     * (chỉ verify chữ ký bằng secret dùng chung, KHÔNG gọi ngược lại colony), KHÔNG tự động mở kết
+     * nối xuống backend (xem SUBSCRIBE). Trước đây tin thẳng {@code fromUserId} client tự khai, không
+     * verify gì cả — đây là điểm khác biệt duy nhất so với trước, phần còn lại của giao thức không đổi.
+     */
+    private void handleAuth(HarborSession session, SocketFrame frame) {
+        if (isBlank(frame.getToken())) {
+            sendToClient(session, SocketFrames.authError(frame.getId(), "missing token"));
+            return;
+        }
+        UUID userId;
+        try {
+            var decoded = jwtHelper.decode(frame.getToken());
+            userId = decoded.getUUID("userId");
+        } catch (NdlTokenException e) {
+            sendToClient(session, SocketFrames.authError(frame.getId(), "invalid or expired token"));
+            return;
+        }
+        if (userId == null) {
+            sendToClient(session, SocketFrames.authError(frame.getId(), "invalid token"));
+            return;
+        }
+        session.setUserId(userId);
+        sendToClient(session, SocketFrame.builder().type(MessageType.AUTH_OK).id(frame.getId()).ts(System.currentTimeMillis()).build());
+    }
+
+    /**
+     * Đăng ký nhận/gửi tin cho đúng 1 conversationId — thật sự mở/dùng lại backend link xuống đúng pod sở hữu nó, thay cho vai trò cũ của AUTH.
+     */
+    private void handleSubscribe(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null) {
+            sendToClient(session, SocketFrames.subscribeError(frame.getId(), "not authenticated"));
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            sendToClient(session, SocketFrames.subscribeError(frame.getId(), "invalid/missing conversationId"));
+            return;
+        }
+        var members = new ArrayList<UUID>();
+        if (frame.getMemberUserIds() != null) {
+            for (var memberUserId : frame.getMemberUserIds()) {
+                var parsed = UUIDUtils.parseOrDefault(memberUserId);
+                if (parsed != null) {
+                    members.add(parsed);
+                }
+            }
+        }
+        backendLinkGateway
+                .subscribe(session, frame.getId(), conversationId, members, routingVersionSync.currentVersion())
+                .exceptionally(
+                        ex -> {
+                            log.warn("subscribe failed for session {} conversation {}", session.getId(), conversationId, ex);
+                            var cause = ex.getCause() != null ? ex.getCause() : ex;
+                            var reason = cause.getMessage() != null ? cause.getMessage() : "routing/backend connect failed";
+                            sendToClient(session, SocketFrames.subscribeError(frame.getId(), reason));
+                            return null;
+                        });
+    }
+
+    /**
+     * Suy ra conversationId (ưu tiên field mới, fallback DM tất định từ toUserId) rồi forward xuống đúng backend link.
+     */
+    private void handleMessage(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null) {
+            sendToClient(session, SocketFrames.error(frame.getId(), "not authenticated"));
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = resolveConversationId(session, frame);
+        } catch (IllegalArgumentException e) {
+            sendToClient(session, SocketFrames.error(frame.getId(), e.getMessage()));
+            return;
+        }
+        var outgoing = frame.toBuilder().conversationId(conversationId.toString()).build();
+        backendLinkGateway.sendMessage(session, outgoing, conversationId, routingVersionSync.currentVersion());
+    }
+
+    /**
+     * conversationId tường minh nếu client gửi kèm, ngược lại suy DM tất định từ toUserId — ném
+     * {@link IllegalArgumentException} với message dùng thẳng làm lý do lỗi trả về client khi thiếu/sai.
+     */
+    private static UUID resolveConversationId(HarborSession session, SocketFrame frame) {
+        if (!isBlank(frame.getConversationId())) {
+            try {
+                return UUID.fromString(frame.getConversationId());
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("invalid conversationId");
+            }
+        }
+        if (isBlank(frame.getToUserId())) {
+            throw new IllegalArgumentException("missing conversationId/toUserId");
+        }
+        try {
+            return ConversationIds.dmId(session.getUserId(), UUID.fromString(frame.getToUserId()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("invalid toUserId");
+        }
+    }
+
+    private void sendToClient(HarborSession session, SocketFrame frame) {
+        session.send(frame.encode());
+    }
+
+    private String generateSessionId() {
+        return UUIDUtils.timeBasedUuidAsString();
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+}

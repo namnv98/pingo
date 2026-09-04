@@ -37,7 +37,13 @@ IMAGE_TAG="${IMAGE_TAG:-local}"
 # gom nhom de xem trang thai (print_summary), khong con dung cho Hazelcast discovery nua.
 CLUSTER_LABEL_KEY="lego/vertx-cluster"
 CLUSTER_LABEL_VALUE="vertx-land-cluster"
-MODULES=(beacon colony harbor) # thu tu deploy: control-plane (beacon) truoc, khong bat buoc nhung hop ly
+MODULES=(beacon colony harbor) # ten helm release / docker image -- GIU NGUYEN du thu muc source da
+  # doi ten (xem MODULE_DIR ben duoi), vi phai khop voi release dang chay that (deploy/harbor,
+  # deploy/colony) va voi Chart.yaml `name:` cua tung chart. Thu tu deploy: control-plane (beacon)
+  # truoc, khong bat buoc nhung hop ly.
+declare -A MODULE_DIR=([beacon]=beacon [colony]=colony-cs [harbor]=harbor-gw) # ten thu muc source
+  # thuc te tren dia (sau khi tach harbor -> harbor-gw, colony -> colony-cs) -- dung cho moi thao tac
+  # dong tram file (mvn -pl, docker build context, duong dan chart helm/).
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -106,8 +112,10 @@ install_helm() {
 # ============================================================================
 
 build_code() {
-  log "mvn clean package (beacon, colony, harbor + core/discovery)..."
-  (cd "$REPO_ROOT" && mvn -q clean package -pl beacon,colony,harbor -am -DskipTests)
+  log "mvn clean package (beacon, colony-cs, harbor-gw + core/discovery)..."
+  local dirs=""
+  for m in "${MODULES[@]}"; do dirs="${dirs:+$dirs,}${MODULE_DIR[$m]}"; done
+  (cd "$REPO_ROOT" && mvn -q clean package -pl "$dirs" -am -DskipTests)
 }
 
 # ============================================================================
@@ -143,7 +151,7 @@ ensure_local_registry() {
 build_images() {
   for m in "${MODULES[@]}"; do
     log "docker build ${REGISTRY}/${m}:${IMAGE_TAG}"
-    docker build -t "${REGISTRY}/${m}:${IMAGE_TAG}" "$REPO_ROOT/$m"
+    docker build -t "${REGISTRY}/${m}:${IMAGE_TAG}" "$REPO_ROOT/${MODULE_DIR[$m]}"
   done
 }
 
@@ -204,7 +212,7 @@ deploy_helm() {
     # imagePullPolicy=Always: tag ":local" la mutable (push de len cung tag moi lan build), IfNotPresent
     # (mac dinh cua chart, hop ly cho prod voi tag version co dinh) se khien kubelet dung ban cache cu
     # sau lan pull dau tien, khong bao gio thay code moi. Deploy local nen luon force pull lai.
-    helm upgrade -i "$m" "$REPO_ROOT/$m/helm" \
+    helm upgrade -i "$m" "$REPO_ROOT/${MODULE_DIR[$m]}/helm" \
       -n "$NAMESPACE" \
       --set imageId="${REGISTRY}/${m}:${IMAGE_TAG}" \
       --set imagePullPolicy=Always \
@@ -218,9 +226,9 @@ print_summary() {
   cat <<EOF
 
 Test thu:
-  - Mo harbor/demo.html tren trinh duyet, doi URL WebSocket thanh:
+  - Mo demo.html tren trinh duyet, doi URL WebSocket thanh:
       ws://localhost:31003/connect/websocket
-    (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor/helm/templates/services.yaml)
+    (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor-gw/helm/templates/services.yaml)
   - Xem log 1 pod:  kubectl logs -n ${NAMESPACE} deploy/harbor -f
   - Xoa sach:        ./deploy-k3s.sh --uninstall
 EOF

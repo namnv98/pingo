@@ -90,7 +90,7 @@ Client↔harbor dùng 1 envelope JSON:
 
 Gửi dạng **TEXT frame** (không phải binary) — bắt buộc, vì browser/JS `WebSocket` mặc định trả
 `event.data` là `Blob` cho binary frame, `JSON.parse()` sẽ lỗi ngay (xem
-`harbor/.../session/SockjsSocket.java`).
+`harbor-gw/.../session/SockjsSocket.java`).
 
 **`AUTH` tách hẳn khỏi việc mở kết nối backend** (khác thiết kế ban đầu): giờ chỉ xác định danh
 tính (`userId`) cho session, xử lý 100% cục bộ tại `harbor`, không đụng gì tới `colony`. `SUBSCRIBE`
@@ -191,7 +191,7 @@ topology pod, không biết gì về conversation/user.
 Cả 2 module tổ chức package theo cùng 1 quy ước để đọc là hiểu ngay vai trò:
 
 ```
-harbor/ws/              colony/ws/
+harbor-gw/ws/           colony-cs/ws/
   dto/                              (không còn dto/ — colony không có wire format
     MessageType                      riêng nào nữa, chặng harbor↔colony dùng thẳng
     SocketFrame                      Frame/FrameType sinh từ discovery/*.proto)
