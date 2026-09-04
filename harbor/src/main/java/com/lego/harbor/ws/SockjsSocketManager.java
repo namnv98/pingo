@@ -53,7 +53,7 @@ public class SockjsSocketManager {
   public SockjsSocketManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper) {
     this.serverId = serverId;
     this.vertx = vertx;
-    this.backendLinkGateway = new BackendLinkGateway(vertx, connector, config, sessions, this::sendToClient);
+    this.backendLinkGateway = new BackendLinkGateway(vertx, connector, config, this::sendToClient);
     this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendLinkGateway, sessions, this::sendToClient);
     this.jwtHelper = jwtHelper;
     vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
@@ -90,7 +90,7 @@ public class SockjsSocketManager {
     if (session == null) {
       return;
     }
-    backendLinkGateway.notifySessionClosed(session);
+    backendLinkGateway.closeAllStreams(session);
     session.cleanUpAfterClose();
   }
 
@@ -98,6 +98,10 @@ public class SockjsSocketManager {
     log.error("an error occurred while reading socket of session {}", session.getId(), ex);
   }
 
+  /**
+   * Chỉ còn quét session client idle — liveness của backend gRPC stream giờ do HTTP/2 keepalive tự
+   * lo (xem {@code BackendLinkGateway#newClient}), không cần quét PING/PONG tay theo shard nữa.
+   */
   private void heartbeatSweep() {
     var now = System.currentTimeMillis();
     for (var session : List.copyOf(sessions.values())) {
@@ -106,7 +110,6 @@ public class SockjsSocketManager {
         session.close();
       }
     }
-    backendLinkGateway.pingSharedLinksIfDue(now);
   }
 
   private void onClientFrame(SockjsSocket session, Buffer buffer) {
@@ -219,10 +222,8 @@ public class SockjsSocketManager {
     backendLinkGateway.sendMessage(session, outgoing, conversationId, routingVersionSync.currentVersion());
   }
 
-  /** harborSessionId chỉ có ý nghĩa nội bộ trên chặng harbor<->colony (xem BackendLinkGateway) — không lộ ra ngoài cho client. */
   private void sendToClient(SockjsSocket session, SocketFrame frame) {
-    var outgoing = frame.getHarborSessionId() == null ? frame : frame.toBuilder().harborSessionId(null).build();
-    session.send(outgoing.encode());
+    session.send(frame.encode());
   }
 
   private String generateSessionId() {

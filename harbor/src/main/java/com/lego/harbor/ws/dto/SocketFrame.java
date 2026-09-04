@@ -12,8 +12,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Envelope (frame) JSON duy nhất, dùng chung cho mọi chặng của chat socket
- * (client&lt;-&gt;gateway, gateway&lt;-&gt;chat-backend). Xem {@link MessageType} để biết các loại frame.
+ * Envelope (frame) JSON cho chặng client&lt;-&gt;gateway (SockJS/WebSocket) — chặng harbor&lt;-&gt;colony
+ * giờ dùng protobuf {@code Frame} (xem {@code discovery/src/main/proto/link.proto},
+ * ARCHITECTURE.md mục 12), không còn đi qua class này nữa. Xem {@link MessageType} để biết các loại frame.
  */
 @Getter
 @Setter
@@ -32,11 +33,9 @@ public class SocketFrame {
 
   /**
    * Chỉ có ý nghĩa với AUTH: token JWT do colony cấp lúc /register hoặc /login — harbor verify chữ
-   * ký tại chỗ, không đụng tới colony (xem SockjsSocketManager#handleAuth). Field này vẫn được
-   * serialize (dù null) trên MỌI frame harbor gửi xuống colony (SUBSCRIBE/MESSAGE/...), nên bản
-   * copy SocketFrame bên colony cũng phải khai báo field này (dù không bao giờ đọc) — nếu không
-   * Jackson (FAIL_ON_UNKNOWN_PROPERTIES mặc định = true) sẽ làm colony decode lỗi ÂM THẦM mọi frame
-   * từ harbor, không riêng gì AUTH.
+   * ký tại chỗ, không đụng tới colony (xem SockjsSocketManager#handleAuth). Đây là DTO client<->
+   * harbor duy nhất (chặng harbor<->colony giờ dùng protobuf {@code Frame}, xem
+   * ARCHITECTURE.md mục 12), nên không còn rủi ro lệch schema giữa 2 module như trước nữa.
    */
   private String token;
 
@@ -68,14 +67,6 @@ public class SocketFrame {
 
   /** Timestamp (epoch millis) do server đóng dấu, không lấy từ client. */
   private Long ts;
-
-  /**
-   * Chỉ có ý nghĩa trên chặng harbor&lt;-&gt;colony (không phải client&lt;-&gt;harbor): định danh session
-   * harbor gửi frame này lên, hoặc là đích cần relay khi colony gửi frame này xuống — bắt buộc từ
-   * khi 1 backend link được nhiều harbor session dùng chung (sharded theo pod, xem
-   * {@code BackendLinkGateway}), nên không còn suy ra được người gửi/nhận chỉ từ chính socket nữa.
-   */
-  private String harborSessionId;
 
   public Buffer encode() {
     return JsonObject.mapFrom(this).toBuffer();

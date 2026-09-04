@@ -2,19 +2,18 @@ package com.lego.colony.ws;
 
 import com.lego.namnv.connector.PingoConnector;
 import com.lego.namnv.core.common.support.UUIDUtils;
+import com.lego.namnv.discovery.grpc.Frame;
+import com.lego.namnv.discovery.grpc.FrameType;
 import com.lego.colony.ws.delivery.MessageDelivery;
-import com.lego.colony.ws.dto.MessageType;
-import com.lego.colony.ws.dto.SocketFrame;
 import com.lego.colony.ws.history.MessageHistoryRegistry;
 import com.lego.colony.ws.membership.ChannelMembershipRegistry;
 import com.lego.colony.ws.routing.RoutingVersionSync;
-import com.lego.colony.ws.session.ChatLink;
-import com.lego.colony.ws.session.ChatSubscriber;
+import com.lego.colony.ws.session.ChatSession;
 import com.lego.colony.ws.session.SessionRegistry;
 import io.vertx.core.Vertx;
-import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.ServerWebSocket;
+import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
+import io.vertx.grpc.server.GrpcServerRequest;
 import java.util.ArrayList;
 import java.util.Set;
 import java.util.UUID;
@@ -23,21 +22,18 @@ import java.util.concurrent.CompletionStage;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Quản lý các WebSocket link đang sống (live) của node colony này — "cửa trước": nhận connection,
- * dispatch protocol {@link SocketFrame} (SUBSCRIBE, MESSAGE, PING/PONG, SESSION_CLOSED), và dọn
- * dẹp link bị idle (không hoạt động) quá lâu. Việc thật sự deliver/forward MESSAGE được giao cho
- * {@link MessageDelivery}, việc đồng bộ routing table version được giao cho
- * {@link RoutingVersionSync}, và việc tra cứu subscriber theo user id/conversationId được giao cho
- * {@link SessionRegistry} — tách ra để mỗi class chỉ lo đúng 1 việc, dễ đọc và dễ mở rộng
- * (thêm loại frame mới, thêm cách route mới... không phải sửa cả 1 file lớn).
+ * Quản lý các gRPC stream đang sống (live) của node colony này — "cửa trước": nhận call
+ * {@code Link.Stream}, dispatch protocol {@link Frame} (SUBSCRIBE, MESSAGE), và dọn dẹp session bị
+ * idle. Việc thật sự deliver/forward MESSAGE được giao cho {@link MessageDelivery}, việc đồng bộ
+ * routing table version được giao cho {@link RoutingVersionSync}, và việc tra cứu subscriber theo
+ * user id/conversationId được giao cho {@link SessionRegistry} — tách ra để mỗi class chỉ lo đúng 1
+ * việc, dễ đọc và dễ mở rộng.
  *
- * <p>1 {@link ChatLink} (connection vật lý) giờ có thể mang nhiều {@link ChatSubscriber} (mỗi cái
- * là 1 harbor session cụ thể, định danh bởi {@code SocketFrame.harborSessionId}) cùng lúc — từ khi
- * harbor sharded link theo pod, dùng chung 1 link cho nhiều client session thay vì 1 link/session
- * (xem {@code BackendLinkGateway} bên harbor). Vì vậy TCP close của 1 link không còn đồng nghĩa
- * "1 subscriber vừa rời đi" nữa — harbor phải chủ động báo bằng frame {@code SESSION_CLOSED} khi 1
- * session cụ thể đóng (xem {@link #onMessage}), còn TCP close của chính link đó vẫn dọn dẹp mọi
- * subscriber đang "cưỡi" trên nó (xem {@link #onClose}).
+ * <p>Từ khi chuyển sang gRPC (xem ARCHITECTURE.md mục 12), 1 call = đúng 1 {@link ChatSession} —
+ * không còn phải phân biệt "link vật lý" với "subscriber logic" như thời N-shard-link nữa (HTTP/2
+ * tự multiplex nhiều stream trên chung 1 connection, mỗi stream vẫn là 1 danh tính riêng). Stream
+ * kết thúc (client end()) hoặc lỗi là tín hiệu dọn dẹp duy nhất, không cần frame {@code SESSION_CLOSED}
+ * tự viết như trước.
  *
  * <p>{@code serverId} là định danh routing của chính node này (là tên pod k8s khi chạy production,
  * hoặc một giá trị fallback cấu hình sẵn khi chạy local dev — xem thêm {@code ColonyAppModule}).
@@ -58,8 +54,8 @@ public class ChatSessionManager {
    * Địa chỉ EventBus broadcast (publish, không phải point-to-point) cho sự kiện "1 user vừa được
    * thêm vào 1 conversation" -- mọi pod harbor đều lắng nghe, tự kiểm tra cục bộ xem có session nào
    * của user đó đang sống không rồi tự subscribe hộ + báo cho client (xem RoutingVersionSync bên
-   * harbor). Cùng pattern với "beacon" (RoutingGossipPublisher) -- broadcast chấp nhận được ở đây
-   * vì tần suất thấp hơn hẳn tin nhắn (chỉ bắn khi membership thực sự đổi, không phải mỗi MESSAGE).
+   * harbor). Cùng pattern broadcast với "beacon" (RoutingGossipPublisher) -- broadcast chấp nhận
+   * được ở đây vì tần suất thấp hơn hẳn tin nhắn (chỉ bắn khi membership thực sự đổi).
    */
   private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
 
@@ -82,7 +78,7 @@ public class ChatSessionManager {
     this.routingVersionSync = new RoutingVersionSync(vertx, connector);
     this.messageDelivery = new MessageDelivery(registry, connector);
     vertx.eventBus().consumer(serverId, messageDelivery::onRoutedMessage);
-    vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> sweepIdleLinks());
+    vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> sweepIdleSessions());
   }
 
   public boolean isReady() {
@@ -93,7 +89,7 @@ public class ChatSessionManager {
    * Gọi lúc pod chuẩn bị tắt (xem {@code ColonyApp.doStop()}): đánh dấu not-ready ngay (cho
    * readinessProbe fail sớm, và để {@link #handleSubscribe} từ chối subscribe mới), rồi chờ 1
    * khoảng ngắn cho REMOVE gossip của beacon (xem {@code RoutingGossipPublisher}) kịp lan ra trước
-   * khi caller đóng hẳn {@code Vertx}. Không báo gì cho link đang mở — chúng cứ tiếp tục chạy bình
+   * khi caller đóng hẳn {@code Vertx}. Không báo gì cho stream đang mở — chúng cứ tiếp tục chạy bình
    * thường tới phút chót, vì colony không có quyền tự ý bảo gateway "đi nối chỗ khác" (phải đúng
    * theo routing table mà mọi node khác cũng đang dùng).
    */
@@ -105,84 +101,58 @@ public class ChatSessionManager {
     return delayed;
   }
 
-  void onConnection(ServerWebSocket socket) {
-    var id = generateSessionId();
-    var link = registry.registerLink(id, serverId, socket);
-    socket.handler(buffer -> onMessage(link, buffer));
-    socket.closeHandler(any -> onClose(link));
-    socket.exceptionHandler(ex -> onException(link, ex));
+  void onConnection(GrpcServerRequest<Frame, Frame> request) {
+    var session = new ChatSession(generateSessionId(), request.response());
+    registry.register(session);
+    request.handler(frame -> onMessage(session, frame));
+    request.endHandler(v -> onClose(session));
+    request.exceptionHandler(ex -> onException(session, ex));
   }
 
-  /** Link vật lý vừa đóng — gỡ MỌI subscriber đang cưỡi trên nó (có thể nhiều, giờ link dùng chung), rồi gỡ chính link đó. */
-  private void onClose(ChatLink closedLink) {
-    for (var harborSessionId : Set.copyOf(closedLink.getSubscriberIds())) {
-      registry.removeSubscriber(harborSessionId);
-    }
-    registry.removeLink(closedLink.getId());
-    closedLink.cleanUpAfterClose();
+  private void onClose(ChatSession session) {
+    registry.remove(session.getId());
   }
 
-  private void onException(ChatLink link, Throwable ex) {
-    log.error("an error occurred while reading socket of link {}", link.getId(), ex);
+  private void onException(ChatSession session, Throwable ex) {
+    log.error("an error occurred on session {}", session.getId(), ex);
+    registry.remove(session.getId());
   }
 
-  private void sweepIdleLinks() {
+  private void sweepIdleSessions() {
     var now = System.currentTimeMillis();
-    for (var link : registry.allLinks()) {
-      if (now - link.getLastSeenAt() > SESSION_IDLE_TIMEOUT_MS) {
-        log.info("closing idle link {} ({} subscriber(s))", link.getId(), link.getSubscriberIds().size());
-        link.close();
+    for (var session : registry.allSessions()) {
+      if (now - session.getLastSeenAt() > SESSION_IDLE_TIMEOUT_MS) {
+        log.info("closing idle session {}", session.getId());
+        session.close();
+        registry.remove(session.getId());
       }
     }
   }
 
-  private void onMessage(ChatLink link, Buffer buffer) {
-    link.setLastSeenAt(System.currentTimeMillis());
-    var frameOpt = SocketFrame.decode(buffer);
-    if (frameOpt.isEmpty()) {
-      log.debug("dropping undecodable frame from link {}", link.getId());
-      return;
-    }
-    var frame = frameOpt.get();
-    if (frame.getType() == MessageType.PING) {
-      link.send(pong(frame.getId()));
-      return;
-    }
-    if (frame.getType() == MessageType.SESSION_CLOSED) {
-      registry.removeSubscriber(frame.getHarborSessionId());
-      return;
-    }
-    if (frame.getType() != MessageType.SUBSCRIBE && frame.getType() != MessageType.MESSAGE) {
-      log.debug("unsupported frame type {} from link {}", frame.getType(), link.getId());
-      return;
-    }
-    if (isBlank(frame.getHarborSessionId())) {
-      log.warn("dropping {} frame with missing harborSessionId on link {}", frame.getType(), link.getId());
-      return;
-    }
-    var subscriber = registry.subscriberFor(frame.getHarborSessionId(), link);
+  private void onMessage(ChatSession session, Frame frame) {
+    session.setLastSeenAt(System.currentTimeMillis());
     switch (frame.getType()) {
-      case SUBSCRIBE -> handleSubscribe(subscriber, frame);
-      case MESSAGE -> handleMessage(subscriber, frame);
-      default -> {}
+      case SUBSCRIBE -> handleSubscribe(session, frame);
+      case MESSAGE -> handleMessage(session, frame);
+      default -> log.debug("unsupported frame type {} from session {}", frame.getType(), session.getId());
     }
   }
 
   /**
-   * Đăng ký subscriber này là subscriber của 1 {@code conversationId} cụ thể — thay thế vai trò cũ
+   * Đăng ký session này là subscriber của 1 {@code conversationId} cụ thể — thay thế vai trò cũ
    * của AUTH trên chặng gateway<->backend (AUTH giờ chỉ còn xử lý cục bộ ở harbor). Đồng thời làm
    * luôn việc lazy-create/join membership: nếu frame mang kèm {@code memberUserIds}, union thẳng
    * vào {@link ChannelMembershipRegistry} trước khi check — đủ cho cả DM (harbor tự gửi kèm 2
    * userId lần subscribe đầu) lẫn group (client tự chọn danh sách thành viên), không cần flow
-   * "tạo group" riêng vì hệ thống chưa có AuthN thật (xem ARCHITECTURE.md mục 8).
+   * "tạo group" riêng vì hệ thống chưa có AuthN thật cho việc đó (xem ARCHITECTURE.md mục 8).
    */
-  private void handleSubscribe(ChatSubscriber subscriber, SocketFrame frame) {
+  private void handleSubscribe(ChatSession session, Frame frame) {
     if (!ready) {
-      subscriber.send(subscribeError(subscriber, frame.getId(), "chat node draining"));
+      session.send(subscribeError(frame.getId(), "chat node draining"));
       return;
     }
     if (isBlank(frame.getFromUserId())) {
-      subscriber.send(subscribeError(subscriber, frame.getId(), "missing fromUserId"));
+      session.send(subscribeError(frame.getId(), "missing fromUserId"));
       return;
     }
     UUID userId;
@@ -191,18 +161,18 @@ public class ChatSessionManager {
       userId = UUID.fromString(frame.getFromUserId());
       conversationId = UUID.fromString(frame.getConversationId());
     } catch (IllegalArgumentException | NullPointerException e) {
-      subscriber.send(subscribeError(subscriber, frame.getId(), "invalid/missing fromUserId or conversationId"));
+      session.send(subscribeError(frame.getId(), "invalid/missing fromUserId or conversationId"));
       return;
     }
-    if (subscriber.getUserId() == null) {
-      registry.attachUser(subscriber, userId);
+    if (session.getUserId() == null) {
+      registry.attachUser(session, userId);
     }
 
     CompletionStage<Void> membershipWrite;
-    if (frame.getMemberUserIds() != null && !frame.getMemberUserIds().isEmpty()) {
+    if (!frame.getMemberUserIdsList().isEmpty()) {
       var members = new ArrayList<UUID>();
       members.add(userId);
-      for (var memberUserId : frame.getMemberUserIds()) {
+      for (var memberUserId : frame.getMemberUserIdsList()) {
         var parsed = UUIDUtils.parseOrDefault(memberUserId);
         if (parsed != null) {
           members.add(parsed);
@@ -225,54 +195,51 @@ public class ChatSessionManager {
         .thenAccept(
             isMember -> {
               if (!isMember) {
-                subscriber.send(subscribeError(subscriber, frame.getId(), "not a member of this conversation"));
+                session.send(subscribeError(frame.getId(), "not a member of this conversation"));
                 return;
               }
-              registry.subscribe(subscriber, finalConversationId);
-              subscriber.send(
-                  SocketFrame.builder()
-                      .type(MessageType.SUBSCRIBE_OK)
-                      .id(frame.getId())
-                      .conversationId(finalConversationId.toString())
-                      .harborSessionId(subscriber.getHarborSessionId())
-                      .ts(now())
+              registry.subscribe(session, finalConversationId);
+              session.send(
+                  Frame.newBuilder()
+                      .setId(frame.getId())
+                      .setType(FrameType.SUBSCRIBE_OK)
+                      .setConversationId(finalConversationId.toString())
+                      .setTs(now())
                       .build());
             })
         .exceptionally(
             ex -> {
               log.error("failed to check/write membership for conversation {}", finalConversationId, ex);
-              subscriber.send(subscribeError(subscriber, frame.getId(), "internal error"));
+              session.send(subscribeError(frame.getId(), "internal error"));
               return null;
             });
   }
 
-  private void handleMessage(ChatSubscriber subscriber, SocketFrame frame) {
-    if (subscriber.getUserId() == null) {
-      subscriber.send(error(subscriber, frame.getId(), "not authenticated"));
+  private void handleMessage(ChatSession session, Frame frame) {
+    if (session.getUserId() == null) {
+      session.send(error(frame.getId(), "not authenticated"));
       return;
     }
     if (isBlank(frame.getConversationId())) {
-      subscriber.send(error(subscriber, frame.getId(), "missing conversationId"));
+      session.send(error(frame.getId(), "missing conversationId"));
       return;
     }
 
     var outgoing =
-        SocketFrame.builder()
-            .type(MessageType.MESSAGE)
-            .id(frame.getId())
-            .fromUserId(subscriber.getUserId().toString())
-            .toUserId(frame.getToUserId())
-            .conversationId(frame.getConversationId())
-            .body(frame.getBody())
-            .ts(now())
+        Frame.newBuilder()
+            .setId(frame.getId())
+            .setType(FrameType.MESSAGE)
+            .setFromUserId(session.getUserId().toString())
+            .setConversationId(frame.getConversationId())
+            .setBodyJson(frame.getBodyJson())
+            .setTs(now())
             .build();
 
     if (!messageDelivery.deliverLocally(outgoing)) {
       messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
     }
-    persistMessage(subscriber, frame, outgoing);
-    subscriber.send(
-        SocketFrame.builder().type(MessageType.ACK).id(frame.getId()).harborSessionId(subscriber.getHarborSessionId()).ts(now()).build());
+    persistMessage(session, frame, outgoing);
+    session.send(Frame.newBuilder().setId(frame.getId()).setType(FrameType.ACK).setTs(now()).build());
   }
 
   /**
@@ -282,15 +249,16 @@ public class ChatSessionManager {
    * đọc lại từ {@code frame} gốc của client. Bỏ qua lặng lẽ nếu conversationId sai định dạng — cùng
    * mức độ khoan dung với {@code MessageDelivery.deliverLocally}, không phải lỗi cần báo client.
    */
-  private void persistMessage(ChatSubscriber subscriber, SocketFrame frame, SocketFrame outgoing) {
+  private void persistMessage(ChatSession session, Frame frame, Frame outgoing) {
     UUID conversationId;
     try {
       conversationId = UUID.fromString(outgoing.getConversationId());
     } catch (IllegalArgumentException | NullPointerException e) {
       return;
     }
+    Object body = outgoing.getBodyJson().isEmpty() ? null : Json.decodeValue(outgoing.getBodyJson());
     history
-        .saveMessage(UUID.randomUUID(), conversationId, subscriber.getUserId(), outgoing.getBody(), outgoing.getTs())
+        .saveMessage(UUID.randomUUID(), conversationId, session.getUserId(), body, outgoing.getTs())
         .exceptionally(
             ex -> {
               log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
@@ -321,16 +289,12 @@ public class ChatSessionManager {
     return UUIDUtils.timeBasedUuidAsString();
   }
 
-  private static SocketFrame pong(String id) {
-    return SocketFrame.builder().type(MessageType.PONG).id(id).ts(now()).build();
+  private static Frame error(String id, String reason) {
+    return Frame.newBuilder().setId(id).setType(FrameType.ERROR).setReason(reason).setTs(now()).build();
   }
 
-  private static SocketFrame error(ChatSubscriber subscriber, String id, String reason) {
-    return SocketFrame.builder().type(MessageType.ERROR).id(id).harborSessionId(subscriber.getHarborSessionId()).reason(reason).ts(now()).build();
-  }
-
-  private static SocketFrame subscribeError(ChatSubscriber subscriber, String id, String reason) {
-    return SocketFrame.builder().type(MessageType.SUBSCRIBE_ERROR).id(id).harborSessionId(subscriber.getHarborSessionId()).reason(reason).ts(now()).build();
+  private static Frame subscribeError(String id, String reason) {
+    return Frame.newBuilder().setId(id).setType(FrameType.SUBSCRIBE_ERROR).setReason(reason).setTs(now()).build();
   }
 
   private static long now() {

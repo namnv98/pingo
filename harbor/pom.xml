@@ -96,5 +96,10 @@
             <version>1.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
+        <dependency>
+            <!-- Client cua chang harbor->colony (xem BackendLinkGateway, ARCHITECTURE.md muc 12) -->
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-grpc-client</artifactId>
+        </dependency>
     </dependencies>
 </project>

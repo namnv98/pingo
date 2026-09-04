@@ -11,6 +11,9 @@
 
     <properties>
         <lz4.version>1.8.0</lz4.version>
+        <!-- Cap protoc THEO DUNG protobuf-java runtime (xem root pom.xml), khong dung protoc.version
+             rieng cua vertx-grpc (3.21.12), tranh lech protoc-vs-runtime. -->
+        <protoc.version>${protobuf.version}</protoc.version>
     </properties>
 
     <dependencies>
@@ -42,5 +45,61 @@
             <version>1.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
+
+        <!-- Frame/FrameType/LinkGrpc sinh tu link.proto (harbor<->colony, xem ARCHITECTURE.md muc 12);
+             chi can protobuf-java (runtime message) + grpc-stub/grpc-protobuf (class LinkGrpc sinh ra
+             tham chieu MethodDescriptor/marshaller, du harbor/colony khong dung ImplBase/Stub cua no).
+             KHONG can vertx-grpc-server/client o day, vi 2 cai do chi harbor (client)/colony (server)
+             dung truc tiep, xem harbor/pom.xml, colony/pom.xml. -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tomcat</groupId>
+            <artifactId>annotations-api</artifactId>
+            <version>6.0.53</version>
+            <scope>provided</scope>
+            <!-- grpc-stub's generated @Generated annotation needs javax.annotation.Generated, removed
+                 from java.base since JDK 9; ban toi thieu de compile, khong chay luc runtime. -->
+        </dependency>
     </dependencies>
+
+    <build>
+        <extensions>
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>1.7.1</version>
+            </extension>
+        </extensions>
+        <plugins>
+            <plugin>
+                <groupId>org.xolstice.maven.plugins</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>0.6.1</version>
+                <configuration>
+                    <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}</protocArtifact>
+                    <pluginId>grpc-java</pluginId>
+                    <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                            <goal>compile-custom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

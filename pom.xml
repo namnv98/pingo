@@ -25,6 +25,13 @@
         <delombok.output>${project.build.directory}/delombok</delombok.output>
 
         <vertx.version>4.5.5</vertx.version>
+        <!-- gRPC harbor<->colony (xem discovery/src/main/proto/link.proto). grpc.version khop dung
+             pin noi bo cua io.vertx:vertx-grpc-server/client:4.5.5 (xac nhan qua POM that tren Maven
+             Central, khong doan). protobuf.version = ban protobuf-java THUC SU duoc keo ve transitive
+             qua io.grpc:grpc-protobuf:1.61.0 (3.25.1); co tinh pin protoc GIONG HET version nay
+             (thay vi 3.21.12 ma vertx-grpc tu dung) de tranh lech protoc-vs-runtime. -->
+        <grpc.version>1.61.0</grpc.version>
+        <protobuf.version>3.25.1</protobuf.version>
         <guice.version>7.0.0</guice.version>
         <slf4j.version>1.7.36</slf4j.version>
         <logstash.gelf.version>1.15.0</logstash.gelf.version>
@@ -430,6 +437,34 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
                 <groupId>com.google.inject</groupId>
                 <artifactId>guice</artifactId>
                 <version>${guice.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.grpc</groupId>
+                <artifactId>grpc-bom</artifactId>
+                <version>${grpc.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-grpc-server</artifactId>
+                <version>${vertx.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-grpc-client</artifactId>
+                <version>${vertx.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-grpc-common</artifactId>
+                <version>${vertx.version}</version>
             </dependency>
 
             <dependency>

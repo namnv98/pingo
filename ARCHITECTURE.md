@@ -64,16 +64,19 @@ graph TB
 |---|---|---|
 | `discovery` | Không (thư viện) | `PingoConnector`/`VersionVector`/`Router` (Maglev) — client-side: tra routing table biết `conversationId` thuộc pod nào, gửi tin nhắn cross-node qua EventBus. `Router`/`Maglev`/`VersionVector` hoàn toàn generic (route theo `RoutingKey.hash()`, không biết gì về userId/conversationId) — sự khác biệt nằm ở `RouteByUserIdRequest`/`RouteByConversationIdRequest`, 2 implementation cụ thể của `RoutingKey`. Định nghĩa chung `SocketFrame`-adjacent DTO cho gossip (`Payload`, `SignalingResponse`), `Destination`, `Keeper` (snapshot). |
 | `beacon` | Có | Control-plane duy nhất nói chuyện trực tiếp với **k8s API** (`K8SKeeper`, watch pod colony theo label `app=colony`). Gossip danh sách destination qua EventBus (`RoutingGossipPublisher`). Không đụng gì tới việc đổi routing key sang `conversationId` — chỉ gossip topology pod (ADD/REMOVE), không biết gì về conversation. Chạy local (không k8s) thì dùng `LocalKeeper` với 1 destination cố định. |
-| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) backend shard link xuống đúng pod colony sở hữu conversation đó, relay frame 2 chiều gần như nguyên vẹn (kèm `harborSessionId` để colony demux đúng subscriber trên link dùng chung, xem mục 12). `BackendLinkGateway` giữ shard link ở cấp NODE (dùng chung cho mọi session), không phải session tự giữ link của riêng nó nữa. |
-| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — 1 "subscriber" (`ChatSubscriber`) nó giữ cho 1 conversation ứng với 1 harbor session cụ thể, gửi/nhận qua 1 `ChatLink` (connection WebSocket vật lý từ harbor, đăng ký lúc SUBSCRIBE) — nhiều subscriber có thể dùng chung 1 `ChatLink` (xem mục 12), port 9999 không public ra ngoài. |
+| `harbor` | Có | Public-facing. Nhận SockJS/WebSocket từ client thật, xác thực (AUTH, chỉ xử lý cục bộ) rồi, khi client SUBSCRIBE 1 `conversationId`, mở (hoặc dùng lại) 1 gRPC stream xuống đúng pod colony sở hữu conversation đó (1 stream riêng cho mỗi cặp (session, pod), xem mục 12), relay frame 2 chiều. `BackendLinkGateway` chỉ còn giữ CHUNG 1 `GrpcClient` (= 1 pool connection HTTP/2 vật lý)/pod colony — HTTP/2 tự multiplex mọi stream của mọi session trên đó, không còn cần tự chia shard. |
+| `colony` | Có | Nhận MESSAGE, deliver thẳng nếu conversation có subscriber cục bộ, hoặc forward qua EventBus sang đúng pod đang sở hữu conversation đó (theo Maglev hash của `conversationId`). **Không kết nối trực tiếp với browser** — nhận kết nối gRPC (`Link.Stream`) từ harbor, 1 `ChatSession` = 1 gRPC stream = 1 harbor session, port 9999 không public ra ngoài (xem mục 12). |
 
-## 3. Giao thức `SocketFrame`
+## 3. Giao thức `SocketFrame` (chặng client↔harbor)
 
-Toàn bộ giao tiếp (client↔gateway, gateway↔chat) dùng chung 1 envelope JSON:
+**Chỉ mô tả chặng client↔harbor** — chặng harbor↔colony dùng 1 giao thức khác hẳn (protobuf/gRPC,
+xem mục 12) kể từ khi chuyển sang gRPC; trước đó 2 chặng dùng chung 1 envelope JSON, không còn nữa.
+
+Client↔harbor dùng 1 envelope JSON:
 
 ```json
 {
-  "type": "AUTH | AUTH_OK | AUTH_ERROR | SUBSCRIBE | SUBSCRIBE_OK | SUBSCRIBE_ERROR | MESSAGE | ACK | ERROR | PING | PONG | SESSION_CLOSED",
+  "type": "AUTH | AUTH_OK | AUTH_ERROR | SUBSCRIBE | SUBSCRIBE_OK | SUBSCRIBE_ERROR | MESSAGE | ACK | ERROR | PING | PONG",
   "id": "correlation id — client tự sinh, server echo lại trong ACK/ERROR/SUBSCRIBE_OK/SUBSCRIBE_ERROR",
   "fromUserId": "sender — server tự gán khi xử lý MESSAGE, không tin giá trị client gửi lên",
   "toUserId": "recipient — CHỈ còn mang tính tiện lợi cho client (DM), KHÔNG dùng để route",
@@ -81,8 +84,7 @@ Toàn bộ giao tiếp (client↔gateway, gateway↔chat) dùng chung 1 envelope
   "memberUserIds": "chỉ có ý nghĩa với SUBSCRIBE — danh sách userId cần union vào membership (lazy-create/join)",
   "body": "payload tuỳ ý",
   "reason": "lý do lỗi — chỉ có ở ERROR/AUTH_ERROR/SUBSCRIBE_ERROR",
-  "ts": "epoch millis, server đóng dấu",
-  "harborSessionId": "CHỈ có ý nghĩa trên chặng harbor<->colony (không phải client<->harbor) — xem mục 12"
+  "ts": "epoch millis, server đóng dấu"
 }
 ```
 
@@ -190,40 +192,42 @@ Cả 2 module tổ chức package theo cùng 1 quy ước để đọc là hiể
 
 ```
 harbor/ws/              colony/ws/
-  dto/                              dto/
-    MessageType                       MessageType
-    SocketFrame                       SocketFrame
+  dto/                              (không còn dto/ — colony không có wire format
+    MessageType                      riêng nào nữa, chặng harbor↔colony dùng thẳng
+    SocketFrame                      Frame/FrameType sinh từ discovery/*.proto)
     SocketFrames   (frame builder)
   session/                          session/
-    SockjsSocket   (1 client conn,     ChatLink       (1 backend conn vật lý,
-     chỉ nhớ podFor(conversationId))    dùng chung cho NHIỀU subscriber)
-    BackendLink    (1 shard link,      ChatSubscriber (1 subscriber logic
-     dùng chung cho MỌI session         = 1 harbor session, biết N
-     trên node harbor này)              conversationId đang subscribe)
-    MessageSocket  (interface)        MessageChatSocket (interface)
-  backend/                            SessionRegistry  (2 tầng: link + subscriber,
-    BackendLinkGateway                  tra cứu theo user id VÀ conversationId)
-    (shard theo pod, single-flight   delivery/
-     connect, subscribe/sendMessage/   MessageDelivery
-     reconnect theo conversationId,    (deliver local / forward EventBus,
-     notifySessionClosed lúc session    route theo conversationId, gắn
-     đóng — xem mục 12)                 harborSessionId trước khi gửi)
-  routing/                          membership/
-    RoutingVersionSync                 ChannelMembershipRegistry
-    (đồng bộ version + re-subscribe    (Postgres, ai thuộc conversation nào)
-     từng (session,conversationId)   routing/
-     đang mở khi pod sở hữu đổi)        RoutingVersionSync
-                                        (đồng bộ version, không cần di chuyển
-                                         gì — chat không chủ động dial ra)
+    SockjsSocket   (1 client conn,     ChatSession    (1 gRPC stream = 1 harbor
+     giữ backendStreams: Map<pod,       session, giữ userId/conversationIds
+     BackendStream>)                    riêng, send() = response.write(Frame))
+    BackendStream  (1 gRPC stream      SessionRegistry (1 tầng: tra theo
+     = 1 cặp (session,pod))              userId VÀ conversationId)
+    MessageSocket  (interface)
+  backend/                          delivery/
+    BackendLinkGateway                 MessageDelivery
+    (1 GrpcClient/pod dùng CHUNG        (deliver local / forward EventBus,
+     cho mọi session — HTTP/2 tự        payload giờ là Frame.toByteArray(),
+     multiplex; single-flight           không phải JSON — xem mục 12)
+     connect, evict-on-proven-       membership/
+     failure — xem mục 12)              ChannelMembershipRegistry
+  routing/                              (Postgres, ai thuộc conversation nào)
+    RoutingVersionSync                routing/
+    (đồng bộ version + re-subscribe    RoutingVersionSync
+     từng (session,conversationId)     (đồng bộ version, không cần di chuyển
+     đang mở khi pod sở hữu đổi)        gì — chat không chủ động dial ra)
   SockjsSocketManager (cửa trước)   ChatSessionManager (cửa trước)
-  SockjsSocketServer  (verticle)    ChatSocketServer   (verticle)
+  SockjsSocketServer  (verticle)    ChatSocketServer   (verticle, mount GrpcServer
+                                     lên HttpServer HTTP/2 thuần — xem mục 12)
 ```
 
-- **`dto`** — định dạng frame trên dây (wire format).
-- **`session`** — biểu diễn 1 connection đang sống + tra cứu. Bên colony tách 2 khái niệm: `ChatLink`
-  (connection vật lý) và `ChatSubscriber` (subscriber logic, 1:1 với 1 harbor session) — xem mục 12.
+- **`dto`** (chỉ còn ở harbor) — định dạng frame trên dây cho chặng client↔harbor (JSON). Chặng
+  harbor↔colony không còn dto riêng — dùng thẳng `Frame`/`FrameType` sinh từ
+  `discovery/src/main/proto/link.proto` (1 schema dùng chung, compile 1 lần — xem mục 12).
+- **`session`** — biểu diễn 1 connection/stream đang sống + tra cứu. HTTP/2 tự multiplex nhiều
+  `BackendStream`/`ChatSession` trên CHUNG 1 connection vật lý, nên không còn cần tách connection vật
+  lý khỏi subscriber logic như thời N-shard-link nữa (xem mục 12).
 - **`backend`/`delivery`** — quyết định tin nhắn phải đi đâu và đưa nó đi.
-- **`membership`** (mới, chỉ colony) — ai thuộc conversation nào, lưu bền trong Postgres (xem mục 8).
+- **`membership`** (chỉ colony) — ai thuộc conversation nào, lưu bền trong Postgres (xem mục 8).
 - **`routing`** — biết pod nào đang sở hữu conversation nào (dựa trên gossip từ beacon).
 - File ở gốc package (`*Manager`, `*Server`) — nơi ráp mọi thứ lại, là "cửa trước" nhận connection
   và dispatch protocol.
@@ -433,78 +437,105 @@ việc chưa cần làm cho mục tiêu hiện tại (prototype/MVP), biết tr�
 (Membership từng nằm trong danh sách giới hạn ở đây do in-memory-theo-pod — đã chuyển sang Postgres,
 xem mục 8.)
 
-## 12. Sharding backend link harbor↔colony — dùng chung 1 link cho nhiều session
+## 12. Chặng harbor↔colony chạy gRPC — thay hẳn N-shard-link tự viết
 
-### Vấn đề: connection fan-out không có trần
+### Bối cảnh: vấn đề connection fan-out, và vì sao không tự viết N-shard-link nữa
 
-Thiết kế trước mục này (mục 4, 11): mỗi client session giữ **1 backend link riêng/pod colony**
-(`BackendLinkGateway`/`SockjsSocket.linksByPod` cũ) — dùng chung giữa các conversation của CHÍNH
-session đó, nhưng không dùng chung với session khác. Hệ quả: tổng số connection vật lý giữa 1 pod
-`harbor` và cụm `colony` scale theo `O(số session đang active × số pod colony khác nhau mà mỗi
-session chạm tới)`, không phải `O(số pod harbor × số pod colony)`. Với nhiều user cùng lúc, mỗi
-người tham gia nhiều group rải trên nhiều pod, con số này có thể lên tới hàng chục nghìn connection
-cho 1 pod harbor — không có trần nào chặn lại, và không phụ thuộc số pod colony đang chạy.
+Thiết kế cũ nhất (mục 4, 11): mỗi client session giữ 1 backend link WebSocket riêng/pod colony —
+connection fan-out scale theo `O(số session đang active × số pod colony)`, không có trần. Thiết kế
+kế tiếp (đã XOÁ, từng nằm ở mục này) sửa bằng cách tự viết "N shard link/pod, dùng chung cho mọi
+session" (hash `sessionId` để chọn shard) — chặn trần connection ở `O(số pod harbor × số pod colony ×
+N)`, đổi lấy phải tự tay giải quyết 1 loạt vấn đề phát sinh: colony phải tách `ChatLink`
+(connection vật lý)/`ChatSubscriber` (subscriber logic) làm 2 lớp, mọi frame phải mang kèm
+`harborSessionId` để demux đúng subscriber trên link dùng chung, phải tự định nghĩa thêm 1 loại frame
+`SESSION_CLOSED` vì TCP close của 1 link dùng chung không còn đồng nghĩa "1 session rời đi" nữa.
 
-Hệ thống lớn tương tự (Slack's Gateway Server/Channel Server, xem mục tham khảo cuối `readme.md`)
-là nguồn cảm hứng cho mô hình `harbor`/`colony` nói chung (2 tầng, sharded theo consistent hashing,
-Channel Server fan-out cho mọi Gateway Server đang subscribe rồi mỗi Gateway Server fan-out tiếp cho
-client cục bộ — khớp với `MessageDelivery.deliverLocally` hiện tại). **Nhưng bài viết công khai đó
-KHÔNG tiết lộ chi tiết connection giữa Gateway Server và Channel Server dùng 1-connection/user hay
-pool dùng chung** — câu duy nhất liên quan chỉ nói GS subscribe tới CS "based on consistent hashing
-asynchronously", không nói gì thêm. Giải pháp N-shard-link dưới đây do tự suy luận từ chính vấn đề
-connection fan-out ở trên, không phải sao chép 1 chi tiết đã được Slack xác nhận công khai.
+Nhận ra: **HTTP/2 (nền tảng của gRPC) đã giải quyết đúng bài toán "nhiều luồng logic dùng chung 1
+connection vật lý" này ở tầng transport** — đó chính là stream multiplexing, cơ chế lõi của giao
+thức, không phải 1 tính năng phụ. Toàn bộ máy móc N-shard-link (hash shard, `ChatLink`/`ChatSubscriber`
+2 tầng, `harborSessionId` demux, `SESSION_CLOSED`) chỉ là tự tay xây lại 1 phần nhỏ, thô hơn, của
+đúng thứ mà transport layer đã làm sẵn — đổi transport thay vì tiếp tục vá tự viết.
 
-### Giải pháp: N shard link/pod, dùng chung cho mọi session
+### Thiết kế mới: 1 gRPC stream/(session,pod), multiplex trên 1 connection HTTP/2/pod
 
-`harbor` giờ giữ **N link song song (shard) cho MỖI pod colony** (`chatBackendShardsPerPod` trong
-`LegoConfig1`, mặc định 4), dùng CHUNG cho mọi client session trên node harbor đó — thay vì 1
-link/session. Shard được chọn bằng hash ổn định của `session.getId()`
-(`BackendLinkGateway.shardFor`, `Math.floorMod(sessionId.hashCode(), N)`): cùng 1 session luôn rơi
-vào đúng 1 shard trong suốt vòng đời của nó, nên mọi conversation của session đó trên cùng 1 pod vẫn
-tiếp tục dùng chung đúng 1 link vật lý và giữ nguyên thứ tự frame như thiết kế cũ — chỉ có traffic
-của các session KHÁC mới có thể "đụng" nhau khi cùng rơi vào 1 shard (~1/N khả năng), thay vì hoàn
-toàn cô lập như trước. Đánh đổi: tổng số connection giờ bị chặn trên bởi
-`O(số pod harbor × số pod colony × N)` — hằng số theo hạ tầng, không phụ thuộc số session/conversation
-— đổi lấy việc 1 session ồn ào có thể ảnh hưởng (head-of-line blocking) tới ~1/N session khác đang
-dùng chung shard.
+Dùng `io.vertx:vertx-grpc-server` + `io.vertx:vertx-grpc-client` (API `Future`/`ReadStream`/
+`WriteStream` thuần Vert.x — KHÔNG dùng `io.vertx:vertx-grpc` cổ điển, vốn bọc `ManagedChannel`/
+`ServerBuilder` của grpc-java, đúng kiểu "mỗi call có thể tự mở 1 connection riêng" mà mình đang muốn
+tránh). Schema dùng chung, định nghĩa 1 lần ở `discovery/src/main/proto/link.proto` (compile bằng
+`protobuf-maven-plugin` + `protoc-gen-grpc-java`, sinh `Frame`/`FrameType`/`LinkGrpc` — dùng
+`LinkGrpc.getStreamMethod()` để lấy `MethodDescriptor`, bỏ qua hẳn `LinkImplBase`/stub kiểu
+`StreamObserver` sinh kèm, không hợp phong cách `Future`-based của codebase này):
 
-Chọn shard theo `sessionId` (không phải theo `conversationId`) có chủ đích: giữ nguyên tính chất "1
-session luôn dùng 1 link cho 1 pod" của thiết kế cũ, chỉ thêm đúng 1 chiều chia sẻ mới (giữa các
-session) — thay đổi tối thiểu so với hành vi hiện có.
+```protobuf
+service Link {
+  rpc Stream(stream Frame) returns (stream Frame);  // 1 call = 1 (harbor session, colony pod)
+}
+```
 
-### Vì sao colony phải đổi mô hình session
+- **1 (session, pod) = 1 `BackendStream`** (harbor)/**`ChatSession`** (colony) — trực tiếp, không
+  qua tầng shard trung gian nào. `SockjsSocket.backendStreams: Map<podName, BackendStream>`.
+- **1 pod colony = 1 `GrpcClient` dùng CHUNG** (`BackendLinkGateway.clients: Map<podName,
+  GrpcClient>`) — đây là nơi DUY NHẤT còn tính chất "chia sẻ connection vật lý", và nó nằm ở tầng
+  transport (HTTP/2 tự multiplex), không phải logic tự viết. Không còn `harborSessionId`/
+  `SESSION_CLOSED`/`ChatLink`/`ChatSubscriber` — đóng 1 session giờ chỉ là đóng đúng 1 `BackendStream`
+  (gRPC stream tự nhiên báo end tới colony, colony dọn `ChatSession` tương ứng qua
+  `request.endHandler`), không đụng gì tới stream của session khác dù đang multiplex chung 1
+  connection.
 
-Trước mục này, colony hard-code "1 connection WebSocket vật lý == 1 subscriber logic": 1
-`userId`, 1 tập `conversationIds`, TCP close == dọn dẹp toàn bộ. Một khi 1 link vật lý mang traffic
-của NHIỀU harbor session khác nhau, giả định đó sai — colony tách thành 2 lớp:
+### 3 bug thật gặp khi test trên k3s — và bài học
 
-- **`ChatLink`** (`colony/ws/session/ChatLink.java`) — connection vật lý, giữ `subscriberIds` (những
-  `harborSessionId` nào đang dùng chung link này).
-- **`ChatSubscriber`** (`colony/ws/session/ChatSubscriber.java`) — subscriber logic, 1:1 với 1 harbor
-  session (định danh bởi `harborSessionId` trong mỗi frame, xem mục 3), giữ `userId`/`conversationIds`
-  riêng, `send()` chỉ là proxy ghi xuống `ChatLink` đang gắn.
+Migrate xong biên dịch sạch không có nghĩa là đúng — cả 3 bug dưới đây CHỈ lộ ra khi chạy thật trên
+k3s (`e2e/demux-test.mjs`, `e2e/resilience-test.mjs`, `e2e/load-test.mjs`), không bug nào bắt được
+lúc compile hay review code:
 
-Mọi frame trên chặng harbor↔colony (SUBSCRIBE, MESSAGE, SUBSCRIBE_OK/ERROR, ACK, ERROR) giờ mang
-kèm `harborSessionId` — cả 2 chiều: harbor gắn nó khi gửi lên để colony biết SUBSCRIBE/MESSAGE này
-của session nào (`SessionRegistry.subscriberFor`); colony gắn lại khi gửi xuống
-(`MessageDelivery.deliverLocally`, `ChatSessionManager`) để harbor biết frame trả về này (SUBSCRIBE_OK,
-MESSAGE deliver, ACK...) cần relay cho đúng client session nào (`BackendLinkGateway.relayToSession`
-tra trong map session sống của chính node harbor đó) — vì socket giờ dùng chung, không còn suy ra
-được người nhận chỉ từ chính connection nữa.
+**1. Deadlock do đợi `response()` trước khi coi stream "sẵn sàng ghi".** Colony (bidi-streaming
+server) chỉ thật sự gửi response headers SAU KHI nhận frame đầu tiên từ client — nếu harbor gate
+việc "stream sẵn sàng" trên `request.response()` xong, 2 phía deadlock chờ nhau vĩnh viễn, không
+log lỗi gì cả (cả 2 bên đều đang "chờ" hợp lệ). Fix: `BackendLinkGateway.doConnect` resolve NGAY khi
+có `request` (đã ghi được), gắn response handler song song không chặn.
 
-### `SESSION_CLOSED` — vì TCP close của link không còn đồng nghĩa "1 session rời đi"
+**2. `setHttp2KeepAliveTimeout` (client) làm `response()` trễ ĐÚNG BẰNG giá trị cấu hình.** Đặt
+option này (kể cả 30s) làm `request.response()` không resolve cho tới ~29s sau, dù colony đã xử lý
+và ghi phản hồi trong 148ms — nghi là quirk/bug riêng của vertx-grpc-client 4.5.5 khi kết hợp option
+này với bidi-streaming. Fix: không set option này.
 
-Trước đây, đóng session ở harbor tự động đóng backend link của nó, và TCP close đó là tín hiệu để
-colony dọn dẹp subscriber. Giờ link dùng chung — 1 session đóng KHÔNG được phép đóng link (session
-khác vẫn đang dùng). Harbor phải chủ động báo bằng 1 frame mới, `SESSION_CLOSED{harborSessionId}`
-(`BackendLinkGateway.notifySessionClosed`, gọi từ `SockjsSocketManager.onClose`), để colony gỡ đúng
-`ChatSubscriber` đó (`ChatSessionManager.onMessage` → `SessionRegistry.removeSubscriber`) mà không
-đụng gì tới link hay subscriber khác. TCP close của chính link vật lý (colony pod chết, timeout
-PONG...) vẫn dọn dẹp MỌI subscriber đang cưỡi trên nó, như trước.
+**3. Bỏ hẳn keepalive khiến pool connection idle lâu có thể "chết ngầm" (k3s CNI/conntrack rớt kết
+nối idle) mà client không biết — request kế tiếp treo vô thời hạn, không exception nào cả.** Thử
+`setIdleTimeout` để đóng chủ động connection rảnh — **tệ hơn**: option này đóng CẢ connection dựa
+trên traffic tầng transport tổng hợp, không phân biệt được có session nào trên đó vẫn đang sống chỉ
+là tạm im lặng (bình thường với chat: user không gõ gì trong >20s là chuyện thường) — đo được thật:
+2 SUBSCRIBE thành công (~100ms), rồi ĐÚNG 20000ms sau (khớp giá trị cấu hình) cả 2 phía đồng thời
+"Connection was closed", giết 1 session đang sống khoẻ mạnh. Vì 1 connection dùng chung cho NHIỀU
+session, giết nhầm kiểu này lây sang mọi session khác đang multiplex chung — tệ hơn hẳn không làm gì.
 
-**Giới hạn đã biết, cố tình gác lại** (cùng tinh thần mục 8, 9, 11): `SESSION_CLOSED` là best-effort,
-chỉ gửi khi session đóng "sạch" (graceful). Nếu pod harbor crash trước khi kịp gửi, colony giữ lại 1
-`ChatSubscriber` "ma" — vô hại về mặt chức năng (ghi vào nó chỉ rơi vào hư không vì harbor session đã
-mất, không lỗi lộ ra ngoài) nhưng tốn 1 chút bộ nhớ, cho tới khi chính link vật lý đó chết/reconnect
-mới bị dọn theo. Không xây thêm 1 tầng heartbeat riêng cho từng subscriber cho lần đổi này — chưa
-cần thiết ở quy mô hiện tại.
+**Fix cuối cùng, đang dùng:** không cấu hình keepalive/idle-timeout tầng transport ở cả 2 phía.
+Thay vào đó, phản ứng dựa trên BẰNG CHỨNG cụ thể thay vì đoán theo thời gian rảnh:
+- `client.request(...)` (bước mở connection) được bọc `CONNECT_TIMEOUT_MS=5000` — trước đó KHÔNG có
+  timeout nào bảo vệ bước này (`HANDSHAKE_TIMEOUT_MS` chỉ áp dụng SAU khi có `request`); nếu pool
+  HTTP/2 duy nhất/pod (`HttpClientOptions.DEFAULT_HTTP2_MAX_POOL_SIZE=1`, hàng chờ không giới hạn —
+  `DEFAULT_MAX_WAIT_QUEUE_SIZE=-1`, không bao giờ tự reject) bị kẹt, request kế tiếp xếp hàng vô thời
+  hạn không lỗi gì — bắt được qua kịch bản: chạy `load-test.mjs` (50 session) nhiều lần liên tiếp lên
+  cùng 1 cặp pod, 1 lần trong 4 lần `client.request()` mất tới 48s mới resolve (không phải chết hẳn,
+  chỉ chậm bất thường) — đúng lúc colony đóng hàng loạt session idle cùng lúc trên connection dùng
+  chung (tranh chấp tạm thời khi nhiều stream cũ đóng đồng loạt, không phải rò rỉ vĩnh viễn).
+- Khi `client.request()` timeout, hoặc 1 stream đã mở chứng minh hỏng thật (SUBSCRIBE không được ack
+  trong `HANDSHAKE_TIMEOUT_MS`, hoặc response end/error) → evict `GrpcClient` của pod đó khỏi
+  `clients` (`BackendLinkGateway.evictClient`) — lần `ensureStream` kế tiếp tự mở connection MỚI.
+  Tự phục hồi trong 1 chu kỳ retry, không cần can thiệp tay.
+- `BackendStream.end()` phải dùng `cancel()` (không phải `end()`) cho 1 stream chưa từng `write()`
+  lần nào (VD: `client.request()` trả về TRỄ, sau khi đã timeout và bị bỏ) — `end()` trên gRPC
+  client-streaming ném `IllegalStateException` nếu chưa gửi message nào, đúng theo semantics gRPC.
+
+Xác nhận bằng test thật: `demux-test.mjs` (đúng đắn/cô lập session) và `resilience-test.mjs` (chaos —
+kill cả 3 pod colony giữa lúc có tải) pass sạch nhiều lần; `load-test.mjs` (50 session, ~2.5k msg/s)
+pass 100% delivered/0% errored/0% silent lặp lại nhiều lần liên tiếp, kể cả khi 1 lần trong nhiều lần
+gặp đúng kịch bản contention ở trên — tự phục hồi ở lần chạy kế tiếp mà không cần deploy lại.
+
+**Giới hạn đã biết, gợi ý cải thiện sau (chưa làm, chưa cần thiết ở quy mô hiện tại):** dưới tải
+đồng bộ dồn dập kiểu synthetic (nhiều session mở/đóng hàng loạt trong thời gian ngắn, như
+`load-test.mjs` chạy lặp lại liên tiếp), việc chỉ có ĐÚNG 1 connection HTTP/2 vật lý/pod có thể gặp
+tranh chấp tạm thời như mô tả ở bug #3 — bị chặn (bounded) bởi `CONNECT_TIMEOUT_MS` và tự phục hồi,
+nhưng nếu vấn đề này chứng minh ảnh hưởng thật ở quy mô production, có thể cân nhắc tune thêm
+`Http2Settings.setMaxConcurrentStreams` (phía server, `ChatSocketServer`/colony) và
+`http2MultiplexingLimit`/`http2MaxPoolSize` (phía client, `BackendLinkGateway`/harbor) — đã thảo luận
+trong quá trình làm migration này nhưng chưa implement, chỉ ghi lại làm gợi ý.

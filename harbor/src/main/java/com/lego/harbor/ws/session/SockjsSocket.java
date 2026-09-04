@@ -8,16 +8,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletionStage;
 
 import lombok.*;
 
 /**
- * Connection SockJS công khai (public-facing) của một client. Không còn tự giữ {@link BackendLink}
- * riêng — link xuống colony giờ dùng CHUNG cho mọi session trên node harbor này, sharded theo pod
- * (xem {@code BackendLinkGateway}); session này chỉ còn nhớ NÓ đang trỏ vào pod nào cho mỗi
- * conversation, không sở hữu link vật lý nữa.
+ * Connection SockJS công khai (public-facing) của một client. Giữ riêng 1 {@link BackendStream}
+ * (gRPC bidi stream) cho MỖI pod colony nó từng cần nói chuyện — không còn dùng chung với session
+ * khác (xem {@code BackendLinkGateway}, ARCHITECTURE.md mục 12): HTTP/2 tự multiplex nhiều stream
+ * trên chung 1 connection vật lý tới cùng pod, nên "chia sẻ" giờ nằm ở tầng transport, không phải
+ * tầng ứng dụng tự làm tay nữa.
  */
 @Getter
 @Setter
@@ -32,6 +34,11 @@ public class SockjsSocket implements MessageSocket {
 
   /** conversationId đang subscribe → tên pod hiện đang sở hữu nó. */
   private final Map<UUID, String> podByConversation = new ConcurrentHashMap<>();
+
+  /** Tên pod colony → gRPC stream đang mở tới đúng pod đó cho CHÍNH session này (xem {@link BackendStream}). */
+  private final Map<String, BackendStream> backendStreams = new ConcurrentHashMap<>();
+  /** Single-flight: nhiều SUBSCRIBE/MESSAGE cùng cần mở stream tới 1 pod lần đầu chỉ connect đúng 1 lần. */
+  private final Map<String, CompletableFuture<BackendStream>> connectingStreams = new ConcurrentHashMap<>();
 
   /**
    * "Nhớ" lại memberUserIds từng biết cho mỗi conversationId — CẦN THIẾT để gửi lại mỗi lần

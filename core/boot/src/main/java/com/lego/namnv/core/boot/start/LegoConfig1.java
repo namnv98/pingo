@@ -34,13 +34,6 @@ public class LegoConfig1 {
    */
   private HttpServerConfig chatBackend;
   /**
-   * Chỉ dùng bởi harbor: số link song song (shard) cho MỖI pod colony, dùng CHUNG cho mọi client
-   * session trên node harbor này (thay vì 1 link/session như trước) — xem
-   * {@code BackendLinkGateway#shardFor}. Giảm mạnh tổng số connection vật lý harbor&lt;-&gt;colony, đổi
-   * lại 1 session ồn ào có thể ảnh hưởng tới ~1/N session khác đang rơi vào cùng shard.
-   */
-  @Builder.Default private int chatBackendShardsPerPod = 4;
-  /**
    * Secret dùng chung để ký (colony, lúc /register /login) và verify (harbor, lúc AUTH) token JWT
    * xác thực client — xem {@code com.lego.namnv.core.common.token.JwtHelper}. BẮT BUỘC harbor và
    * colony phải cấu hình CÙNG 1 giá trị, nếu không mọi AUTH sẽ fail verify chữ ký. Có default để

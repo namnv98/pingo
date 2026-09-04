@@ -1,7 +1,9 @@
 package com.lego.harbor.ws.dto;
 
 /**
- * Các loại frame trao đổi trên chat socket (cả 2 chặng client&lt;-&gt;gateway và gateway&lt;-&gt;chat-backend).
+ * Các loại frame trao đổi trên chat socket client&lt;-&gt;gateway (SockJS/WebSocket) — chặng
+ * gateway&lt;-&gt;chat-backend giờ dùng {@code FrameType} bên protobuf, xem
+ * {@code discovery/src/main/proto/link.proto}.
  */
 public enum MessageType {
     /**
@@ -67,12 +69,5 @@ public enum MessageType {
      * sách hội thoại/badge...). Chỉ gateway gửi, colony không có khái niệm này (xem
      * {@code RoutingVersionSync#onMembershipChanged}).
      */
-    CONVERSATION_ADDED,
-    /**
-     * Gateway -&gt; colony: 1 harbor session cụ thể vừa đóng (browser rời đi), dù backend link dùng
-     * chung với session khác vẫn còn sống — báo cho colony biết để gỡ đúng subscriber đó khỏi
-     * registry, vì giờ TCP close của link không còn đồng nghĩa "session này đã rời" nữa (xem
-     * {@code BackendLinkGateway#notifySessionClosed}).
-     */
-    SESSION_CLOSED
+    CONVERSATION_ADDED
 }
