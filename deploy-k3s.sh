@@ -17,6 +17,21 @@
 #   sudo chmod 644 /etc/rancher/k3s/k3s.yaml   # k3s reset lai quyen file nay moi lan restart
 # Sau buoc setup 1 lan do, script chay lai bao nhieu lan cung KHONG can sudo nua.
 #
+# Neu may dung firewalld (Fedora/Arch/EndeavourOS mac dinh bat san): firewalld chan traffic
+# pod-to-pod qua cac interface ao (cni0/flannel.1/docker0) vi chung roi vao zone "public" mac
+# dinh --> beacon khong join duoc Hazelcast (NoDataMemberInClusterException: "No member group is
+# available to assign partitions"), metrics-server khong scrape duoc kubelet ("no route to host").
+# Trieu chung de nhan: bat ky lenh nc/curl/kubectl pod-to-pod nao cung bao "no route to host" dau
+# du DNS resolve dung va route table co day du. Script tu kiem tra va canh bao o
+# ensure_firewalld_zones() ben duoi, nhung khong tu sudo thay ban -- chay tay 1 lan (can sudo):
+#   sudo firewall-cmd --permanent --zone=trusted --add-interface=cni0
+#   sudo firewall-cmd --permanent --zone=trusted --add-interface=flannel.1
+#   sudo firewall-cmd --permanent --zone=trusted --add-interface=docker0
+#   sudo firewall-cmd --reload
+#   sudo systemctl restart k3s   # de flannel/k3s ghi lai iptables/nftables rule sau reload
+# Sau buoc setup 1 lan do, script chay lai bao nhieu lan cung KHONG can lam lai (tru khi
+# cni0/flannel.1/docker0 bi xoa va tao lai voi ten khac, hiem khi xay ra).
+#
 # Usage:
 #   ./deploy-k3s.sh                  # lam tat: cai dat (neu thieu) + build + image + deploy
 #   ./deploy-k3s.sh --skip-install   # da co k3s/helm san roi, bo qua buoc cai dat
@@ -63,12 +78,43 @@ for arg in "$@"; do
     --skip-deploy) DO_DEPLOY=0 ;;
     --uninstall) ACTION_UNINSTALL=1 ;;
     -h|--help)
-      sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "Khong nhan dien duoc tham so: $arg (dung --help de xem huong dan)" ;;
   esac
 done
+
+# ============================================================================
+# 0. Kiem tra firewalld co chan traffic pod-to-pod khong (chi CANH BAO, khong tu sudo thay ban --
+#    xem giai thich day du o comment dau file). Bo qua neu khong dung firewalld hoac khong co
+#    quyen doc zone (khong sao, se phat hien that su khi pod that su khong join duoc nhau).
+# ============================================================================
+
+ensure_firewalld_zones() {
+  command -v firewall-cmd >/dev/null 2>&1 || return 0
+  systemctl is-active --quiet firewalld 2>/dev/null || return 0
+
+  local need_fix=0
+  for iface in cni0 flannel.1 docker0; do
+    ip link show "$iface" >/dev/null 2>&1 || continue # interface chua ton tai (vd lan dau chay), bo qua
+    local zone
+    zone="$(sudo firewall-cmd --get-zone-of-interface="$iface" 2>/dev/null || echo "")"
+    if [ "$zone" != "trusted" ]; then
+      need_fix=1
+    fi
+  done
+
+  if [ "$need_fix" -eq 1 ]; then
+    warn "firewalld dang chan traffic pod-to-pod (cni0/flannel.1/docker0 khong o zone 'trusted')." \
+         "Beacon se khong join duoc Hazelcast, metrics-server se khong scrape duoc kubelet." \
+         "Chay 1 lan de sua (xem chi tiet o comment dau file):" \
+         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=cni0" \
+         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=flannel.1" \
+         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=docker0" \
+         "  sudo firewall-cmd --reload && sudo systemctl restart k3s"
+  fi
+}
 
 # ============================================================================
 # 1. Cai dat k3s + helm (idempotent -- bo qua neu da co)
@@ -267,6 +313,7 @@ fi
 command -v kubectl >/dev/null 2>&1 || die "Can 'kubectl' (thuong di kem k3s hoac cai rieng)"
 command -v helm >/dev/null 2>&1 || die "Can 'helm' -- chay lai khong co --skip-install de tu cai"
 
+ensure_firewalld_zones
 ensure_namespace
 
 if [ "$DO_BUILD" -eq 1 ]; then
