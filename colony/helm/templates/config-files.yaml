@@ -36,7 +36,8 @@ data:
         user: pingo
         password: pingo-local-dev
         params:
-          maxSize: 8
+          # xem giai thich o colony/src/main/resources/app.yaml (ban local dev)
+          maxSize: 24
           maxWaitQueueSize: 1024
   log4j2.xml: |
 {{ .Files.Get "config/log4j2.xml" | indent 4 }}

@@ -1,6 +1,7 @@
 package com.pingo.colony.ws;
 
 import com.pingo.connector.PingoConnector;
+import com.pingo.core.common.exception.ExceptionUtils;
 import com.pingo.core.common.support.UUIDUtils;
 import com.pingo.chat.grpc.Frame;
 import com.pingo.chat.grpc.FrameType;
@@ -11,6 +12,7 @@ import com.pingo.colony.ws.routing.RoutingVersionSync;
 import com.pingo.colony.ws.session.ChatSession;
 import com.pingo.colony.ws.session.SessionRegistry;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.ConnectionPoolTooBusyException;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.server.GrpcServerRequest;
@@ -20,6 +22,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -59,6 +62,13 @@ public class ChatSessionManager {
   private final MessageDelivery messageDelivery;
   /** false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe (xem {@code RestApiVerticle}). */
   private volatile boolean ready = true;
+  /**
+   * Throttle log cho {@link #persistMessage} khi DB pool qua tai — xem giai thich chi tiet tai noi
+   * dung. Dung {@link AtomicLong} thay vi volatile long vi nhieu event-loop thread (moi thread 1
+   * context rieng) co the goi persistMessage dong thoi.
+   */
+  private final AtomicLong lastPoolExhaustedLogAt = new AtomicLong();
+  private final AtomicLong poolExhaustedSuppressedCount = new AtomicLong();
 
   public ChatSessionManager(
       String serverId, Vertx vertx, PingoConnector connector, ConversationMembershipRegistry membership, MessageHistoryRegistry history) {
@@ -250,7 +260,31 @@ public class ChatSessionManager {
         .saveMessage(UUID.randomUUID(), conversationId, session.getUserId(), body, outgoing.getTs())
         .exceptionally(
             ex -> {
-              log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
+              // DB pool qua tai (ConnectionPoolTooBusyException) la tin hieu backpressure THUONG GAP
+              // duoi tai cao, khong phai loi la. Van de thuc te gap phai: duoi tai nang, exception nay
+              // co the xay ra hang nghin lan/giay -- du chi log 1 dong ngan (khong full stack trace),
+              // toc do GHI LOG THO (moi dong qua Disruptor ring buffer roi Console appender ghi xuong
+              // container stdout pipe) van du lon de lam nghen chinh pipe do (container runtime doc
+              // khong kip), roi ACK cham theo, harbor tuong stream chet (MESSAGE_ACK_TIMEOUT) roi
+              // evict/error hang loat -- vong lap tu khuech dai (quan sat duoc: throughput sup do VA
+              // "kubectl logs" tra ve rong dong thoi trong luc nay, ca 2 cung mot nguyen nhan). Throttle
+              // con lai toi da 1 dong/giay cho dung 1 loai loi nay, kem so lan bi nen, la du de vong
+              // lap khong the hinh thanh trong khi van giu duoc tin hieu debug that su can.
+              var rootCause = ExceptionUtils.getRootCause(ex);
+              if (rootCause instanceof ConnectionPoolTooBusyException) {
+                var now = System.currentTimeMillis();
+                var last = lastPoolExhaustedLogAt.get();
+                if (now - last >= 1000 && lastPoolExhaustedLogAt.compareAndSet(last, now)) {
+                  var suppressed = poolExhaustedSuppressedCount.getAndSet(0);
+                  log.warn(
+                      "failed to persist message {} for conversation {}: {} ({} lan khac bi nen trong 1s qua)",
+                      frame.getId(), conversationId, rootCause.getMessage(), suppressed);
+                } else {
+                  poolExhaustedSuppressedCount.incrementAndGet();
+                }
+              } else {
+                log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
+              }
               return null;
             });
   }

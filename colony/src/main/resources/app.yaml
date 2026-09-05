@@ -39,5 +39,9 @@ database:
     user: pingo
     password: pingo-local-dev
     params:
-      maxSize: 8
+      # 8 la bottleneck that: load-test 50 session/~2500 tin/s lam Postgres connection pool nghen
+      # ("Connection pool reached max wait queue size"), Postgres cluster nay cho phep max_connections=100
+      # va chi colony + hall dung pool nay (toi da 3 replica colony trong resilience-test) nen 24/replica
+      # van con nhieu du dia (3*24=72, con du cho hall + cac ket noi admin khac).
+      maxSize: 24
       maxWaitQueueSize: 1024

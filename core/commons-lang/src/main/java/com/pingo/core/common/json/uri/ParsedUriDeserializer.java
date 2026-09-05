@@ -61,7 +61,11 @@ public class ParsedUriDeserializer extends JsonDeserializer<ParsedUri> {
             var it = params.fields();
             while (it.hasNext()) {
                 var ele = it.next();
-                map.put(ele.getKey(), ele.getValue().textValue());
+                // Jackson's textValue() tra ve null cho node khong phai TextNode -- YAML so nguyen
+                // (VD maxSize: 8, maxWaitQueueSize: 1024, khong quote) parse thanh IntNode, khong
+                // phai TextNode, nen truoc day luon bi map thanh null (roi JdbcConfig fallback ve
+                // default). asText() stringify duoc moi loai scalar node, giu dung gia tri cau hinh.
+                map.put(ele.getKey(), ele.getValue().asText());
             }
             parsed.setParams(map);
         }

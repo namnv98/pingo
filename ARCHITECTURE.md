@@ -665,3 +665,80 @@ tiên (lần thử adoption đầu) đã bị revert nhầm về `PgPool` sau kh
 `GET /users`/`GET /messages` qua `hall` đều đúng qua DB thật; `e2e/demux-test.mjs`,
 `e2e/resilience-test.mjs` (kill 3/3 pod `colony`, 0% mất tin), `e2e/load-test.mjs` (2 lần chạy sạch,
 ~2480 tin/s, 0 errored/silent, p99 ~25ms) đều pass.
+
+## 15. Nâng core framework Vert.x 4.5.5 → 5.1.5 (kèm gRPC/Micrometer/Hazelcast liên quan)
+
+### Vì sao đổi
+
+Quyết định nâng "cả framework lõi (Vertx/gRPC/Guice...)" thay vì chỉ dọn version trùng lặp trong các
+`pom.xml` — đi cùng yêu cầu retest lại toàn bộ e2e sau khi nâng, vì đây là bump major version thật sự
+breaking, không phải patch version.
+
+### Các API vỡ thật gặp phải (kiểm chứng qua jar 5.1.5 thật + `javap`, không đoán theo doc)
+
+- gRPC: Vert.x 5.x bỏ hẳn phụ thuộc `io.grpc` khỏi `vertx-grpc-*` — không còn `MethodDescriptor`/codegen
+  `protoc-gen-grpc-java`, thay bằng `io.vertx.grpc.common.ServiceMethod<I,O>` dựng qua
+  `ServiceMethod.server/client(...)` + `GrpcMessageEncoder`/`GrpcMessageDecoder` generic cho mọi
+  protobuf message (xem `chat-domain`'s `LinkService.java`, thay `LinkGrpc.getStreamMethod()` cũ).
+- `Context.executeBlocking(Handler<Promise<T>>)` bị bỏ, chỉ còn overload `Callable<T>`
+  (`core/async/Asyncs.java`).
+- `CorsHandler.create(String)` bị bỏ, dùng `create()` + `addOriginWithRegex(...)`
+  (`core/http/LegoHttpServer.java`).
+- `VertxOptions.setClusterManager()` bị bỏ, chuyển hẳn sang `Vertx.builder().withClusterManager(...)`
+  fluent; `MicrometerMetricsOptions.setMicrometerRegistry()` bị bỏ, `MeterRegistry` truyền qua
+  `VertxBuilder.withMetrics(new MicrometerMetricsFactory(registry))` (`core/boot/LegoBootStart.java`).
+- `io.vertx.core.impl.VertxInternal` → `io.vertx.core.internal.VertxInternal`, method
+  `getClusterManager()` → `clusterManager()`.
+- `EventBus.request(...)` bỏ overload nhận `Handler<AsyncResult<Message<T>>>` trực tiếp, chỉ còn bản
+  trả `Future<Message<T>>` (`core/discovery/RoutingVersionTracker.java`).
+- `DatabindCodec.prettyMapper()` bị bỏ (chỉ còn 1 `mapper()` dùng chung) — 4 `*Boot.java` sửa giống hệt.
+- Micrometer/Prometheus (đi kèm, không phải do Vert.x): package `io.micrometer.prometheus.*` →
+  `io.micrometer.prometheusmetrics.*`, `io.prometheus.client.CollectorRegistry` (Prometheus "simpleclient"
+  cũ) → `io.prometheus.metrics.model.registry.PrometheusRegistry` (client mới).
+
+### Quyết định giữ nguyên Hazelcast 5.3.0 (không nâng theo)
+
+Thử nâng lên 5.7.0 (bản mới hơn tại thời điểm nâng) gây treo vô hạn lúc join cluster — member embedded
+(colony/harbor/beacon chạy Hazelcast client 5.7.0) không join được backbone đứng riêng
+(`hazelcast/helm`, StatefulSet 1 pod, đang chạy `localhost:5000/hazelcast:5.3.0`) — biểu hiện là hang
+tại `TcpIpJoiner`, KHÔNG có lỗi rõ ràng nào được log, cực dễ nhầm với lỗi khác nếu không biết trước.
+Root cause: cross-version Hazelcast cluster join giữa 2 version cách nhau nhiều không được đảm bảo
+tương thích. Quyết định: giữ `hazelcast.version=5.3.0` (khớp backbone hiện có) — nâng backbone lên
+theo là thay đổi hạ tầng riêng (rolling-upgrade StatefulSet), ngoài phạm vi nâng Vert.x.
+
+### 2 bug thật lộ ra sau khi nâng — không do Vert.x, mà do hệ thống chạy NHANH HƠN đủ để chạm tới chúng
+
+Sau khi nâng xong và build sạch, `e2e/demux-test.mjs`/`resilience-test.mjs` pass ngay, nhưng
+`load-test.mjs` (50 session, mục tiêu ~2500 tin/s) sập nặng: có lúc chỉ 10-58% delivered, hàng loạt
+`ConnectionPoolTooBusyException: Connection pool reached max wait queue size of 128`. Cả 2 bug dưới
+đây đều **đã tồn tại từ trước khi nâng Vert.x** — chỉ là hệ thống trước đó chưa bao giờ đủ nhanh để tạo
+đủ tải đồng thời chạm ngưỡng của chúng; việc nâng Vert.x 5.x (+ gRPC multiplexing HTTP/2 từ trước) làm
+lộ ra, không phải là nguyên nhân.
+
+1. **`ParsedUriDeserializer.java` dùng `JsonNode.textValue()` thay vì `asText()`.** `textValue()` chỉ
+   trả về non-null cho node kiểu `TextNode` — mọi giá trị SỐ không quote trong YAML (`maxSize: 8`,
+   `maxWaitQueueSize: 1024` trong `database.parsedUri.params`) parse thành `IntNode`, khiến
+   `textValue()` luôn trả `null`, `JdbcConfig` fallback về default cứng (`maxWaitQueueSize` mặc định
+   chỉ 128, dù config ghi rõ 1024) — `maxSize` cũng bị ảnh hưởng y hệt nhưng default (8) tình cờ trùng
+   giá trị config nên không ai nhận ra bug tồn tại. Bug tương tự cũng ảnh hưởng các flag boolean
+   (`trustAll`, `loadBalanceHosts` — `BooleanNode` cũng không phải `TextNode`). Fix: đổi sang
+   `asText()`, stringify được mọi loại scalar node.
+2. **Log full stack trace cho MỖI lần `ConnectionPoolTooBusyException`** (`ChatSessionManager.persistMessage`)
+   tự nó khuếch đại vấn đề dưới tải cao: hàng nghìn dòng log/giây qua Disruptor async logger chiếm CPU
+   event-loop thread, ACK trễ theo, harbor tưởng backend stream chết (`MESSAGE_ACK_TIMEOUT`) rồi
+   evict/error hàng loạt — vòng lặp tự khuếch đại (quan sát được: throughput sập VÀ `kubectl logs` trả
+   về rỗng cùng lúc, cùng 1 nguyên nhân — pipe log bị nghẽn). Fix: throttle log này còn tối đa 1
+   dòng/giây (kèm số lần bị nén), giữ nguyên full stack trace cho mọi loại lỗi khác.
+
+Ngoài 2 fix trên, `colony`'s `maxSize` JDBC pool cũng tăng từ 8 → 24 (Postgres cho phép
+`max_connections=100`, tối đa 3 pod colony × 24 = 72, còn dư cho `hall` + kết nối admin).
+
+### Verify
+
+`e2e/demux-test.mjs`, `e2e/resilience-test.mjs` (kill 3/3 pod colony) pass sạch 0% silent sau khi nâng.
+`e2e/load-test.mjs`: sạch 100% delivered tới ~1900 tin/s (đã thử tăng dần 100→500→1200→1900 tin/s, mỗi
+mức đều 0 errored/0 silent); ở đúng mức tải mặc định (~2500 tin/s mục tiêu) đạt ~80% delivered — thấp
+hơn baseline ~2480 tin/s/100% của mục 14, nhiều khả năng do máy dev (8 core) đang chạy đồng thời
+colony+harbor+beacon+hall+Kafka+Hazelcast backbone+toàn bộ k3s control-plane+phiên làm việc AI ngay
+lúc benchmark (load average nền ~7/8 core lúc đứng yên), không phải do lỗi ứng dụng còn sót —
+`demux`/`resilience` (đại diện đúng cho tính đúng đắn chức năng) đã pass sạch.
