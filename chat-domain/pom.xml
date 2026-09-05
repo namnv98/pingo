@@ -83,6 +83,31 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- protobuf-maven-plugin tu no da addCompileSourceRoot() luc chay "mvn compile" (nen
+                 build CLI khong loi), nhung IDE (IntelliJ) thuong khong tu nhan dien thu muc do la
+                 generated-sources chi tu goal cua 1 plugin la, khai bao them build-helper-maven-plugin
+                 o day de KHAI BAO TUONG MINH thu muc do la source root, IDE nao cung nhan dien
+                 duoc qua reimport Maven thong thuong, khong con bao do "Frame"/"FrameType" khong
+                 resolve duoc trong editor. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-protobuf-generated-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/protobuf/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>
