@@ -23,7 +23,9 @@ public class HallBoot extends LegoBootStart {
   private static final String DEFAULT_APP_CONFIG = dir + "/hall/src/main/resources/app.yaml";
 
   public static void main(String[] args) {
-    var mappers = new ObjectMapper[] {DatabindCodec.mapper(), DatabindCodec.prettyMapper()};
+    // Vert.x 5.x bo DatabindCodec.prettyMapper() (chi con 1 mapper dung chung), khong con
+    // 2 instance rieng nua.
+    var mappers = new ObjectMapper[] {DatabindCodec.mapper()};
     LegoJsonModule.registerAllWith(mappers);
 
     var config = loadConfig(StringUtils.defaultIfBlank(System.getenv(CONFIG_FILE_ENV), DEFAULT_APP_CONFIG), LegoConfig1.class);

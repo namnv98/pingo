@@ -37,12 +37,12 @@ public abstract class RoutingVersionTracker {
   }
 
   private void signalingInit() {
+    // Vert.x 5.x bo overload request(..., Handler<AsyncResult<Message<T>>>) -- chi con ban tra ve
+    // Future<Message<T>>, gan lai callback qua onComplete() de giu dung hanh vi AsyncResult cu.
     vertx
         .eventBus()
-        .request(
-            "beacon_init",
-            null,
-            new DeliveryOptions(),
+        .<Object>request("beacon_init", null, new DeliveryOptions())
+        .onComplete(
             event -> {
               if (event.failed()) {
                 log.warn(

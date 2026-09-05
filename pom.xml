@@ -25,19 +25,40 @@
         <lombok.version>1.18.46</lombok.version>
         <delombok.output>${project.build.directory}/delombok</delombok.output>
 
-        <vertx.version>4.5.5</vertx.version>
-        <!-- gRPC harbor<->colony (xem discovery/src/main/proto/link.proto). grpc.version khop dung
-             pin noi bo cua io.vertx:vertx-grpc-server/client:4.5.5 (xac nhan qua POM that tren Maven
-             Central, khong doan). protobuf.version = ban protobuf-java THUC SU duoc keo ve transitive
-             qua io.grpc:grpc-protobuf:1.61.0 (3.25.1); co tinh pin protoc GIONG HET version nay
-             (thay vi 3.21.12 ma vertx-grpc tu dung) de tranh lech protoc-vs-runtime. -->
-        <grpc.version>1.61.0</grpc.version>
-        <protobuf.version>3.25.1</protobuf.version>
+        <!-- Vert.x 5.1.5 (moi nhat on dinh, xac nhan qua Maven Central, khong doan). gRPC
+             harbor/colony (xem chat-domain/src/main/proto/link.proto) tu 5.x tro di KHONG con phu
+             thuoc io.grpc (grpc-java) nua, vertx-grpc-server/client/common tu than da la 1 cai dat
+             gRPC-over-HTTP2 doc lap (xac nhan qua pom that cua vertx-grpc-server:5.1.5 tren Maven
+             Central: io.grpc chi con o scope test). Dispatch qua ServiceMethod (kieu cua chinh
+             Vertx) thay cho MethodDescriptor (kieu cua grpc-java), xem chat-domain's LinkService. -->
+        <vertx.version>5.1.5</vertx.version>
+        <!-- Ban protobuf-java THUC SU duoc vertx-grpc-common:5.1.5 keo ve transitive (xac nhan qua
+             mvn dependency:tree tren 1 scratch project, khong doan), pin protoc GIONG HET version
+             nay de tranh lech protoc-vs-runtime. -->
+        <protobuf.version>4.29.3</protobuf.version>
         <guice.version>7.0.0</guice.version>
-        <slf4j.version>1.7.36</slf4j.version>
+        <!-- Vert.x 5.x yeu cau toi thieu Hazelcast 5.3, va 5.3.0 chinh la version image backbone
+             hazelcast/ dang chay that su (localhost:5000/hazelcast:5.3.0, StatefulSet 1 pod). Giu
+             nguyen 5.3.0 thay vi nang len ban moi hon (VD 5.7.0), da thu that: member embedded
+             (colony/harbor/beacon) chay Hazelcast client 5.7.0 khong join duoc cluster co backbone
+             van la 5.3.0 (hang vo han luc TcpIpJoiner, khong loi ro rang). Nang backbone len theo
+             la thay doi ha tang rieng (rolling-upgrade StatefulSet), ngoai pham vi nang Vert.x. -->
+        <hazelcast.version>5.3.0</hazelcast.version>
+        <!-- Ban micrometer-core THUC SU duoc vertx-micrometer-metrics:5.1.5 keo ve transitive (xac
+             nhan qua mvn dependency:tree). micrometer-registry-prometheus cung phai khop version
+             nay: tu 1.10+, package doi thanh io.micrometer.prometheusmetrics (dung Prometheus
+             client moi io.prometheus.metrics.*), xem LegoBootStart.getPrometheusMeterRegistry(). -->
+        <micrometer.version>1.16.6</micrometer.version>
+        <caffeine.version>3.1.1</caffeine.version>
+        <slf4j.version>2.0.13</slf4j.version>
+        <log4j.version>2.23.1</log4j.version>
         <logstash.gelf.version>1.15.0</logstash.gelf.version>
         <sentry.log4j2.version>5.7.4</sentry.log4j2.version>
-        <disruptor.version>3.4.4</disruptor.version>
+        <!-- Gia tri THAT SU co hieu luc: dependency truc tiep cua root <dependencies> (duoi) pin
+             4.0.0.RC1, va dependency truc tiep cua 1 POM luon thang dependencyManagement cho chinh
+             POM do, nen property nay PHAI khop, khong duoc de lech (truoc day lech 3.4.4 vs
+             4.0.0.RC1 that su dang dung, property cu la property chet). -->
+        <disruptor.version>4.0.0.RC1</disruptor.version>
         <!-- Trước đây scope tham chiếu ${log4j2.scope} nhưng biến này chưa từng được định nghĩa ở đâu,
              khiến Maven cảnh báo "must be one of [provided, compile, runtime, test, system]".
              Định nghĩa ở đây với giá trị mặc định hợp lệ. -->
@@ -441,13 +462,6 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
             </dependency>
 
             <dependency>
-                <groupId>io.grpc</groupId>
-                <artifactId>grpc-bom</artifactId>
-                <version>${grpc.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
                 <groupId>com.google.protobuf</groupId>
                 <artifactId>protobuf-java</artifactId>
                 <version>${protobuf.version}</version>
@@ -478,22 +492,48 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
             <dependency>
                 <groupId>org.apache.logging.log4j</groupId>
                 <artifactId>log4j-api</artifactId>
-                <version>2.23.1</version>
+                <version>${log4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.logging.log4j</groupId>
                 <artifactId>log4j-core</artifactId>
-                <version>2.23.1</version>
+                <version>${log4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.logging.log4j</groupId>
                 <artifactId>log4j-slf4j2-impl</artifactId>
-                <version>2.23.1</version>
+                <version>${log4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
-                <version>2.0.13</version>
+                <version>${slf4j.version}</version>
+            </dependency>
+
+            <!-- Dung chung boi nhieu module (beacon/colony/harbor/core-boot cho hazelcast,
+                 harbor/colony/hall/beacon/core-boot/core-http cho micrometer, core-async/
+                 core-commons-lang/core-cache cho caffeine). Truoc day moi module tu khai version
+                 rieng, co luc lech nhau that (VD caffeine 3.0.1/3.0.2/3.1.1 cung ton tai), quan ly
+                 tap trung o day de chi co 1 version duy nhat tren toan reactor. -->
+            <dependency>
+                <groupId>com.hazelcast</groupId>
+                <artifactId>hazelcast</artifactId>
+                <version>${hazelcast.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+                <version>${micrometer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-registry-prometheus</artifactId>
+                <version>${micrometer.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
             </dependency>
 
             <!-- T E S T I N G -->
@@ -527,22 +567,18 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-api</artifactId>
-            <version>2.23.1</version>
         </dependency>
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.23.1</version>
         </dependency>
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-slf4j2-impl</artifactId>
-            <version>2.23.1</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>2.0.13</version>
         </dependency>
 
         <!-- LOGGING DEPENDENCIES -->
@@ -562,7 +598,6 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
         <dependency>
             <groupId>com.lmax</groupId>
             <artifactId>disruptor</artifactId>
-            <version>4.0.0.RC1</version>
         </dependency>
     </dependencies>
 

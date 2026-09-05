@@ -38,11 +38,14 @@ public class Asyncs {
                 }
             });
 
-        return ctx.<T>executeBlocking(promise -> {
+        // Vert.x 5.x bo overload executeBlocking(Handler<Promise<T>>), chi con Callable<T> (chi
+        // throws Exception, khong nhan Throwable) -- boc lai Throwable khong phai Exception (VD
+        // Error) thanh RuntimeException de van propagate duoc qua Future.
+        return ctx.<T>executeBlocking(() -> {
             try {
-                promise.complete(supplier.get());
+                return supplier.get();
             } catch (Throwable e) {
-                promise.fail(e);
+                throw e instanceof Exception ex ? ex : new RuntimeException(e);
             }
         }).toCompletionStage();
     }

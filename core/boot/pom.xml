@@ -9,7 +9,6 @@
     <artifactId>boot</artifactId>
     <properties>
         <hazelcast.kubernetes.version>2.2.3</hazelcast.kubernetes.version>
-        <hazelcast.version>5.3.0</hazelcast.version>
     </properties>
     <dependencies>
         <dependency>
@@ -30,7 +29,6 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>1.9.5</version>
         </dependency>
 
         <dependency>
@@ -42,31 +40,23 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.9.5</version>
         </dependency>
 
         <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-hazelcast</artifactId>
         </dependency>
-        <!-- Khai bao truc tiep thay vi de vertx-hazelcast keo bac cau (ban 4.2.8, cu hon han):
-             beacon/colony/harbor tu pin 5.3.0 o pom rieng nen runtime luon la 5.3.0, nhung module
-             nay truoc gio compile bang 4.2.8 mot cach ngam dinh. Pin thang o day de code Hazelcast
-             Client (LegoBootStart) compile dung API cua ban thuc su chay. -->
+        <!-- Khai bao truc tiep thay vi de vertx-hazelcast keo bac cau (ban 4.2.8, cu hon han),
+             version thuc te lay tu dependencyManagement o root pom (hazelcast.version), dam bao
+             dung 1 version duy nhat tren toan reactor, khong con moi module tu pin rieng nhu truoc. -->
         <dependency>
             <groupId>com.hazelcast</groupId>
             <artifactId>hazelcast</artifactId>
-            <version>${hazelcast.version}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
             <version>2.15.2</version>
-        </dependency>
-        <dependency>
-            <groupId>com.lmax</groupId>
-            <artifactId>disruptor</artifactId>
-            <version>4.0.0.RC1</version>
         </dependency>
     </dependencies>
 </project>

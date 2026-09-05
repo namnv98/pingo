@@ -41,29 +41,21 @@
             <version>0.4</version>
         </dependency>
 
-        <!-- Frame/FrameType/LinkGrpc sinh tu link.proto; chi can protobuf-java (runtime message) +
-             grpc-stub/grpc-protobuf (class LinkGrpc sinh ra tham chieu MethodDescriptor/marshaller,
-             du harbor/colony khong dung ImplBase/Stub cua no). KHONG can vertx-grpc-server/client o
-             day, vi 2 cai do chi harbor (client)/colony (server) dung truc tiep. -->
+        <!-- Frame/FrameType sinh tu link.proto (message thuan, khong sinh service stub). Tu
+             Vert.x 5.x, vertx-grpc-server/client tu than khong con phu thuoc io.grpc (grpc-java)
+             nua, dispatch qua ServiceMethod (xem LinkService) thay vi MethodDescriptor cua
+             grpc-java, nen o day chi can protobuf-java (runtime message), khong can
+             grpc-stub/grpc-protobuf/protoc-gen-grpc-java nua. -->
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-protobuf</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-stub</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.tomcat</groupId>
-            <artifactId>annotations-api</artifactId>
-            <version>6.0.53</version>
-            <scope>provided</scope>
-            <!-- grpc-stub's generated @Generated annotation needs javax.annotation.Generated, removed
-                 from java.base since JDK 9; ban toi thieu de compile, khong chay luc runtime. -->
+            <!-- ServiceMethod/GrpcMessageEncoder/GrpcMessageDecoder (LinkService), chi phan
+                 "common" (khong phu thuoc HttpServer/HttpClient), harbor/colony tu dua
+                 vertx-grpc-server/client rieng cho phan con lai. -->
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-grpc-common</artifactId>
         </dependency>
     </dependencies>
 
@@ -82,14 +74,11 @@
                 <version>0.6.1</version>
                 <configuration>
                     <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}</protocArtifact>
-                    <pluginId>grpc-java</pluginId>
-                    <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
                 </configuration>
                 <executions>
                     <execution>
                         <goals>
                             <goal>compile</goal>
-                            <goal>compile-custom</goal>
                         </goals>
                     </execution>
                 </executions>

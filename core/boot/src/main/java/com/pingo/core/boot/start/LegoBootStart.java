@@ -11,16 +11,17 @@ import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
-import io.micrometer.prometheus.PrometheusConfig;
-import io.micrometer.prometheus.PrometheusMeterRegistry;
-import io.prometheus.client.CollectorRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.impl.VertxInternal;
+import io.vertx.core.internal.VertxInternal;
 import io.vertx.core.spi.cluster.ClusterManager;
 import io.vertx.micrometer.Label;
 import io.vertx.micrometer.MetricsDomain;
+import io.vertx.micrometer.MicrometerMetricsFactory;
 import io.vertx.micrometer.MicrometerMetricsOptions;
 import io.vertx.micrometer.VertxPrometheusOptions;
 import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
@@ -78,13 +79,16 @@ public class LegoBootStart {
     }
 
     protected static CompletionStage<Vertx> initVertx(LegoConfig1 config, MeterRegistry registry) throws Exception {
-        var options = new VertxOptions().setMetricsOptions(getMicrometerMetricsOptions(registry));
+        // Vert.x 5.x: VertxOptions.setClusterManager() va MicrometerMetricsOptions.setMicrometerRegistry()
+        // deu bi bo -- cluster manager va MeterRegistry ngoai (dung chung voi PrometheusMeterRegistry cua
+        // getPrometheusMeterRegistry()) gio truyen qua VertxBuilder (withClusterManager/withMetrics).
+        var options = new VertxOptions().setMetricsOptions(getMicrometerMetricsOptions());
         var clusterManager = initClusterManager(config);
+        var builder = Vertx.builder().with(options).withMetrics(new MicrometerMetricsFactory(registry));
         if (clusterManager != null) {
-            options.setClusterManager(clusterManager);
-            return Vertx.clusteredVertx(options).toCompletionStage();
+            return builder.withClusterManager(clusterManager).buildClustered().toCompletionStage();
         }
-        return CompletableFuture.completedStage(Vertx.vertx(options));
+        return CompletableFuture.completedStage(builder.build());
     }
 
     /**
@@ -101,7 +105,9 @@ public class LegoBootStart {
      * cung, cluster phai tu phat hien "chet" qua heartbeat timeout).
      */
     public static HazelcastInstance getHazelcastInstance(Vertx vertx) {
-        var clusterManager = ((VertxInternal) vertx).getClusterManager();
+        // Vert.x 5.x: package doi tu io.vertx.core.impl sang io.vertx.core.internal, method doi
+        // tu getClusterManager() sang clusterManager() (bo tien to "get", khop quy uoc fluent chung).
+        var clusterManager = ((VertxInternal) vertx).clusterManager();
         return clusterManager instanceof HazelcastClusterManager hcm ? hcm.getHazelcastInstance() : null;
     }
 
@@ -120,13 +126,12 @@ public class LegoBootStart {
                 .join();
     }
 
-    public static MicrometerMetricsOptions getMicrometerMetricsOptions(MeterRegistry registry) {
+    public static MicrometerMetricsOptions getMicrometerMetricsOptions() {
         var prometheusOptions = new VertxPrometheusOptions().setEnabled(true)
                 .setStartEmbeddedServer(true)
                 .setEmbeddedServerOptions(new HttpServerOptions().setPort(8081))
                 .setEmbeddedServerEndpoint("/metrics");
         return new MicrometerMetricsOptions() //
-                .setMicrometerRegistry(registry) //
                 .setPrometheusOptions(prometheusOptions) //
                 .setLabels(EnumSet.of(Label.EB_ADDRESS, Label.EB_SIDE, Label.EB_FAILURE, Label.HTTP_METHOD, Label.HTTP_ROUTE, Label.HTTP_CODE)) //
                 .setDisabledMetricsCategories(Set.of(MetricsDomain.NAMED_POOLS.name(), MetricsDomain.DATAGRAM_SOCKET.name(), MetricsDomain.NET_CLIENT.name(), MetricsDomain.NET_SERVER.name())) //
@@ -135,7 +140,10 @@ public class LegoBootStart {
     }
 
     public static PrometheusMeterRegistry getPrometheusMeterRegistry() {
-        CollectorRegistry prometheusClientRegistry = CollectorRegistry.defaultRegistry;
+        // Micrometer 1.10+/vertx-micrometer-metrics 5.x: package doi tu io.micrometer.prometheus
+        // sang io.micrometer.prometheusmetrics, dung Prometheus client moi (io.prometheus.metrics.*,
+        // thay io.prometheus.client.CollectorRegistry cu).
+        PrometheusRegistry prometheusClientRegistry = PrometheusRegistry.defaultRegistry;
         PrometheusMeterRegistry registry =
                 new PrometheusMeterRegistry(
                         PrometheusConfig.DEFAULT, prometheusClientRegistry, Clock.SYSTEM);

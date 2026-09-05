@@ -8,7 +8,7 @@ import com.pingo.core.common.support.UUIDUtils;
 import com.pingo.core.grpc.client.GrpcClientPool;
 import com.pingo.chat.grpc.Frame;
 import com.pingo.chat.grpc.FrameType;
-import com.pingo.chat.grpc.LinkGrpc;
+import com.pingo.chat.grpc.LinkService;
 import com.pingo.harbor.ws.dto.SocketFrame;
 import com.pingo.harbor.ws.dto.SocketFrames;
 import com.pingo.harbor.ws.session.BackendStream;
@@ -166,7 +166,7 @@ public class BackendStreamGateway {
     withTimeout(result, CONNECT_TIMEOUT_MS, "timed out opening backend stream to pod " + podName, () -> grpcClientPool.evict(podName));
 
     client
-        .request(addr, LinkGrpc.getStreamMethod())
+        .request(addr, LinkService.STREAM_CLIENT)
         .map(
             request -> {
               var stream = new BackendStream(podName, session, request);

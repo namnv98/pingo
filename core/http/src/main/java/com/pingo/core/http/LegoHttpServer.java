@@ -118,7 +118,11 @@ public class LegoHttpServer extends AbstractVerticle {
         router
                 .route()
                 .handler(
-                        CorsHandler.create(".*.")
+                        // Vert.x 5.x bo CorsHandler.create(String) -- create() khong tham so, roi
+                        // khai bao origin qua addOriginWithRegex/addOrigin rieng. Giu dung regex cu
+                        // (".*.", khop moi origin) qua addOriginWithRegex de khong doi hanh vi.
+                        CorsHandler.create()
+                                .addOriginWithRegex(".*.")
                                 .allowCredentials(true)
                                 .allowedMethods(allowedMethods)
                                 .allowedHeaders(allowedHeaders));

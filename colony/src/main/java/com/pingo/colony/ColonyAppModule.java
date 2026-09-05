@@ -12,7 +12,7 @@ import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.core.grpc.server.LegoGrpcServer;
-import com.pingo.chat.grpc.LinkGrpc;
+import com.pingo.chat.grpc.LinkService;
 import io.vertx.core.Vertx;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -84,7 +84,7 @@ public class ColonyAppModule extends AbstractModule {
     return LegoGrpcServer.builder() //
         .host(chatSocket.getHost()) //
         .port(chatSocket.getPort()) //
-        .registrar(grpcServer -> grpcServer.callHandler(LinkGrpc.getStreamMethod(), sessionManager::onConnection))
+        .registrar(grpcServer -> grpcServer.callHandler(LinkService.STREAM_SERVER, sessionManager::onConnection))
         .build();
   }
 
