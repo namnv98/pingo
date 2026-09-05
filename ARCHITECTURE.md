@@ -700,7 +700,7 @@ breaking, không phải patch version.
 
 Thử nâng lên 5.7.0 (bản mới hơn tại thời điểm nâng) gây treo vô hạn lúc join cluster — member embedded
 (colony/harbor/beacon chạy Hazelcast client 5.7.0) không join được backbone đứng riêng
-(`hazelcast/helm`, StatefulSet 1 pod, đang chạy `localhost:5000/hazelcast:5.3.0`) — biểu hiện là hang
+(`hazelcast/helm`, StatefulSet 1 pod, đang chạy `hazelcast/hazelcast:5.3.0`) — biểu hiện là hang
 tại `TcpIpJoiner`, KHÔNG có lỗi rõ ràng nào được log, cực dễ nhầm với lỗi khác nếu không biết trước.
 Root cause: cross-version Hazelcast cluster join giữa 2 version cách nhau nhiều không được đảm bảo
 tương thích. Quyết định: giữ `hazelcast.version=5.3.0` (khớp backbone hiện có) — nâng backbone lên

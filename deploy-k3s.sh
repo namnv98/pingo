@@ -174,7 +174,9 @@ ensure_hazelcast_cluster() {
 
 # ============================================================================
 # 4b. Postgres cho colony (bang conversation_members) -- helm chart rieng o postgres/helm, cung
-#     pattern voi hazelcast/helm: image day san vao registry local (postgres:17 -> localhost:5000),
+#     pattern voi hazelcast/helm: image cong khai (postgres:17, hazelcast/hazelcast:5.3.0) keo THANG
+#     tu Docker Hub, khong qua registry local (khac cac image tu build nhu colony/harbor/beacon/hall
+#     o tren, BAT BUOC qua localhost:5000 vi khong ton tai cong khai) -- node k3s co internet that,
 #     schema.sql tu dong chay 1 lan qua ConfigMap mount vao /docker-entrypoint-initdb.d/ (co san cua
 #     image postgres chinh thuc), du lieu ben qua PersistentVolumeClaim (local-path-provisioner
 #     mac dinh cua k3s).

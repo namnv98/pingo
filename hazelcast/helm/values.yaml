@@ -1,4 +1,4 @@
-image: localhost:5000/hazelcast:5.3.0
+image: hazelcast/hazelcast:5.3.0
 # 1 pod -- may dev dang it tai nguyen. Khong con "cluster" thuc su (khong chiu duoc 1 pod chet),
 # nhung van giu dung kien truc backbone tach rieng khoi beacon/colony/harbor. Tang lai thanh 3
 # (so le, chiu duoc 1 pod chet ma khong mat quorum) khi may co du tai nguyen tro lai.
