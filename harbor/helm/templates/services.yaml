@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/monitor: "true"
 spec:
   selector:
-    app: {{.Chart.Name }}
+    app: {{ .Chart.Name }}
   type: NodePort
   ports:
     - port: 8888

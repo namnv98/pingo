@@ -18,7 +18,8 @@ public enum MessageType {
     AUTH_ERROR,
     /**
      * Cả 2 chiều: đăng ký nhận/gửi tin cho 1 {@code conversationId} — handshake mở/dùng lại kết nối
-     * xuống đúng pod backend sở hữu conversation đó. Có thể kèm {@code memberUserIds} để lazy-create/join membership.
+     * xuống đúng pod backend sở hữu conversation đó. conversationId phải đã tồn tại (tạo qua
+     * {@code POST /conversations}) — không còn lazy-create/join membership qua đây nữa.
      */
     SUBSCRIBE,
     /**

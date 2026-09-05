@@ -1,3 +1,10 @@
+# Cluster Hazelcast CHUNG voi beacon/colony/harbor -- can de vertx.eventBus().publish() (xem
+# HallApiHandlers#createConversation) toi duoc RoutingVersionSync ben harbor, khong con la eventbus
+# local rieng cua hall nua (truoc day hall KHONG cluster vi chi la REST API thuan, khong can gossip
+# gi -- gio can publish 1 su kien nen phai join chung cluster, xem HallBoot).
+hazelcast:
+  file: hall/src/main/resources/hazelcast-local.xml
+  props: { }
 publicHttp:
   tags: public
   port: 8085

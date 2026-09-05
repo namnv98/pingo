@@ -8,10 +8,12 @@
     <modelVersion>4.0.0</modelVersion>
     <artifactId>socket</artifactId>
 
+    <!-- vertx-web (SockJS) bo di, LegoSocketServer gio dung thang webSocketHandler() cua
+         vertx-core, khong con qua lop tuong thich SockJS nua (xem javadoc LegoSocketServer). -->
     <dependencies>
         <dependency>
             <groupId>io.vertx</groupId>
-            <artifactId>vertx-web</artifactId>
+            <artifactId>vertx-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>

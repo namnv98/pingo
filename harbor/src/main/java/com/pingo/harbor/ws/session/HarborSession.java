@@ -1,23 +1,23 @@
 package com.pingo.harbor.ws.session;
 
 import io.vertx.core.buffer.Buffer;
-import io.vertx.ext.web.handler.sockjs.SockJSSocket;
+import io.vertx.core.http.ServerWebSocket;
 
-import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletionStage;
 
 import lombok.*;
 
 /**
- * Connection public-facing của 1 client. Giữ riêng 1 {@link BackendStream} cho MỖI pod colony nó
- * cần nói chuyện — không dùng chung với session khác (xem {@code BackendStreamGateway},
- * ARCHITECTURE.md mục 12): HTTP/2 tự multiplex nhiều stream trên 1 connection vật lý tới cùng pod.
+ * Connection public-facing của 1 client — WebSocket thuần (Vert.x native, không qua SockJS, xem
+ * {@code LegoSocketServer}). KHÔNG còn giữ gRPC stream riêng xuống colony (xem
+ * {@code com.pingo.harbor.ws.backend.BackendStream}, ARCHITECTURE.md mục 12) — stream đó giờ dùng
+ * CHUNG cho mọi session trên pod harbor này, sống ở {@code BackendStreamGateway} (gateway-level),
+ * đúng cách Slack làm ("GS subscribes to all channel servers... asynchronously", GS không mở 1 kết
+ * nối/user, mà 1 kết nối/channel-server dùng chung).
  */
 @Getter
 @Setter
@@ -26,37 +26,14 @@ public class HarborSession implements MessageSocket {
 
   @EqualsAndHashCode.Include private final @NonNull String id;
   private final @NonNull String serverId;
-  private final @NonNull SockJSSocket socket;
+  private final @NonNull ServerWebSocket socket;
   private UUID userId;
   private volatile long lastSeenAt = System.currentTimeMillis();
 
   /** conversationId đang subscribe → tên pod hiện đang sở hữu nó. */
   private final Map<UUID, String> podByConversation = new ConcurrentHashMap<>();
 
-  /** Tên pod colony → gRPC stream đang mở tới đúng pod đó cho CHÍNH session này (xem {@link BackendStream}). */
-  private final Map<String, BackendStream> backendStreams = new ConcurrentHashMap<>();
-  /** Single-flight: nhiều SUBSCRIBE/MESSAGE cùng cần mở stream tới 1 pod lần đầu chỉ connect đúng 1 lần. */
-  private final Map<String, CompletableFuture<BackendStream>> connectingStreams = new ConcurrentHashMap<>();
-
-  /**
-   * "Nhớ" memberUserIds từng biết cho mỗi conversationId — cần để gửi lại mỗi lần SUBSCRIBE (kể cả
-   * reconnect ngầm do đổi routing version), tránh SUBSCRIBE bị từ chối khi pod mới chưa biết membership.
-   */
-  private final Map<UUID, Set<UUID>> membersByConversation = new ConcurrentHashMap<>();
-
-  public void rememberMembers(UUID conversationId, Collection<UUID> members) {
-    if (members == null || members.isEmpty()) {
-      return;
-    }
-    membersByConversation.computeIfAbsent(conversationId, key -> ConcurrentHashMap.newKeySet()).addAll(members);
-  }
-
-  public List<UUID> getRememberedMembers(UUID conversationId) {
-    var members = membersByConversation.get(conversationId);
-    return members == null ? List.of() : List.copyOf(members);
-  }
-
-  public HarborSession(@NonNull String id, @NonNull String serverId, @NonNull SockJSSocket socket) {
+  public HarborSession(@NonNull String id, @NonNull String serverId, @NonNull ServerWebSocket socket) {
     this.id = id;
     this.serverId = serverId;
     this.socket = socket;
@@ -76,10 +53,10 @@ public class HarborSession implements MessageSocket {
 
   @Override
   public CompletionStage<Void> send(Buffer data) {
-    // Cố tình dùng write(String), không phải write(Buffer): Buffer gửi WS frame BINARY, browser
-    // trả event.data là Blob thay vì string, JSON.parse() lỗi ngay. write(String) gửi TEXT frame.
+    // Cố tình dùng writeTextMessage(), không phải writeBinaryMessage(): browser trả event.data là
+    // Blob thay vì string cho frame BINARY, JSON.parse() lỗi ngay. writeTextMessage() gửi TEXT frame.
     return socket
-        .write(data.toString())
+        .writeTextMessage(data.toString())
         .toCompletionStage();
   }
 

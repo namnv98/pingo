@@ -55,23 +55,40 @@ export function waitFor(received, predicate, timeoutMs = 6000) {
   });
 }
 
-/** Dang ky 1 tai khoan that + AUTH bang token do cap + SUBSCRIBE 1 conversation moi (chi minh
- * session nay la member) — dung chung cho ca 2 script. */
+/** Goi POST /conversations (hall) that -- conversation gio PHAI duoc tao qua day truoc (khong con
+ * lazy-create qua SUBSCRIBE nua, xem ARCHITECTURE.md muc 12). memberUserIds co the rong (conversation
+ * chi minh nguoi goi la member, dung cho cac test do round-trip doc lap tung session). */
+export async function createConversation(apiBase, token, memberUserIds = []) {
+  const res = await fetch(`${apiBase}/conversations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ memberUserIds }),
+  });
+  const body = await res.json();
+  if (!res.ok) {
+    throw new Error(`create conversation failed: HTTP ${res.status} ${JSON.stringify(body)}`);
+  }
+  return body; // { conversationId, memberUserIds }
+}
+
+/** Dang ky 1 tai khoan that + AUTH bang token do cap + tao 1 conversation moi (chi minh session nay
+ * la member, qua POST /conversations) — dung chung cho ca 2 script. PHAI AUTH truoc roi moi tao
+ * conversation (khong phai nguoc lai): broadcast membership-changed luc tao chi bao duoc session
+ * DANG SONG va DA AUTH tai thoi diem no ban ra (xem RoutingVersionSync#onMembershipChanged ben
+ * harbor) — tao truoc khi AUTH se lam broadcast bay qua trong luc chua co ai lang nghe, mat vinh
+ * vien. Khong con can tu gui SUBSCRIBE nua: harbor tu wake-subscribe nho broadcast do. */
 export async function setupSession(url, label, apiBase = DEFAULT_API_BASE) {
   const account = await registerUser(apiBase);
-  const conversationId = uuid();
   const s = await connect(url, label);
 
   const authId = uuid();
   s.ws.send(JSON.stringify({ type: "AUTH", id: authId, token: account.token }));
   await waitFor(s.received, (f) => f.type === "AUTH_OK" && f.id === authId);
 
-  const subId = uuid();
-  s.ws.send(JSON.stringify({ type: "SUBSCRIBE", id: subId, conversationId, memberUserIds: [account.id] }));
-  const subResult = await waitFor(s.received, (f) => f.id === subId && (f.type === "SUBSCRIBE_OK" || f.type === "SUBSCRIBE_ERROR"));
-  if (subResult.type === "SUBSCRIBE_ERROR") throw new Error(`${label} subscribe error: ${subResult.reason}`);
+  const created = await createConversation(apiBase, account.token);
+  await waitFor(s.received, (f) => f.type === "CONVERSATION_ADDED" && f.conversationId === created.conversationId);
 
   s.userId = account.id;
-  s.conversationId = conversationId;
+  s.conversationId = created.conversationId;
   return s;
 }

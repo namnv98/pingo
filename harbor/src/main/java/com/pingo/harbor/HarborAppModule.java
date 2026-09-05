@@ -9,6 +9,8 @@ import com.pingo.core.boot.start.LegoConfig1;
 import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.core.common.token.JwtHelper;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.harbor.ws.HarborSessionManager;
 import com.pingo.core.socket.LegoSocketServer;
 import io.vertx.core.Vertx;
@@ -44,8 +46,30 @@ public class HarborAppModule extends AbstractModule {
 
   @Provides
   @Singleton
-  private HarborSessionManager harborSessionManager(PingoConnector connector, JwtHelper jwtHelper) {
-    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper);
+  private HarborSessionManager harborSessionManager(
+      PingoConnector connector, JwtHelper jwtHelper, ConversationMembershipRegistry membership) {
+    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper, membership);
+  }
+
+  /**
+   * Ket noi Postgres qua JdbcConnectionSupplier -- cung framework/pattern voi colony
+   * (xem ColonyAppModule), o day CHI DOC (khong ghi) de auto-subscribe user vao het conversation
+   * cua ho ngay sau AUTH (xem HarborSessionManager#handleAuth), khong doi client tu SUBSCRIBE tung
+   * conversationId mot (voi user co hang tram/nghin conversation se can hang tram/nghin frame).
+   */
+  @SneakyThrows
+  @Provides
+  @Singleton
+  private JdbcConnectionSupplier jdbcConnectionSupplier() {
+    var supplier = JdbcConnectionSupplier.from(config.getDatabase().getParsedUri(), vertx);
+    supplier.startSync();
+    return supplier;
+  }
+
+  @Provides
+  @Singleton
+  private ConversationMembershipRegistry conversationMembershipRegistry(JdbcConnectionSupplier supplier) {
+    return new ConversationMembershipRegistry(supplier);
   }
 
   /** Verify JWT lúc AUTH — PHẢI cùng {@code authTokenSecret} với colony (nơi ký token lúc /register, /login). */

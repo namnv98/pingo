@@ -12,8 +12,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
 /**
- * KHÔNG cluster Hazelcast (không set {@code hazelcast:} trong config) — {@code LegoBootStart#initVertx}
- * tự nhận ra và fallback về {@code Vertx.vertx(options)} thuần, xem javadoc của nó.
+ * CÓ cluster Hazelcast chung với beacon/colony/harbor (set {@code hazelcast:} trong config) — cần
+ * để {@code vertx.eventBus().publish()} lúc tạo conversation mới (xem
+ * {@code HallApiHandlers#createConversation}) tới được {@code RoutingVersionSync} bên harbor.
+ * Trước đây KHÔNG cluster (hall chỉ là REST API thuần, không cần gossip gì) — {@code
+ * LegoBootStart#initVertx} tự nhận ra config rỗng và fallback về {@code Vertx.vertx(options)}
+ * thuần nếu không set field này, xem javadoc của nó.
  */
 @Slf4j
 public class HallBoot extends LegoBootStart {

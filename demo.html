@@ -86,15 +86,10 @@
         <input type="text" id="dmPeerUserId" size="30" placeholder="hoặc dán user id trực tiếp">
         <button class="primary" onclick="startDm()">Bắt đầu DM</button>
     </div>
-    <div class="row">
-        <label style="min-width:110px">Group id:</label>
-        <input type="text" id="groupConversationId" size="38" placeholder="để trống = tự tạo mới">
-        <button onclick="generateGroupId()">Tạo mới</button>
-    </div>
     <div class="row" style="align-items:flex-start">
-        <label style="min-width:110px">Thành viên:</label>
+        <label style="min-width:110px">Thành viên group:</label>
         <input type="text" id="groupMembers" size="50" placeholder="user id, cách nhau bởi dấu phẩy (không cần tự thêm mình)">
-        <button class="primary" onclick="startGroup()">Tham gia / Tạo group</button>
+        <button class="primary" onclick="startGroup()">Tạo group</button>
     </div>
     <div class="row">
         <label style="min-width:110px"></label>
@@ -102,7 +97,7 @@
         <button onclick="refreshUserList()">🔄 Làm mới danh sách</button>
     </div>
     <div class="row" id="memberPicker"></div>
-    <div class="hint">DM: chọn từ danh sách (chỉ hiện user đã đặt tên, trừ khi tick ô trên) hoặc dán user id trực tiếp. Group: để trống ô id + bấm "Tạo mới" nếu bạn là người tạo; bấm vào tên trong danh sách dưới ô "Thành viên" để thêm/bớt nhanh (đang chọn = tô xanh).</div>
+    <div class="hint">DM/Group đều gọi <span class="idbox">POST /conversations</span> để tạo trước (server trả về conversationId, giống Slack/Discord bắt buộc gọi API tạo trước khi gửi tin được) — không còn tự SUBSCRIBE tay. Bấm vào tên trong danh sách dưới ô "Thành viên group" để thêm/bớt nhanh (đang chọn = tô xanh). Muốn mở lại hội thoại cũ thì bấm vào nó trong danh sách "Hội thoại của bạn" ở trên.</div>
 </div>
 
 <div class="panel">
@@ -122,6 +117,12 @@ var countSent = 0;
 var countReceived = 0;
 var reconnectDelayMs = 1000;
 var RECONNECT_MAX_DELAY_MS = 8000;
+// Client chu dong ping deu dan, khong doi server phat hien "sap idle" moi ping (dung cach Slack
+// lam that -- xem app.slack.com.har: client tu gui ping moi 10s co dinh, bat ke co hoat dong gi
+// khong). Server (harbor) van giu logic tu ping luc idle nhu 1 lop phong thu du (cho client khac
+// khong tuan thu), nhung voi client nay thi lop do se khong bao gio phai kich hoat nua.
+var PING_INTERVAL_MS = 10000;
+var pingIntervalId = null;
 var conversations = {}; // conversationId -> { label, el, logEl }
 
 // localStorage: đăng nhập thật giờ giữ token JWT (do colony cấp lúc /register /login), KHÔNG còn
@@ -210,16 +211,17 @@ function renderConversationList(list) {
         item.innerHTML = '<span class="label"></span><span class="meta"></span>';
         item.querySelector('.label').innerText = label;
         item.querySelector('.meta').innerText = relativeTime(conv.lastMessageAt);
-        item.onclick = function () { openConversation(conv.conversationId, conv.memberUserIds, label); };
+        item.onclick = function () { openConversation(conv.conversationId, label); };
         container.appendChild(item);
     });
 }
 
-// Mở 1 hội thoại đã có sẵn (từ danh sách, bấm vào) — SUBSCRIBE lại vô hại nếu đã subscribe rồi
-// (cùng logic idempotent như startDm/startGroup), chỉ để đảm bảo chắc chắn đang nhận tin.
-function openConversation(conversationId, memberUserIds, label) {
+// Mở 1 hội thoại đã có sẵn (từ danh sách, bấm vào) — không cần tự SUBSCRIBE nữa, harbor đã tự
+// wake-subscribe hết mọi conversation của mình ngay sau AUTH (xem autoSubscribeAllConversations
+// bên harbor), chỉ cần tạo card + load lịch sử.
+function openConversation(conversationId, label) {
     var entry = ensureConversationCard(conversationId, label);
-    send({type: 'SUBSCRIBE', id: newId(), fromUserId: myUserId, conversationId: conversationId, memberUserIds: memberUserIds});
+    loadHistory(conversationId);
     entry.el.scrollIntoView({behavior: 'smooth', block: 'nearest'});
 }
 
@@ -374,27 +376,6 @@ function setStatus(text, cls) {
     el.className = cls || '';
 }
 
-// Mirror của ConversationIds.dmId (core/commons-lang, Java) — XOR từng nửa 64-bit của 2 UUID,
-// commutative (dmId(a,b) == dmId(b,a)), phải khớp bit-for-bit với phía Java để harbor tự suy ra
-// đúng conversationId khi client chỉ gửi toUserId (không tự gửi conversationId lên).
-function uuidToHalves(uuid) {
-    var hex = uuid.replace(/-/g, '');
-    return [BigInt('0x' + hex.substring(0, 16)), BigInt('0x' + hex.substring(16, 32))];
-}
-function halvesToUuid(hi, lo) {
-    var hex = hi.toString(16).padStart(16, '0') + lo.toString(16).padStart(16, '0');
-    return hex.substring(0, 8) + '-' + hex.substring(8, 12) + '-' + hex.substring(12, 16) + '-' +
-        hex.substring(16, 20) + '-' + hex.substring(20, 32);
-}
-function dmId(a, b) {
-    var ah = uuidToHalves(a), bh = uuidToHalves(b);
-    return halvesToUuid(ah[0] ^ bh[0], ah[1] ^ bh[1]);
-}
-
-function generateGroupId() {
-    document.getElementById('groupConversationId').value = crypto.randomUUID();
-}
-
 // --- UI cho 1 conversation (card riêng, log + ô gửi riêng) ---
 function ensureConversationCard(conversationId, label) {
     if (conversations[conversationId]) return conversations[conversationId];
@@ -471,32 +452,52 @@ function loadHistory(conversationId) {
         });
 }
 
+// Gọi POST /conversations (hall) để tạo conversation MỚI (dùng chung cho cả DM lẫn group, không
+// còn suy tất định/lazy-create qua SUBSCRIBE nữa — xem ARCHITECTURE.md mục 12, giống cách
+// Slack (conversations.create)/Discord (POST /users/@me/channels) bắt buộc gọi API tạo trước khi
+// gửi tin được). Server tự thêm mình vào members, tự publish để harbor wake-subscribe hộ (kể cả
+// chính mình) — không cần tự gửi SUBSCRIBE gì cả sau khi tạo xong.
+function createConversation(memberUserIds) {
+    return fetch(HISTORY_API_BASE + '/conversations', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken},
+        body: JSON.stringify({memberUserIds: memberUserIds})
+    }).then(function (res) {
+        return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            return data;
+        });
+    });
+}
+
 function startDm() {
     var peerUserId = document.getElementById('dmPeerUserId').value.trim();
     if (!peerUserId) return;
-    var conversationId = dmId(myUserId, peerUserId);
-    var entry = ensureConversationCard(conversationId, 'DM: ' + peerUserId.substring(0, 8) + '…');
-    send({
-        type: 'SUBSCRIBE', id: newId(), fromUserId: myUserId,
-        conversationId: conversationId, memberUserIds: [myUserId, peerUserId]
-    });
-    logToConversation(conversationId, 'đang subscribe DM với ' + peerUserId + ' ...');
+    createConversation([peerUserId])
+        .then(function (data) {
+            var entry = ensureConversationCard(data.conversationId, 'DM: ' + peerUserId.substring(0, 8) + '…');
+            logToConversation(data.conversationId, 'đã tạo DM với ' + peerUserId);
+        })
+        .catch(function (err) {
+            alert('tạo DM lỗi: ' + err.message);
+        });
 }
 
 function startGroup() {
-    var conversationId = document.getElementById('groupConversationId').value.trim();
-    if (!conversationId) {
-        conversationId = crypto.randomUUID();
-        document.getElementById('groupConversationId').value = conversationId;
-    }
     var raw = document.getElementById('groupMembers').value.trim();
     var members = raw ? raw.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; }) : [];
-    ensureConversationCard(conversationId, 'Group ' + conversationId.substring(0, 8) + '…');
-    send({
-        type: 'SUBSCRIBE', id: newId(), fromUserId: myUserId,
-        conversationId: conversationId, memberUserIds: members
-    });
-    logToConversation(conversationId, 'đang subscribe group, thành viên: ' + (members.join(', ') || '(không kèm — dùng cho join group đã có sẵn)'));
+    if (members.length === 0) {
+        alert('cần ít nhất 1 thành viên khác');
+        return;
+    }
+    createConversation(members)
+        .then(function (data) {
+            ensureConversationCard(data.conversationId, 'Group ' + data.conversationId.substring(0, 8) + '…');
+            logToConversation(data.conversationId, 'đã tạo group, thành viên: ' + members.join(', '));
+        })
+        .catch(function (err) {
+            alert('tạo group lỗi: ' + err.message);
+        });
 }
 
 function connect() {
@@ -504,18 +505,23 @@ function connect() {
     // nơi còn lỡ gọi connect() (vd ws.onclose auto-retry bên dưới) thay vì phải sửa từng nơi gọi.
     if (!identityConfirmed) return;
 
-    // Dùng transport "raw websocket" của SockJS (bỏ qua cơ chế session polling) — không sao vì đây chỉ là client test thủ công.
     // Đang trỏ tới NodePort của harbor trên cụm k3s local (xem harbor/helm/templates/services.yaml).
-    // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại thành ws://localhost:8888/connect/websocket
-    ws = new WebSocket("ws://localhost:31003/connect/websocket");
+    // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại thành ws://localhost:8888/connect
+    ws = new WebSocket("ws://localhost:31003/connect");
 
     ws.onopen = function () {
         reconnectDelayMs = 1000; // reset backoff mỗi khi nối thành công
         setStatus('đã kết nối, đang xác thực...', 'pending');
         send({type: "AUTH", id: newId(), token: authToken});
+
+        if (pingIntervalId) clearInterval(pingIntervalId);
+        pingIntervalId = setInterval(function () {
+            if (ws && ws.readyState === WebSocket.OPEN) send({type: "PING", id: newId()});
+        }, PING_INTERVAL_MS);
     };
 
     ws.onclose = function () {
+        if (pingIntervalId) { clearInterval(pingIntervalId); pingIntervalId = null; }
         if (!identityConfirmed) return; // dong chu dong vi dang doi dat/xac nhan lai ten -- khong phai mat ket noi that, khong can bao/retry
         setStatus('mất kết nối, thử lại sau ' + (reconnectDelayMs / 1000) + 's...', 'bad');
         setTimeout(connect, reconnectDelayMs);
@@ -527,7 +533,10 @@ function connect() {
         console.log(frame);
         switch (frame.type) {
             case "AUTH_OK":
-                setStatus('đã xác thực (' + myUsername + ')', 'ok');
+                // frame.serverId = ten pod harbor dang phuc vu session nay (giong host_id trong
+                // frame "hello" cua Slack that, xem app.slack.com.har) -- tien debug khi co nhieu
+                // pod harbor, biet ngay dang noi chuyen voi pod nao ma khong can vao k8s check.
+                setStatus('đã xác thực (' + myUsername + ')' + (frame.serverId ? ' — pod ' + frame.serverId : ''), 'ok');
                 break;
             case "AUTH_ERROR":
                 // Token thiếu/sai/hết hạn -- đăng nhập lại từ đầu thay vì auto-retry vô hạn với 1 token đã hỏng.
@@ -563,6 +572,10 @@ function connect() {
                 break;
             case "PING":
                 send({type: "PONG", id: frame.id});
+                break;
+            case "PONG":
+                // Phan hoi cho ping minh tu gui (xem setInterval trong ws.onopen) -- khong can lam
+                // gi them, nhan duoc la du biet ket noi con song.
                 break;
             case "CONVERSATION_ADDED":
                 // Vừa được thêm vào 1 conversation (DM lần đầu hoặc group mới) — gateway đã tự

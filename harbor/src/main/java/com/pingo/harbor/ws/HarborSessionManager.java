@@ -1,8 +1,8 @@
 package com.pingo.harbor.ws;
 
+import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.connector.PingoConnector;
 import com.pingo.core.boot.start.LegoConfig1;
-import com.pingo.core.common.support.ConversationIds;
 import com.pingo.core.common.support.UUIDUtils;
 import com.pingo.core.common.token.JwtHelper;
 import com.pingo.core.common.token.NdlTokenException;
@@ -15,7 +15,8 @@ import com.pingo.harbor.ws.routing.RoutingVersionSync;
 import com.pingo.harbor.ws.session.HarborSession;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.ext.web.handler.sockjs.SockJSSocket;
+import io.vertx.core.http.HttpClosedException;
+import io.vertx.core.http.ServerWebSocket;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,18 +50,22 @@ public class HarborSessionManager {
     private BackendStreamGateway backendStreamGateway;
     private RoutingVersionSync routingVersionSync;
     private JwtHelper jwtHelper;
+    private ConversationMembershipRegistry membership;
     /**
      * false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe.
      */
     @Getter
     private volatile boolean ready = true;
 
-    public HarborSessionManager(String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper) {
+    public HarborSessionManager(
+            String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper,
+            ConversationMembershipRegistry membership) {
         this.serverId = serverId;
         this.vertx = vertx;
         this.backendStreamGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient, new GrpcClientPool(vertx));
         this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendStreamGateway, sessions, this::sendToClient);
         this.jwtHelper = jwtHelper;
+        this.membership = membership;
         vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
     }
 
@@ -79,7 +84,7 @@ public class HarborSessionManager {
         return delayed;
     }
 
-    public void onConnection(SockJSSocket socket) {
+    public void onConnection(ServerWebSocket socket) {
         var id = generateSessionId();
         var session = new HarborSession(id, serverId, socket);
         sessions.put(id, session);
@@ -98,19 +103,40 @@ public class HarborSessionManager {
         session.cleanUpAfterClose();
     }
 
+    /**
+     * {@code HttpClosedException: Connection was closed} la binh thuong -- client dong WS "tho"
+     * (dong tab/mat mang/kill app) thay vi dong gon qua handshake WS close, xay ra thuong xuyen voi
+     * moi WS server, khong phai loi. Ha xuong DEBUG cho dung ban chat; con lai (that su bat ngo) van
+     * giu ERROR de khong bo sot tin hieu can chu y.
+     */
     private void onException(HarborSession session, Throwable ex) {
+        if (ex instanceof HttpClosedException) {
+            log.debug("client session {} closed the socket abruptly", session.getId(), ex);
+            return;
+        }
         log.error("an error occurred while reading socket of session {}", session.getId(), ex);
     }
 
     /**
-     * Chỉ quét session client idle — liveness backend đã do HTTP/2 keepalive tự lo (xem {@code BackendStreamGateway#newClient}).
+     * Quét session client idle — liveness backend đã do HTTP/2 keepalive tự lo (xem {@code BackendStreamGateway#newClient}).
+     * {@code lastSeenAt} chỉ được cập nhật khi CLIENT tự gửi frame lên ({@link #onClientFrame}) --
+     * 1 session chỉ NHẬN tin (vd thành viên group không chủ động gõ gì) không bao giờ tự sinh hoạt
+     * động, nên nếu server không chủ động hỏi thăm thì sau {@code CLIENT_IDLE_TIMEOUT_MS} sẽ bị coi
+     * là chết và đóng oan dù đang nhận tin bình thường -- demo.html reconnect lại sau đó nhưng KHÔNG
+     * tự SUBSCRIBE lại các conversation cũ, nên mọi tin nhắn tiếp theo coi như mất (đã gặp thật: "tạo
+     * group xong chỉ nhận 1 tin đầu rồi miss" khi người nhận không gõ gì trong lúc chờ). Chủ động PING
+     * khi đã idle quá NỬA ngưỡng, cho client còn nửa thời gian còn lại để PONG (cũng đi qua
+     * {@link #onClientFrame}, tự cập nhật lastSeenAt) trước khi bị coi là chết thật sự.
      */
     private void heartbeatSweep() {
         var now = System.currentTimeMillis();
         for (var session : List.copyOf(sessions.values())) {
-            if (now - session.getLastSeenAt() > CLIENT_IDLE_TIMEOUT_MS) {
+            var idleMs = now - session.getLastSeenAt();
+            if (idleMs > CLIENT_IDLE_TIMEOUT_MS) {
                 log.info("closing idle client session {} (userId={})", session.getId(), session.getUserId());
                 session.close();
+            } else if (idleMs > CLIENT_IDLE_TIMEOUT_MS / 2) {
+                sendToClient(session, SocketFrames.ping(UUIDUtils.timeBasedUuidAsString()));
             }
         }
     }
@@ -154,11 +180,50 @@ public class HarborSessionManager {
             return;
         }
         session.setUserId(userId);
-        sendToClient(session, SocketFrame.builder().type(MessageType.AUTH_OK).id(frame.getId()).ts(System.currentTimeMillis()).build());
+        sendToClient(session, SocketFrame.builder().type(MessageType.AUTH_OK).id(frame.getId()).serverId(serverId).ts(System.currentTimeMillis()).build());
+        autoSubscribeAllConversations(session, userId);
     }
 
     /**
-     * Đăng ký nhận/gửi tin cho 1 conversationId — mở/dùng lại backend stream xuống đúng pod sở hữu nó.
+     * Tự subscribe session vào TOÀN BỘ conversation user đang là thành viên, ngay sau AUTH_OK —
+     * tránh việc client phải tự biết trước danh sách rồi gửi 1 frame SUBSCRIBE/conversationId (user
+     * có N conversation sẽ cần N frame, N lớn thì không ổn). Chạy ngầm, không relay SUBSCRIBE_OK/lỗi
+     * cho client (dùng lại {@code wakeSubscribe}, cùng đường với thông báo "vừa được thêm vào
+     * conversation mới" ở {@link RoutingVersionSync}). Conversation MỚI giờ tạo qua
+     * {@code POST /conversations} (hall) — không còn cách nào client cần tự gửi SUBSCRIBE tường
+     * minh nữa (kể cả lúc tạo mới: hall tự publish membership-changed, harbor tự wake-subscribe
+     * đúng như 1 thành viên khác được mời, xem ARCHITECTURE.md mục 12). Không dùng
+     * {@code wakeSubscribe} theo từng conversationId (N conversation = N handshake) — gom hết
+     * conversationId rồi giao 1 lần cho {@code BackendStreamGateway#autoSubscribeAll} tự nhóm theo
+     * pod đích.
+     */
+    private void autoSubscribeAllConversations(HarborSession session, UUID userId) {
+        membership
+                .listConversationsForUser(userId)
+                .thenCompose(
+                        conversations -> {
+                            var conversationIds = new ArrayList<UUID>();
+                            for (var item : conversations) {
+                                var conv = (io.vertx.core.json.JsonObject) item;
+                                var conversationId = UUIDUtils.parseOrDefault(conv.getString("conversationId"));
+                                if (conversationId != null) {
+                                    conversationIds.add(conversationId);
+                                }
+                            }
+                            return backendStreamGateway.autoSubscribeAll(session, conversationIds, routingVersionSync.currentVersion());
+                        })
+                .exceptionally(
+                        ex -> {
+                            log.warn("failed to auto-subscribe conversations for userId {}", userId, ex);
+                            return null;
+                        });
+    }
+
+    /**
+     * Đăng ký nhận/gửi tin cho 1 conversationId — mở/dùng lại backend stream xuống đúng pod sở hữu
+     * nó. Chỉ còn cần cho case defensive/idempotent (client tự gọi lại "cho chắc" — vô hại nếu đã
+     * subscribe rồi); dòng chảy chính (conversation có sẵn hoặc mới tạo) đều tự động qua
+     * {@link #autoSubscribeAllConversations}/{@link RoutingVersionSync} rồi.
      */
     private void handleSubscribe(HarborSession session, SocketFrame frame) {
         if (session.getUserId() == null) {
@@ -172,17 +237,8 @@ public class HarborSessionManager {
             sendToClient(session, SocketFrames.subscribeError(frame.getId(), "invalid/missing conversationId"));
             return;
         }
-        var members = new ArrayList<UUID>();
-        if (frame.getMemberUserIds() != null) {
-            for (var memberUserId : frame.getMemberUserIds()) {
-                var parsed = UUIDUtils.parseOrDefault(memberUserId);
-                if (parsed != null) {
-                    members.add(parsed);
-                }
-            }
-        }
         backendStreamGateway
-                .subscribe(session, frame.getId(), conversationId, members, routingVersionSync.currentVersion())
+                .subscribe(session, frame.getId(), conversationId, routingVersionSync.currentVersion())
                 .exceptionally(
                         ex -> {
                             log.warn("subscribe failed for session {} conversation {}", session.getId(), conversationId, ex);
@@ -194,42 +250,24 @@ public class HarborSessionManager {
     }
 
     /**
-     * Suy ra conversationId (ưu tiên field mới, fallback DM tất định từ toUserId) rồi forward xuống backend.
+     * conversationId giờ LUÔN phải tường minh — không còn suy DM tất định từ toUserId nữa. Mọi
+     * conversation (cả DM lẫn group) đều phải tạo qua {@code POST /conversations} (hall) trước,
+     * client dùng conversationId server trả về từ đó (giống Slack/Discord: bắt buộc gọi API tạo
+     * trước khi gửi tin được, xem ARCHITECTURE.md mục 12).
      */
     private void handleMessage(HarborSession session, SocketFrame frame) {
         if (session.getUserId() == null) {
             sendToClient(session, SocketFrames.error(frame.getId(), "not authenticated"));
             return;
         }
+        UUID conversationId;
         try {
-            UUID conversationId = resolveConversationId(session, frame);
-            var outgoing = frame.toBuilder().conversationId(conversationId.toString()).build();
-            backendStreamGateway.sendMessage(session, outgoing, conversationId, routingVersionSync.currentVersion());
-        } catch (IllegalArgumentException e) {
-            sendToClient(session, SocketFrames.error(frame.getId(), e.getMessage()));
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            sendToClient(session, SocketFrames.error(frame.getId(), "missing/invalid conversationId"));
+            return;
         }
-    }
-
-    /**
-     * conversationId tường minh nếu client gửi kèm, ngược lại suy DM tất định từ toUserId — ném
-     * {@link IllegalArgumentException} với message dùng thẳng làm lý do lỗi trả về client khi thiếu/sai.
-     */
-    private static UUID resolveConversationId(HarborSession session, SocketFrame frame) {
-        if (!isBlank(frame.getConversationId())) {
-            try {
-                return UUID.fromString(frame.getConversationId());
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("invalid conversationId");
-            }
-        }
-        if (isBlank(frame.getToUserId())) {
-            throw new IllegalArgumentException("missing conversationId/toUserId");
-        }
-        try {
-            return ConversationIds.dmId(session.getUserId(), UUID.fromString(frame.getToUserId()));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("invalid toUserId");
-        }
+        backendStreamGateway.sendMessage(session, frame, conversationId, routingVersionSync.currentVersion());
     }
 
     private void sendToClient(HarborSession session, SocketFrame frame) {

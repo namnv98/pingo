@@ -35,3 +35,18 @@ chatBackend:
   path: /connect # phải khớp với chatSocket.path bên colony
 # PHAI khop voi authTokenSecret cua colony (app.yaml) -- dung de ky/verify JWT xac thuc client.
 authTokenSecret: pingo-local-dev-auth-secret
+database:
+  # Harbor tu doc thang ConversationMembershipRegistry (chat-domain) de auto-subscribe user vao het
+  # cac conversation cua ho ngay sau AUTH, khong doi client tu goi SUBSCRIBE tung conversationId mot
+  # (xem HarborSessionManager#handleAuth) -- chi doc (khong ghi), pool nho la du.
+  parsedUri:
+    databaseType: postgres
+    scheme: steady
+    addresses:
+      - localhost:31005
+    path: pingo
+    user: pingo
+    password: pingo-local-dev
+    params:
+      maxSize: 8
+      maxWaitQueueSize: 256

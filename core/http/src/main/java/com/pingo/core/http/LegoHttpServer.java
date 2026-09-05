@@ -106,6 +106,11 @@ public class LegoHttpServer extends AbstractVerticle {
         allowedHeaders.add("origin");
         allowedHeaders.add("Content-Type");
         allowedHeaders.add("Ngrok-Skip-Browser-Warning");
+        // demo.html goi /conversations kem header Authorization (Bearer token) -- thieu o day
+        // lam preflight OPTIONS tra ve Access-Control-Allow-Headers khong co "authorization",
+        // trinh duyet tu chan request that voi loi "Request header field authorization is not
+        // allowed by Access-Control-Allow-Headers".
+        allowedHeaders.add("authorization");
 
         Set<HttpMethod> allowedMethods = new HashSet<>();
         allowedMethods.add(HttpMethod.GET);

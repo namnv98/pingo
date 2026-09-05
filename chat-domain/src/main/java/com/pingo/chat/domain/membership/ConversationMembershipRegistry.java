@@ -39,6 +39,12 @@ import lombok.RequiredArgsConstructor;
  *   <li>{@code rows.rowCount()} phan anh {@code Statement.getUpdateCount()} chuan JDBC -- LUON la -1
  *   cho SELECT (khac vertx-pg-client, noi rowCount() la so dong that qua wire-protocol). Dung {@code
  *   rows.iterator().hasNext()} de kiem tra "co dong nao khong", khong dung {@code rowCount() > 0}.</li>
+ *   <li>{@code row.getArrayOfUUIDs()}/{@code getArrayOfXxx()} lam {@code (UUID[]) getValue(pos)} khong
+ *   kiem tra kieu -- dung voi vertx-pg-client (wire decoder tra thang mang dung kieu), nhung qua
+ *   vertx-jdbc-client, pgjdbc tra {@code array_agg(uuid)} ve {@code Object[]} (dung, khong phai
+ *   {@code UUID[]}), nem {@code ClassCastException}. Doc qua {@code (Object[]) row.getValue(...)} roi
+ *   tu convert tung phan tu, khong dung {@code getArrayOfXxx()} qua vertx-jdbc-client (xem
+ *   {@link #listConversationsForUser}).</li>
  * </ul>
  */
 @RequiredArgsConstructor
@@ -117,7 +123,14 @@ public class ConversationMembershipRegistry {
             .thenApply(rows -> {
                 var result = new JsonArray();
                 for (var row : rows) {
-                    var memberIds = new JsonArray(Arrays.stream(row.getArrayOfUUIDs("member_ids")).map(UUID::toString).toList());
+                    // row.getArrayOfUUIDs() lam (UUID[]) getValue(pos) khong kiem tra kieu (xem
+                    // Tuple.getArrayOfUUIDs trong vertx-sql-client) -- dung voi vertx-pg-client (wire
+                    // decoder tra thang UUID[]), nhung qua vertx-jdbc-client, pgjdbc tra array_agg(uuid)
+                    // ve Object[] (chua phan tu UUID/String ben trong, khong phai UUID[] that), nem
+                    // ClassCastException. Doc qua Object[] roi String::valueOf, khong quan tam kieu
+                    // phan tu ben trong la gi.
+                    var rawMemberIds = (Object[]) row.getValue("member_ids");
+                    var memberIds = new JsonArray(Arrays.stream(rawMemberIds).map(String::valueOf).toList());
                     var lastMessageAt = row.getOffsetDateTime("last_message_at");
                     result.add(
                         new JsonObject()

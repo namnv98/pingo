@@ -6,28 +6,23 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Sổ đăng ký 1 tầng: {@link ChatSession} (1 gRPC stream = 1 subscriber, không còn tách link vật
- * lý/subscriber như thời N-shard-link). Tra cứu theo cả userId lẫn conversationId (1 user có thể có
- * nhiều session/tab cùng lúc). Tách khỏi {@code ChatSessionManager} để {@code MessageDelivery} dùng
- * chung, không đụng thẳng vào map nội bộ.
+ * Sổ đăng ký 1 tầng: {@link ChatSession} = 1 gRPC stream. KHÔNG còn 1-1 với 1 user — từ khi harbor
+ * chuyển sang dùng CHUNG 1 stream/pod cho mọi user cục bộ của nó (đúng cách Slack làm, xem
+ * ARCHITECTURE.md mục 12), 1 {@code ChatSession} ở đây thực chất đại diện "1 kết nối từ 1 pod
+ * harbor", có thể mang nhiều user khác nhau tuỳ frame ({@code from_user_id} lấy trực tiếp từ mỗi
+ * frame, KHÔNG còn field {@code userId} gắn với session — xem {@code ChatSessionManager#handleMessage}).
+ * Tách khỏi {@code ChatSessionManager} để {@code MessageDelivery} dùng chung, không đụng thẳng vào
+ * map nội bộ.
  */
 public class SessionRegistry {
 
   private final Map<String, ChatSession> sessions = new ConcurrentHashMap<>();
-  private final Map<UUID, List<String>> sessionIdsByUser = new ConcurrentHashMap<>();
   private final Map<UUID, Set<String>> sessionIdsByConversation = new ConcurrentHashMap<>();
 
   public void register(ChatSession session) {
     sessions.put(session.getId(), session);
-  }
-
-  /** Gắn session với 1 user id sau khi SUBSCRIBE thành công lần đầu. */
-  public void attachUser(ChatSession session, UUID userId) {
-    session.setUserId(userId);
-    sessionIdsByUser.computeIfAbsent(userId, key -> new CopyOnWriteArrayList<>()).add(session.getId());
   }
 
   /** Đăng ký session này là subscriber cục bộ của 1 conversationId — gọi sau khi SUBSCRIBE hợp lệ (đã check membership). */
@@ -41,15 +36,6 @@ public class SessionRegistry {
     var session = sessions.remove(sessionId);
     if (session == null) {
       return;
-    }
-    var userId = session.getUserId();
-    if (userId != null) {
-      sessionIdsByUser.computeIfPresent(
-          userId,
-          (key, ids) -> {
-            ids.remove(sessionId);
-            return ids.isEmpty() ? null : ids;
-          });
     }
     for (var conversationId : session.getConversationIds()) {
       sessionIdsByConversation.computeIfPresent(

@@ -34,11 +34,11 @@
 import { exec as execCb, execSync } from "child_process";
 import { promisify } from "util";
 import { homedir } from "os";
-import { uuid, connect, waitFor, registerUser, DEFAULT_API_BASE } from "./lib.mjs";
+import { uuid, connect, waitFor, registerUser, createConversation, DEFAULT_API_BASE } from "./lib.mjs";
 
 const exec = promisify(execCb);
 
-const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect/websocket";
+const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect";
 const API_URL = process.env.PINGO_API_URL ?? DEFAULT_API_BASE;
 const NAMESPACE = process.env.PINGO_NAMESPACE ?? "default";
 const COLONY_LABEL = process.env.PINGO_COLONY_LABEL ?? "app=colony";
@@ -79,12 +79,13 @@ async function main() {
       const authId = uuid();
       s.ws.send(JSON.stringify({ type: "AUTH", id: authId, token: account.token }));
       await waitFor(s.received, (f) => f.type === "AUTH_OK" && f.id === authId);
-      const conversationId = uuid();
-      const subId = uuid();
-      s.ws.send(JSON.stringify({ type: "SUBSCRIBE", id: subId, conversationId, memberUserIds: [account.id] }));
-      const subResult = await waitFor(s.received, (f) => f.id === subId && (f.type === "SUBSCRIBE_OK" || f.type === "SUBSCRIBE_ERROR"));
-      if (subResult.type === "SUBSCRIBE_ERROR") throw new Error(`${s.label} subscribe error: ${subResult.reason}`);
-      s.conversationId = conversationId;
+      // Conversation phai tao qua POST /conversations truoc (khong con lazy-create qua SUBSCRIBE
+      // nua, xem ARCHITECTURE.md muc 12) -- goi SAU khi AUTH xong de broadcast membership-changed
+      // luc tao con bat duoc session nay (xem setupSession trong lib.mjs). Khong con tu SUBSCRIBE:
+      // harbor tu wake-subscribe nho broadcast do.
+      const created = await createConversation(API_URL, account.token);
+      await waitFor(s.received, (f) => f.type === "CONVERSATION_ADDED" && f.conversationId === created.conversationId);
+      s.conversationId = created.conversationId;
       return s;
     }));
   }

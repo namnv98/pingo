@@ -10,15 +10,20 @@ import com.pingo.core.api.annotaion.RegisterHandler;
 import com.pingo.core.api.annotaion.RegisterIApi;
 import com.pingo.core.api.annotaion.Type;
 import com.pingo.core.common.exception.LegoBusinessException;
+import com.pingo.core.common.support.UUIDUtils;
 import com.pingo.core.common.token.JwtHelper;
 import com.pingo.core.common.token.NdlTokenException;
 import com.pingo.hall.api.error.HallErrorKeys;
+import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
@@ -39,12 +44,22 @@ public class HallApiHandlers {
   private static final int MIN_PASSWORD_LENGTH = 8;
   private static final Duration TOKEN_TTL = Duration.ofDays(7);
   private static final String BEARER_PREFIX = "Bearer ";
+  /**
+   * Địa chỉ EventBus broadcast "user vừa được thêm vào conversation" — mọi pod harbor lắng nghe,
+   * tự subscribe hộ + báo CONVERSATION_ADDED cho client nếu đang giữ session sống của user đó (xem
+   * {@code RoutingVersionSync} bên harbor). Cùng địa chỉ colony dùng khi lazy-create qua SUBSCRIBE
+   * (nay đã bỏ — mọi conversation MỚI đều tạo qua {@link #createConversation}), duplicate 1 string
+   * literal thay vì thêm 1 class dùng chung chỉ để giữ 1 hằng số — cùng mức chấp nhận được với cách
+   * hằng số này đã được duplicate giữa colony/harbor từ trước.
+   */
+  private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
 
   private final MessageHistoryRegistry history;
   private final UserRegistry users;
   private final JwtHelper jwtHelper;
   private final ConversationMembershipRegistry membership;
   private final AtomicBoolean ready;
+  private final Vertx vertx;
 
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "healthcheck", type = Type.HTTP)})
   public CompletionStage<byte[]> healthcheck(IRequest request) {
@@ -143,6 +158,60 @@ public class HallApiHandlers {
   public CompletionStage<byte[]> listConversations(IRequest request) {
     var userId = requireAuthenticatedUserId(request);
     return membership.listConversationsForUser(userId).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
+   * {@code POST /conversations} — body JSON {@code {memberUserIds: [...]}} (không cần tự thêm
+   * chính mình). Tạo 1 conversationId MỚI (UUID ngẫu nhiên, dùng chung cho cả DM lẫn group — không
+   * còn suy tất định từ 2 userId như trước, xem ARCHITECTURE.md mục 12), ghi membership, rồi
+   * broadcast {@code conversation_membership_changed} để MỌI thành viên đang online (kể cả chính
+   * người tạo) tự được harbor wake-subscribe + báo {@code CONVERSATION_ADDED} — client KHÔNG cần tự
+   * gửi SUBSCRIBE nữa cho cả 2 loại conversation (đúng cách Slack/Discord làm: phải gọi API tạo
+   * trước khi gửi tin được, xem {@code conversations.create}/{@code POST /users/@me/channels}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "conversations", type = Type.HTTP)})
+  public CompletionStage<byte[]> createConversation(IRequest request) {
+    var creatorId = requireAuthenticatedUserId(request);
+    var body = parseJsonBody(request);
+    var rawMemberUserIds = body.getJsonArray("memberUserIds");
+    var members = new LinkedHashSet<UUID>();
+    members.add(creatorId);
+    if (rawMemberUserIds != null) {
+      for (var raw : rawMemberUserIds) {
+        var parsed = UUIDUtils.parseOrDefault(String.valueOf(raw));
+        if (parsed != null) {
+          members.add(parsed);
+        }
+      }
+    }
+    var conversationId = UUID.randomUUID();
+    return membership
+        .addMembers(conversationId, members)
+        .thenCompose(
+            newlyAdded -> newlyAdded.isEmpty()
+                ? CompletableFuture.completedFuture((Void) null)
+                : publishMembershipChanged(conversationId, newlyAdded))
+        .thenApply(
+            unused ->
+                bytes(
+                    new JsonObject()
+                        .put("conversationId", conversationId.toString())
+                        .put("memberUserIds", new JsonArray(new ArrayList<>(members.stream().map(UUID::toString).toList())))));
+  }
+
+  /** Cùng shape payload với colony's {@code ChatSessionManager#publishMembershipChanged} — xem javadoc {@link #MEMBERSHIP_CHANGED_ADDRESS}. */
+  private CompletionStage<Void> publishMembershipChanged(UUID conversationId, java.util.Set<UUID> newlyAddedUserIds) {
+    return membership
+        .getMembers(conversationId)
+        .thenAccept(
+            allMembers -> {
+              var payload =
+                  new JsonObject()
+                      .put("conversationId", conversationId.toString())
+                      .put("newMemberUserIds", newlyAddedUserIds.stream().map(UUID::toString).toList())
+                      .put("memberUserIds", allMembers.stream().map(UUID::toString).toList());
+              vertx.eventBus().publish(MEMBERSHIP_CHANGED_ADDRESS, payload);
+            });
   }
 
   /** Đọc + verify header {@code Authorization: Bearer <token>} -- ném 401 cho mọi lý do thất bại (thiếu header, token sai/hết hạn). */

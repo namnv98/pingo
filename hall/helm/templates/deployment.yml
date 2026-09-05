@@ -25,6 +25,9 @@ spec:
         - name: config-files
           configMap:
             name: {{ .Chart.Name }}-config-files
+        - name: hazelcast-files-cfm
+          configMap:
+            name: hazelcast-files-cfm
 #      imagePullSecrets:
 #        - name: {{ .Values.global.dockerImagePullSecret }}
       containers:
@@ -34,6 +37,8 @@ spec:
           volumeMounts:
             - name: config-files
               mountPath: /config
+            - name: hazelcast-files-cfm
+              mountPath: /hazelcast-files
           env:
             - name: CONFIG_FILE
               value: /config/app.yaml

@@ -32,5 +32,19 @@ data:
       path: /connect
     # PHAI khop voi authTokenSecret cua colony -- dung de ky/verify JWT xac thuc client.
     authTokenSecret: pingo-local-dev-auth-secret
+    database:
+      # Harbor tu doc ConversationMembershipRegistry (chat-domain) de auto-subscribe user vao het
+      # conversation cua ho ngay sau AUTH -- chi doc, pool nho la du (xem app-local.yaml).
+      parsedUri:
+        databaseType: postgres
+        scheme: steady
+        addresses:
+          - postgres:5432
+        path: pingo
+        user: pingo
+        password: pingo-local-dev
+        params:
+          maxSize: 8
+          maxWaitQueueSize: 256
   log4j2.xml: |
 {{ .Files.Get "config/log4j2.xml" | indent 4 }}

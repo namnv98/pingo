@@ -14,11 +14,7 @@ import com.pingo.colony.ws.session.SessionRegistry;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.ConnectionPoolTooBusyException;
 import io.vertx.core.json.Json;
-import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.server.GrpcServerRequest;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -46,12 +42,6 @@ public class ChatSessionManager {
   private static final long HEARTBEAT_SWEEP_INTERVAL_MS = 15_000;
   private static final long SESSION_IDLE_TIMEOUT_MS = 60_000;
   private static final long DRAIN_GRACE_MS = 1_000;
-  /**
-   * Địa chỉ EventBus broadcast cho sự kiện "user vừa được thêm vào 1 conversation" — mọi pod harbor
-   * lắng nghe, tự subscribe hộ + báo client nếu đang giữ session của user đó (xem RoutingVersionSync
-   * bên harbor). Broadcast chấp nhận được vì tần suất thấp hơn hẳn tin nhắn.
-   */
-  private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
 
   private final String serverId;
   private final SessionRegistry registry = new SessionRegistry();
@@ -117,13 +107,23 @@ public class ChatSessionManager {
     registry.remove(session.getId());
   }
 
+  /**
+   * {@code lastSeenAt} chỉ cập nhật khi nhận frame TỪ harbor ({@link #onMessage}) -- 1 stream chỉ
+   * dùng để ĐẨY tin cho 1 người nhận thụ động (không tự SUBSCRIBE/MESSAGE gì thêm lên) không bao
+   * giờ tự sinh hoạt động, nên nếu không chủ động hỏi thăm sẽ bị coi là chết và đóng oan (đã gặp
+   * thật, cùng loại bug với client<->harbor -- xem HarborSessionManager#heartbeatSweep). Chủ động
+   * PING khi đã idle quá nửa ngưỡng, cho harbor còn nửa thời gian để PONG lại trước khi bị đóng thật.
+   */
   private void sweepIdleSessions() {
     var now = System.currentTimeMillis();
     for (var session : registry.allSessions()) {
-      if (now - session.getLastSeenAt() > SESSION_IDLE_TIMEOUT_MS) {
+      var idleMs = now - session.getLastSeenAt();
+      if (idleMs > SESSION_IDLE_TIMEOUT_MS) {
         log.info("closing idle session {}", session.getId());
         session.close();
         registry.remove(session.getId());
+      } else if (idleMs > SESSION_IDLE_TIMEOUT_MS / 2) {
+        session.send(Frame.newBuilder().setId(UUIDUtils.timeBasedUuidAsString()).setType(FrameType.PING).setTs(now).build());
       }
     }
   }
@@ -132,25 +132,49 @@ public class ChatSessionManager {
     session.setLastSeenAt(System.currentTimeMillis());
     switch (frame.getType()) {
       case SUBSCRIBE -> handleSubscribe(session, frame);
+      case SUBSCRIBE_BULK -> handleSubscribeBulk(session, frame);
       case MESSAGE -> handleMessage(session, frame);
+      case PONG -> {} // chi can cham lastSeenAt (da lam o tren), khong can xu ly gi them
       default -> log.debug("unsupported frame type {} from session {}", frame.getType(), session.getId());
     }
   }
 
   /**
+   * Đăng ký hàng loạt conversationId ĐÃ TỒN TẠI (member đã có sẵn trong DB) — khác {@link
+   * #handleSubscribe}: không mang {@code memberUserIds}, không lazy-create/ghi membership, chỉ đăng
+   * ký subscriber cục bộ. Harbor tự gửi 1 lần ngay sau AUTH, gom hết conversationId của user theo
+   * từng pod đích (xem {@code HarborSessionManager#autoSubscribeAllConversations}), thay vì client
+   * phải tự gửi SUBSCRIBE riêng cho từng conversationId một (tham khảo Slack, xem ARCHITECTURE.md
+   * mục 12). Best-effort: conversationId nào parse lỗi thì bỏ qua lặng lẽ, không fail cả frame.
+   */
+  private void handleSubscribeBulk(ChatSession session, Frame frame) {
+    // subscribeError() (khong phai error() chung) -- harbor chi xu ly ERROR nhu phan hoi cho 1
+    // pending MESSAGE (xem BackendStreamGateway#onBackendFrame), khong phai cho 1 pending
+    // SUBSCRIBE_BULK; dung sai type se khien request cu treo toi khi het han HANDSHAKE_TIMEOUT_MS
+    // thay vi fail ngay (da gap that su khi quen set fromUserId o phia harbor).
+    if (UUIDUtils.parseOrDefault(frame.getFromUserId()) == null) {
+      session.send(subscribeError(frame.getId(), "missing/invalid fromUserId"));
+      return;
+    }
+    for (var rawConversationId : frame.getConversationIdsList()) {
+      var conversationId = UUIDUtils.parseOrDefault(rawConversationId);
+      if (conversationId != null) {
+        registry.subscribe(session, conversationId);
+      }
+    }
+    session.send(Frame.newBuilder().setId(frame.getId()).setType(FrameType.SUBSCRIBE_BULK_OK).setTs(now()).build());
+  }
+
+  /**
    * Đăng ký session làm subscriber của 1 conversationId — thay vai trò AUTH cũ trên chặng
-   * gateway↔backend. Đồng thời lazy-create/join membership: nếu frame kèm {@code memberUserIds},
-   * union vào {@link ConversationMembershipRegistry} trước khi check — đủ cho cả DM (harbor gửi kèm 2
-   * userId lần subscribe đầu) lẫn group, không cần flow "tạo group" riêng (hệ thống chưa có AuthN cho
-   * việc đó — xem ARCHITECTURE.md mục 8).
+   * gateway↔backend. KHÔNG còn lazy-create membership qua {@code memberUserIds} nữa (bỏ từ khi có
+   * {@code POST /conversations} riêng bên hall — mọi conversation MỚI (cả DM lẫn group) đều phải
+   * tạo qua đó trước, giống Slack/Discord bắt buộc gọi API tạo trước khi gửi tin được, xem
+   * ARCHITECTURE.md mục 12) — ở đây chỉ còn CHECK membership đã có sẵn trong DB, không ghi gì cả.
    */
   private void handleSubscribe(ChatSession session, Frame frame) {
     if (!ready) {
       session.send(subscribeError(frame.getId(), "chat node draining"));
-      return;
-    }
-    if (isBlank(frame.getFromUserId())) {
-      session.send(subscribeError(frame.getId(), "missing fromUserId"));
       return;
     }
     UUID userId;
@@ -162,18 +186,9 @@ public class ChatSessionManager {
       session.send(subscribeError(frame.getId(), "invalid/missing fromUserId or conversationId"));
       return;
     }
-    if (session.getUserId() == null) {
-      registry.attachUser(session, userId);
-    }
-
-    CompletionStage<Void> membershipWrite =
-        frame.getMemberUserIdsList().isEmpty()
-            ? CompletableFuture.completedFuture(null)
-            : writeNewMembers(conversationId, userId, frame.getMemberUserIdsList());
-
     var finalConversationId = conversationId;
-    membershipWrite
-        .thenCompose(unused -> membership.isMember(finalConversationId, userId))
+    membership
+        .isMember(finalConversationId, userId)
         .thenAccept(
             isMember -> {
               if (!isMember) {
@@ -191,33 +206,16 @@ public class ChatSessionManager {
             })
         .exceptionally(
             ex -> {
-              log.error("failed to check/write membership for conversation {}", finalConversationId, ex);
+              log.error("failed to check membership for conversation {}", finalConversationId, ex);
               session.send(subscribeError(frame.getId(), "internal error"));
               return null;
             });
   }
 
-  /** Union {@code userId} + các member hợp lệ trong {@code rawMemberUserIds} vào membership, publish nếu có ai thật sự mới. */
-  private CompletionStage<Void> writeNewMembers(UUID conversationId, UUID userId, List<String> rawMemberUserIds) {
-    var members = new ArrayList<UUID>();
-    members.add(userId);
-    for (var memberUserId : rawMemberUserIds) {
-      var parsed = UUIDUtils.parseOrDefault(memberUserId);
-      if (parsed != null) {
-        members.add(parsed);
-      }
-    }
-    return membership
-        .addMembers(conversationId, members)
-        .thenCompose(
-            newlyAdded -> newlyAdded.isEmpty()
-                ? CompletableFuture.completedFuture(null)
-                : publishMembershipChanged(conversationId, newlyAdded));
-  }
-
   private void handleMessage(ChatSession session, Frame frame) {
-    if (session.getUserId() == null) {
-      session.send(error(frame.getId(), "not authenticated"));
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    if (fromUserId == null) {
+      session.send(error(frame.getId(), "missing/invalid fromUserId"));
       return;
     }
     if (isBlank(frame.getConversationId())) {
@@ -229,7 +227,7 @@ public class ChatSessionManager {
         Frame.newBuilder()
             .setId(frame.getId())
             .setType(FrameType.MESSAGE)
-            .setFromUserId(session.getUserId().toString())
+            .setFromUserId(fromUserId.toString())
             .setConversationId(frame.getConversationId())
             .setBodyJson(frame.getBodyJson())
             .setTs(now())
@@ -238,7 +236,7 @@ public class ChatSessionManager {
     if (!messageDelivery.deliverLocally(outgoing)) {
       messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
     }
-    persistMessage(session, frame, outgoing);
+    persistMessage(frame, outgoing);
     session.send(Frame.newBuilder().setId(frame.getId()).setType(FrameType.ACK).setTs(now()).build());
   }
 
@@ -248,16 +246,18 @@ public class ChatSessionManager {
    * đọc lại {@code frame} gốc. Bỏ qua lặng lẽ nếu conversationId sai định dạng — không phải lỗi cần
    * báo client.
    */
-  private void persistMessage(ChatSession session, Frame frame, Frame outgoing) {
+  private void persistMessage(Frame frame, Frame outgoing) {
     UUID conversationId;
+    UUID fromUserId;
     try {
       conversationId = UUID.fromString(outgoing.getConversationId());
+      fromUserId = UUID.fromString(outgoing.getFromUserId());
     } catch (IllegalArgumentException | NullPointerException e) {
       return;
     }
     Object body = outgoing.getBodyJson().isEmpty() ? null : Json.decodeValue(outgoing.getBodyJson());
     history
-        .saveMessage(UUID.randomUUID(), conversationId, session.getUserId(), body, outgoing.getTs())
+        .saveMessage(UUID.randomUUID(), conversationId, fromUserId, body, outgoing.getTs())
         .exceptionally(
             ex -> {
               // DB pool qua tai (ConnectionPoolTooBusyException) la tin hieu backpressure THUONG GAP
@@ -286,25 +286,6 @@ public class ChatSessionManager {
                 log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
               }
               return null;
-            });
-  }
-
-  /**
-   * Broadcast "user X được thêm vào conversationId" cho mọi pod harbor — kèm FULL danh sách member
-   * hiện tại (không chỉ phần mới) để harbor "nhớ" đủ cho lần reconnect sau (xem
-   * {@code HarborSession.rememberMembers}).
-   */
-  private CompletionStage<Void> publishMembershipChanged(UUID conversationId, Set<UUID> newlyAddedUserIds) {
-    return membership
-        .getMembers(conversationId)
-        .thenAccept(
-            allMembers -> {
-              var payload =
-                  new JsonObject()
-                      .put("conversationId", conversationId.toString())
-                      .put("newMemberUserIds", newlyAddedUserIds.stream().map(UUID::toString).toList())
-                      .put("memberUserIds", allMembers.stream().map(UUID::toString).toList());
-              vertx.eventBus().publish(MEMBERSHIP_CHANGED_ADDRESS, payload);
             });
   }
 

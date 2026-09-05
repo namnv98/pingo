@@ -14,7 +14,6 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -87,14 +86,13 @@ public class RoutingVersionSync extends RoutingVersionTracker {
     if (newMemberUserIds.isEmpty()) {
       return;
     }
-    var memberUserIds = List.copyOf(toUuidSet(body.getJsonArray("memberUserIds")));
 
     for (var session : sessions.values()) {
       if (session.getUserId() == null || !newMemberUserIds.contains(session.getUserId())) {
         continue;
       }
       backendStreamGateway
-          .wakeSubscribe(session, conversationId, memberUserIds, currentVersion)
+          .wakeSubscribe(session, conversationId, currentVersion)
           .thenAccept(
               unused ->
                   relayToClient.accept(

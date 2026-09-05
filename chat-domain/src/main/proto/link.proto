@@ -19,6 +19,18 @@ enum FrameType {
   MESSAGE = 4;
   ACK = 5;
   ERROR = 6;
+  // Dang ky hang loat conversationId DA TON TAI (khac SUBSCRIBE: khong mang member_user_ids, khong
+  // lazy-create membership/ghi DB) -- harbor tu gui 1 lan ngay sau AUTH, gom het conversationId cua
+  // user theo TUNG POD dich (1 frame/pod, khong phai 1 frame/conversationId), tham khao dung cach
+  // Slack lam ("GS subscribes to all channel servers... asynchronously", xem ARCHITECTURE.md muc 12).
+  SUBSCRIBE_BULK = 7;
+  SUBSCRIBE_BULK_OK = 8;
+  // Colony chu dong PING khi 1 session sap idle (chi nhan tin, khong tu gui gi len se khong bao gio
+  // tu sinh hoat dong) -- harbor PONG lai ngay, cap nhat lastSeenAt ben colony, tranh dong oan
+  // stream dang duoc dung de day tin cho 1 nguoi nhan thu dong (cung 1 loai bug da gap va sua o
+  // client<->harbor, xem HarborSessionManager#heartbeatSweep).
+  PING = 9;
+  PONG = 10;
 }
 
 message Frame {
@@ -33,6 +45,9 @@ message Frame {
   string body_json = 6;
   string reason = 7;
   int64 ts = 8;
+  // Chi dung cho SUBSCRIBE_BULK: danh sach conversationId (da xac nhan la member) can dang ky vao
+  // 1 lan, cung 1 pod dich.
+  repeated string conversation_ids = 9;
 }
 
 service Link {

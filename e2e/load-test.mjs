@@ -11,11 +11,11 @@
 // Cach chay (co the chinh qua env var, khong can sua code):
 //   node e2e/load-test.mjs
 //   PINGO_NUM_SESSIONS=100 PINGO_SEND_INTERVAL_MS=10 PINGO_TOTAL_DURATION_MS=30000 node e2e/load-test.mjs
-//   PINGO_API_URL=http://localhost:8085 PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/load-test.mjs   # local dev, khong qua k3s
+//   PINGO_API_URL=http://localhost:8085 PINGO_WS_URL=ws://localhost:8888/connect node e2e/load-test.mjs   # local dev, khong qua k3s
 
-import { uuid, connect, waitFor, registerUser, DEFAULT_API_BASE } from "./lib.mjs";
+import { uuid, connect, waitFor, registerUser, createConversation, DEFAULT_API_BASE } from "./lib.mjs";
 
-const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect/websocket";
+const URL = process.env.PINGO_WS_URL ?? "ws://localhost:31003/connect";
 const API_URL = process.env.PINGO_API_URL ?? DEFAULT_API_BASE;
 const NUM_SESSIONS = Number(process.env.PINGO_NUM_SESSIONS ?? 50);
 const SEND_INTERVAL_MS = Number(process.env.PINGO_SEND_INTERVAL_MS ?? 20);
@@ -28,25 +28,25 @@ function percentile(sortedArr, p) {
   return sortedArr[idx];
 }
 
-/** Dang ky + AUTH (token that) + SUBSCRIBE 1 conversation rieng, giong setupSession trong lib.mjs
- * nhung gan them 1 listener rieng (khong dua vao mang s.received chung) de theo doi latency theo
- * thoi gian thuc thay vi phai quet lai toan bo mang moi lan -- quan trong khi tong so tin co the
- * len toi hang chuc nghin trong 1 lan chay tai. `stats` la object dung chung giua moi session. */
+/** Dang ky + AUTH (token that) + tao 1 conversation rieng qua POST /conversations, giong
+ * setupSession trong lib.mjs nhung gan them 1 listener rieng (khong dua vao mang s.received chung)
+ * de theo doi latency theo thoi gian thuc thay vi phai quet lai toan bo mang moi lan -- quan trong
+ * khi tong so tin co the len toi hang chuc nghin trong 1 lan chay tai. `stats` la object dung
+ * chung giua moi session. Conversation phai tao qua REST truoc (khong con lazy-create qua
+ * SUBSCRIBE nua, xem ARCHITECTURE.md muc 12); khong con tu SUBSCRIBE -- harbor tu wake-subscribe
+ * nho broadcast membership-changed luc tao. */
 async function setupLoadSession(label, stats) {
   const account = await registerUser(API_URL);
-  const conversationId = uuid();
   const s = await connect(URL, label);
 
   const authId = uuid();
   s.ws.send(JSON.stringify({ type: "AUTH", id: authId, token: account.token }));
   await waitFor(s.received, (f) => f.type === "AUTH_OK" && f.id === authId);
 
-  const subId = uuid();
-  s.ws.send(JSON.stringify({ type: "SUBSCRIBE", id: subId, conversationId, memberUserIds: [account.id] }));
-  const subResult = await waitFor(s.received, (f) => f.id === subId && (f.type === "SUBSCRIBE_OK" || f.type === "SUBSCRIBE_ERROR"));
-  if (subResult.type === "SUBSCRIBE_ERROR") throw new Error(`${label} subscribe error: ${subResult.reason}`);
+  const created = await createConversation(API_URL, account.token);
+  await waitFor(s.received, (f) => f.type === "CONVERSATION_ADDED" && f.conversationId === created.conversationId);
 
-  s.conversationId = conversationId;
+  s.conversationId = created.conversationId;
   s.pending = new Map(); // id (tin da gui, chua co phan hoi) -> timestamp luc gui (performance.now(), ms)
   s.ws.addEventListener("message", (ev) => {
     const f = JSON.parse(ev.data);

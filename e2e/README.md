@@ -20,7 +20,7 @@ hay k3s — chỉ cần 1 pod/instance `colony` là đủ, không cần nhiều 
 
 ```bash
 node e2e/demux-test.mjs                                                              # mặc định trỏ k3s NodePort 31003
-env PINGO_WS_URL=ws://localhost:8888/connect/websocket node e2e/demux-test.mjs       # local dev, không qua k3s (bash lẫn fish đều chạy được)
+env PINGO_WS_URL=ws://localhost:8888/connect node e2e/demux-test.mjs       # local dev, không qua k3s (bash lẫn fish đều chạy được)
 ```
 
 ## `load-test.mjs` — đo throughput (TPS) + độ trễ, không kill gì cả
@@ -75,7 +75,7 @@ Tuỳ chỉnh qua biến môi trường (không cần sửa code):
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| `PINGO_WS_URL` | `ws://localhost:31003/connect/websocket` | endpoint harbor |
+| `PINGO_WS_URL` | `ws://localhost:31003/connect` | endpoint harbor |
 | `PINGO_API_URL` | `http://localhost:31002` | REST API của colony, dùng để `/register` tài khoản thật cho mỗi session (xem `lib.mjs#registerUser` — AUTH giờ đòi token JWT, không còn tự khai `fromUserId`) |
 | `PINGO_NAMESPACE` | `default` | namespace k8s |
 | `PINGO_COLONY_LABEL` | `app=colony` | label selector để tìm pod colony |
