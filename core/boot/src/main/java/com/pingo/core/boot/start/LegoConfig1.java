@@ -44,6 +44,8 @@ public class LegoConfig1 {
   private DbConfig database;
   private InvalidateCacheConfig invalidateCacheConfig;
   private KafkaConfig kafka;
+  /** Chỉ herald dùng (push notification thật qua FCM, xem {@code PushService}). */
+  private FirebaseConfig firebase;
 
   @Data
   @Builder(toBuilder = true)
@@ -78,5 +80,20 @@ public class LegoConfig1 {
     private String topics;
     private Properties properties;
     private long pollingTimeoutMillis = 100l;
+  }
+
+  /**
+   * Credentials Firebase Admin SDK (push qua FCM) — {@code serviceAccountJson} là NGUYÊN VĂN nội
+   * dung file JSON service account tải từ Firebase Console (Project settings → Service accounts →
+   * Generate new private key), không phải đường dẫn file. Đây là bí mật thật (private key) — chỉ
+   * nên override bằng giá trị riêng cho production, giống {@code authTokenSecret}; giá trị mặc định
+   * trong app.yaml/config-files.yaml của herald là project dev dùng chung, không phải production.
+   */
+  @Data
+  @Builder(toBuilder = true)
+  @NoArgsConstructor
+  @AllArgsConstructor
+  public static class FirebaseConfig {
+    private String serviceAccountJson;
   }
 }

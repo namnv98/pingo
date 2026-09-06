@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Chart.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name }}
+  serviceName: {{ .Chart.Name }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Chart.Name }}
+    spec:
+      volumes:
+        - name: file-server-uploads
+          persistentVolumeClaim:
+            claimName: file-server-uploads-static01-0
+      initContainers:
+        - name: prepare-upload-folder
+          image: alpine:3
+          command:
+            - chown
+            - -R
+            - nobody:nobody
+            - {{ .Values.uploadFolder }}
+          volumeMounts:
+            - name: file-server-uploads
+              mountPath: {{ .Values.uploadFolder }}
+      containers:
+        - name: {{ .Chart.Name }}
+          # nnv98/legofile:1.1.1 (Docker Hub) doi thanh image build local (localhost:5000, khong
+          # dung Docker Hub o buoc deploy local -- cung quy uoc voi deploy-k3s.sh cho cac module
+          # Java). Rebuild/push lai bang: docker build -t localhost:5000/file-server:local
+          # file-server/fileserver && docker push localhost:5000/file-server:local, roi
+          # "kubectl rollout restart statefulset/static01" (tag mutable, helm upgrade KHONG tu
+          # restart pod khi tag khong doi -- da gap that su, xem lich su sua doi).
+          image: localhost:5000/file-server:local
+          volumeMounts:
+            - name: file-server-uploads
+              mountPath: {{ .Values.uploadFolder }}
+          imagePullPolicy: Always
+  # PVC tron, KHONG chi dinh storageClassName -- k3s local tu dung storage class mac dinh cua no
+  # ("local-path", tu dong provision) -- cung cach postgres/helm/templates/pvc.yaml dang lam. Ban goc
+  # tu tao rieng 1 StorageClass "jadriver-storage" + PV hostPath gan cung vao node/duong dan cua cum
+  # cu (dev-land01-node01, /home/pv01/jadriver) -- khong ton tai o k3s local, PVC se ket Pending mai
+  # neu giu nguyen.
+  volumeClaimTemplates:
+    - metadata:
+        name: file-server-uploads
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}

@@ -1,8 +1,10 @@
 package com.pingo.hall.api;
 
 import com.google.inject.Inject;
+import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.notification.NotificationRegistry;
 import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.IRequest;
 import com.pingo.core.api.annotaion.ApiMethod;
@@ -53,11 +55,20 @@ public class HallApiHandlers {
    * hằng số này đã được duplicate giữa colony/harbor từ trước.
    */
   private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
+  /**
+   * Địa chỉ EventBus broadcast "conversation X vừa bị xoá hẳn" — xem {@code #deleteConversation}.
+   * Harbor lắng nghe (xem {@code RoutingVersionSync#onConversationDeleted}), relay
+   * {@code CONVERSATION_DELETED} cho MỌI session đang sống có subscribe conversationId đó, để
+   * client dọn UI ngay (không phải đợi tự phát hiện qua lần load lại danh sách kế tiếp).
+   */
+  private static final String CONVERSATION_DELETED_ADDRESS = "conversation_deleted";
 
   private final MessageHistoryRegistry history;
   private final UserRegistry users;
   private final JwtHelper jwtHelper;
   private final ConversationMembershipRegistry membership;
+  private final NotificationRegistry notifications;
+  private final FileRegistry files;
   private final AtomicBoolean ready;
   private final Vertx vertx;
 
@@ -69,6 +80,13 @@ public class HallApiHandlers {
     return completed(new JsonObject().put("status", "ok"));
   }
 
+  /**
+   * {@code GET /messages?conversationId=&limit=&before=} (mặc định, nạp NGƯỢC từ 1 mốc trở về
+   * trước -- "cuộn lên xem tin cũ hơn") HOẶC {@code &after=} (nạp XUÔI, tăng dần -- nạp đoạn tin
+   * CHƯA ĐỌC từ ngay sau con trỏ đã đọc tới hiện tại lúc mở lại conversation, xem
+   * {@link MessageHistoryRegistry#listMessagesAfter}). {@code after} ưu tiên hơn nếu cả 2 cùng có
+   * mặt (không dùng đồng thời trong thực tế -- xem demo.html loadHistory).
+   */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "messages", type = Type.HTTP)})
   public CompletionStage<byte[]> listMessages(IRequest request) {
     UUID conversationId;
@@ -78,8 +96,44 @@ public class HallApiHandlers {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
     }
     var limit = parseLimit(request.getParam("limit"));
+    Long after = parseBefore(request.getParam("after"));
+    if (after != null) {
+      return history.listMessagesAfter(conversationId, after, limit).thenApply(HallApiHandlers::bytes);
+    }
     Long before = parseBefore(request.getParam("before"));
     return history.listMessages(conversationId, limit, before).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
+   * {@code GET /read-cursor?conversationId=} -- vị trí "đã đọc tới đâu" CỦA CHÍNH MÌNH trong 1
+   * conversation (xem {@link MessageHistoryRegistry#getReadCursor}), dùng lúc mở lại conversation
+   * để cuộn đúng chỗ lần trước dừng (xem demo.html loadHistory). Cần auth (khác {@code /messages}
+   * -- đây là dữ liệu RIÊNG của từng user, không phải view chung của cả conversation).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "read-cursor", type = Type.HTTP)})
+  public CompletionStage<byte[]> getReadCursor(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    return history.getReadCursor(conversationId, userId)
+        .thenApply(cursor -> bytes(new JsonObject().put("data", cursor)));
+  }
+
+  /** {@code GET /files?conversationId=<uuid>} -- tab "Files" panel Info bên demo.html, xem javadoc {@link FileRegistry#listForConversation}. */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "files", type = Type.HTTP)})
+  public CompletionStage<byte[]> listFiles(IRequest request) {
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var limit = parseLimit(request.getParam("limit"));
+    return files.listForConversation(conversationId, limit).thenApply(HallApiHandlers::bytes);
   }
 
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "users", type = Type.HTTP)})
@@ -161,9 +215,10 @@ public class HallApiHandlers {
   }
 
   /**
-   * {@code POST /conversations} — body JSON {@code {memberUserIds: [...]}} (không cần tự thêm
-   * chính mình). Tạo 1 conversationId MỚI (UUID ngẫu nhiên, dùng chung cho cả DM lẫn group — không
-   * còn suy tất định từ 2 userId như trước, xem ARCHITECTURE.md mục 12), ghi membership, rồi
+   * {@code POST /conversations} — body JSON {@code {memberUserIds: [...], name: "..." (tuỳ chọn)}}
+   * (không cần tự thêm chính mình). Tạo 1 conversationId MỚI (UUID ngẫu nhiên, dùng chung cho cả DM
+   * lẫn group — không còn suy tất định từ 2 userId như trước, xem ARCHITECTURE.md mục 12), ghi
+   * membership (+tên riêng nếu có, xem {@code ConversationMembershipRegistry#upsertName}), rồi
    * broadcast {@code conversation_membership_changed} để MỌI thành viên đang online (kể cả chính
    * người tạo) tự được harbor wake-subscribe + báo {@code CONVERSATION_ADDED} — client KHÔNG cần tự
    * gửi SUBSCRIBE nữa cho cả 2 loại conversation (đúng cách Slack/Discord làm: phải gọi API tạo
@@ -174,6 +229,7 @@ public class HallApiHandlers {
     var creatorId = requireAuthenticatedUserId(request);
     var body = parseJsonBody(request);
     var rawMemberUserIds = body.getJsonArray("memberUserIds");
+    var name = body.getString("name");
     var members = new LinkedHashSet<UUID>();
     members.add(creatorId);
     if (rawMemberUserIds != null) {
@@ -188,15 +244,89 @@ public class HallApiHandlers {
     return membership
         .addMembers(conversationId, members)
         .thenCompose(
-            newlyAdded -> newlyAdded.isEmpty()
-                ? CompletableFuture.completedFuture((Void) null)
-                : publishMembershipChanged(conversationId, newlyAdded))
+            newlyAdded -> {
+              var afterName = name == null || name.isBlank() ? CompletableFuture.completedFuture((Void) null) : membership.upsertName(conversationId, name.strip());
+              return afterName.thenCompose(
+                  unused -> newlyAdded.isEmpty() ? CompletableFuture.completedFuture((Void) null) : publishMembershipChanged(conversationId, newlyAdded));
+            })
         .thenApply(
             unused ->
                 bytes(
                     new JsonObject()
                         .put("conversationId", conversationId.toString())
+                        .put("name", name == null || name.isBlank() ? null : name.strip())
                         .put("memberUserIds", new JsonArray(new ArrayList<>(members.stream().map(UUID::toString).toList())))));
+  }
+
+  /**
+   * {@code PUT /conversations?conversationId=<uuid>} — body JSON {@code {name: "..."}}. Đổi/xoá
+   * tên riêng, dùng chung cho MỌI thành viên (khác bản đầu chỉ lưu localStorage riêng từng trình
+   * duyệt) — áp dụng được cho cả DM lẫn group. Chỉ thành viên hiện tại mới đổi được. {@code name}
+   * rỗng/blank thì XOÁ tên (quay lại tự suy từ danh sách thành viên).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations", type = Type.HTTP)})
+  public CompletionStage<byte[]> renameConversation(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var body = parseJsonBody(request);
+    var name = body.getString("name");
+    var finalConversationId = conversationId;
+    return membership
+        .isMember(finalConversationId, userId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return membership.upsertName(finalConversationId, name);
+            })
+        .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("name", name == null || name.isBlank() ? null : name.strip())));
+  }
+
+  /**
+   * {@code DELETE /conversations?conversationId=<uuid>} — xoá HẲN 1 conversation cho MỌI thành
+   * viên (không phải "rời khỏi" chỉ riêng mình): xoá messages, notifications, tên riêng (nếu có),
+   * rồi conversation_members liên quan tới conversationId đó, theo đúng thứ tự (dọn dữ liệu phụ
+   * thuộc trước). Chỉ thành viên hiện tại mới xoá được (403 nếu không phải, 404 nếu conversationId
+   * không tồn tại/đã bị xoá).
+   *
+   * <p>Không bọc transaction ACID xuyên 4 bảng — các lệnh DELETE tuần tự, cùng mức best-effort với
+   * {@code persistMessage}/{@code publishNotificationCandidates} bên colony (mỗi lệnh tự
+   * idempotent, chạy lại an toàn nếu 1 bước giữa chừng lỗi mạng — không rủi ro như INSERT trùng lặp).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "conversations", type = Type.HTTP)})
+  public CompletionStage<byte[]> deleteConversation(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var finalConversationId = conversationId;
+    return membership
+        .isMember(finalConversationId, userId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return history
+                  .deleteForConversation(finalConversationId)
+                  .thenCompose(unused -> notifications.deleteForConversation(finalConversationId))
+                  .thenCompose(unused -> membership.upsertName(finalConversationId, null))
+                  .thenCompose(unused -> membership.deleteConversation(finalConversationId));
+            })
+        .thenApply(
+            unused -> {
+              vertx.eventBus().publish(CONVERSATION_DELETED_ADDRESS, new JsonObject().put("conversationId", finalConversationId.toString()));
+              return bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("deleted", true));
+            });
   }
 
   /** Cùng shape payload với colony's {@code ChatSessionManager#publishMembershipChanged} — xem javadoc {@link #MEMBERSHIP_CHANGED_ADDRESS}. */
@@ -214,14 +344,89 @@ public class HallApiHandlers {
             });
   }
 
+  /**
+   * {@code POST /file/create?token=<jwt>&conversationId=<uuid>} -- endpoint thay thế cho service
+   * "jad" bị thiếu mà module {@code file-server} (nginx/Lua, copy từ dự án cũ) cần gọi ra trước khi
+   * ghi file lên đĩa, xem javadoc {@link FileRegistry}. Nhận token qua QUERY PARAM (không phải header
+   * {@code Authorization} như mọi endpoint khác) vì {@code jad.create_file_path} bên Lua không
+   * forward header cho route này (nguyên bản đã vậy, không phải mình tự chọn) -- client tự gắn
+   * {@code ?token=} khi gọi {@code /v2/api/upload} thì token mới tới được đây, xem demo.html
+   * {@code uploadAndSendFile()}. {@code conversationId} tuỳ chọn -- thiếu/sai định dạng thì vẫn cho
+   * upload bình thường, chỉ là file đó sẽ không xuất hiện ở tab Files của conversation nào.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "file/create", type = Type.HTTP)})
+  public CompletionStage<byte[]> createFile(IRequest request) {
+    var userId = resolveUserId(request.getParam("token"));
+    var conversationId = UUIDUtils.parseOrDefault(request.getParam("conversationId"));
+    return files.createFile(userId, conversationId)
+        .thenApply(
+            fileId ->
+                bytes(
+                    new JsonObject()
+                        .put("data", new JsonObject().put("id", fileId.toString()).put("path", FileRegistry.STORAGE_PATH))
+                        .put("userId", userId.toString())));
+  }
+
+  /**
+   * {@code POST /file/update} -- file-server gọi NGAY SAU KHI ghi xong bytes lên đĩa, body JSON
+   * {@code {fileId, size, mime}} (xem file-server/fileserver/v2/file/upload.lua). Tên file gốc (nếu
+   * có) đi kèm qua query {@code fileName} -- client tự gắn lúc gọi {@code /v2/api/upload}, giữ
+   * nguyên xuyên suốt (upload.lua tái sử dụng lại {@code args} ban đầu cho cả 2 lệnh gọi).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "file/update", type = Type.HTTP)})
+  public CompletionStage<byte[]> updateFile(IRequest request) {
+    var body = parseJsonBody(request);
+    UUID fileId;
+    try {
+      fileId = UUID.fromString(body.getString("fileId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid fileId");
+    }
+    var name = request.getParam("fileName");
+    return files.markUploaded(fileId, body.getString("mime"), body.getLong("size", 0L), name)
+        .thenApply(unused -> bytes(new JsonObject()));
+  }
+
+  /**
+   * {@code GET /file/get?id=<fileId>} -- KHÔNG yêu cầu {@code Authorization} (khác mọi endpoint
+   * khác của hall) vì thẻ {@code <img src>}/{@code <video src>} của trình duyệt không gắn được
+   * header tuỳ ý -- coi fileId (UUID ngẫu nhiên, không đoán được) là đủ bảo vệ cho quy mô demo/test
+   * hiện tại, chấp nhận cùng mức "không auth cho GET" như {@code /users}/{@code /messages} đã có sẵn.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "file/get", type = Type.HTTP)})
+  public CompletionStage<byte[]> getFile(IRequest request) {
+    UUID fileId;
+    try {
+      fileId = UUID.fromString(request.getParam("id"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid id");
+    }
+    return files.getFile(fileId)
+        .thenApply(
+            file -> {
+              if (file == null) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "file not found");
+              }
+              return bytes(new JsonObject().put("data", file));
+            });
+  }
+
   /** Đọc + verify header {@code Authorization: Bearer <token>} -- ném 401 cho mọi lý do thất bại (thiếu header, token sai/hết hạn). */
   private UUID requireAuthenticatedUserId(IRequest request) {
     var header = request.getHeader("Authorization");
     if (header == null || !header.startsWith(BEARER_PREFIX)) {
       throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");
     }
+    return resolveUserId(header.substring(BEARER_PREFIX.length()).strip());
+  }
+
+  /** Verify 1 chuỗi token JWT thô (đã tách khỏi header/query) -- dùng chung cho cả 2 đường lấy token (header Bearer, hoặc query param -- xem {@link #createFile}). */
+  private UUID resolveUserId(String rawToken) {
+    if (rawToken == null || rawToken.isBlank()) {
+      throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");
+    }
     try {
-      var decoded = jwtHelper.decode(header.substring(BEARER_PREFIX.length()).strip());
+      var decoded = jwtHelper.decode(rawToken.strip());
       var userId = decoded.getUUID("userId");
       if (userId == null) {
         throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");

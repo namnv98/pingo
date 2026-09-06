@@ -1,0 +1,8 @@
+imageId: localhost:5000/herald:local
+
+istio:
+  sidecar_inject: true
+
+global:
+  environment: dev
+  baseDomain: lego.dev

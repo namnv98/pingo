@@ -1,0 +1,10 @@
+apiVersion: v2
+name: static01
+description: openresty file server with custom lua scripts
+home: https://github.com/nguoidilam/jadriver
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+kubeVersion: ">=1.19.0-0"
+maintainers:
+  - name: namnv

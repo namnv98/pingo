@@ -1,6 +1,7 @@
 package com.pingo.chat.domain.membership;
 
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
+import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Tuple;
@@ -104,21 +105,81 @@ public class ConversationMembershipRegistry {
                 .collect(Collectors.toUnmodifiableSet())));
     }
 
+    /** Xoá TOÀN BỘ membership của 1 conversationId (mọi thành viên) — xem {@code HallApiHandlers#deleteConversation}. */
+    public CompletionStage<Void> deleteConversation(UUID conversationId) {
+        return supplier.execute(conn -> conn.preparedQuery("DELETE FROM conversation_members WHERE conversation_id = ?")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    /**
+     * Đặt/đổi tên riêng cho 1 conversationId, dùng chung cho MỌI thành viên (khác bản đầu chỉ lưu
+     * localStorage riêng từng trình duyệt) — xem {@code HallApiHandlers} POST/PUT {@code /conversations}.
+     * {@code name} rỗng/blank thì XOÁ dòng (quay lại tự suy label từ danh sách thành viên phía
+     * client, xem {@link #listConversationsForUser}) thay vì lưu chuỗi rỗng vô nghĩa.
+     */
+    public CompletionStage<Void> upsertName(UUID conversationId, String name) {
+        if (name == null || name.isBlank()) {
+            return supplier.execute(conn -> conn.preparedQuery("DELETE FROM conversations WHERE id = ?")
+                .execute(Tuple.of(conversationId))
+                .toCompletionStage()
+                .thenApply(unused -> null));
+        }
+        return supplier.execute(conn -> conn.preparedQuery(
+                "INSERT INTO conversations (id, name) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")
+            .execute(Tuple.of(conversationId, name))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+
     /**
      * Toan bo conversation ma userId dang la thanh vien -- dung cho UI "danh sach hoi thoai cua
      * ban" (GET /conversations). Kem full member list moi conversation (client tu suy label: DM
      * hien ten nguoi con lai, group hien so thanh vien) va thoi diem tin nhan gan nhat, sap xep
-     * theo hoat dong gan day nhat truoc.
+     * theo hoat dong gan day nhat truoc -- "hoat dong" = tin nhan gan nhat, nhung conversation VUA
+     * TAO (chua ai gui tin gi, last_message_at NULL) dung MIN(created_at) cua conversation_members
+     * lam moc thay the, khong thi se rot xuong cuoi danh sach (NULLS LAST) thay vi len dau nhu ky
+     * vong "vua tao xong phai thay ngay" -- da gap thuc te khi test tay UI (xem demo.html).
      */
     public CompletionStage<JsonArray> listConversationsForUser(UUID userId) {
+        // Bọc 1 lớp subquery: Postgres KHÔNG cho dùng alias của SELECT list (last_message_at,
+        // conv_created_at) bên trong 1 expression khác (COALESCE) ở ORDER BY của CHÍNH câu GROUP BY
+        // đó -- chỉ cho dùng bare alias trực tiếp. Coi cả subquery như 1 bảng thường thì alias trở
+        // thành cột thật, COALESCE ở ORDER BY ngoài mới hợp lệ.
         return supplier.executeReadOnly(conn -> conn.preparedQuery(
-                "SELECT cm.conversation_id, array_agg(cm.user_id) AS member_ids, "
-                    + "(SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = cm.conversation_id) AS last_message_at "
-                    + "FROM conversation_members cm "
-                    + "WHERE cm.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = ?) "
-                    + "GROUP BY cm.conversation_id "
-                    + "ORDER BY last_message_at DESC NULLS LAST")
-            .execute(Tuple.of(userId))
+                "SELECT * FROM ("
+                    + "  SELECT cm.conversation_id, array_agg(cm.user_id) AS member_ids, "
+                    + "    (SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = cm.conversation_id) AS last_message_at, "
+                    // Tin GẦN NHẤT (dù đã xoá hay chưa -- xoá thì vẫn phải hiện đúng chuyện vừa xảy ra
+                    // "Tin nhắn đã bị xoá" ở sidebar, không lặng lẽ nhảy về tin cũ hơn, xem demo.html
+                    // conversationLastMessagePreview()) -- 3 subquery riêng thay vì 1 join/LATERAL để
+                    // giữ đúng pattern scalar-subquery-trong-SELECT-list đã dùng cho last_message_at/
+                    // conv_name ở trên (an toàn với GROUP BY, không cần thêm cột vào GROUP BY).
+                    + "    (SELECT m.body FROM messages m WHERE m.conversation_id = cm.conversation_id ORDER BY m.created_at DESC LIMIT 1) AS last_message_body, "
+                    + "    (SELECT m.from_user_id FROM messages m WHERE m.conversation_id = cm.conversation_id ORDER BY m.created_at DESC LIMIT 1) AS last_message_from_user_id, "
+                    + "    (SELECT m.deleted_at IS NOT NULL FROM messages m WHERE m.conversation_id = cm.conversation_id ORDER BY m.created_at DESC LIMIT 1) AS last_message_deleted, "
+                    // Số tin CHƯA đọc CHÍNH XÁC (COUNT SQL thật, xem cùng lý do ở
+                    // MessageHistoryRegistry#getReadCursor) -- KHÔNG dùng cờ tạm phía client
+                    // (unreadConversationIds trong demo.html trước đây) vì nó chỉ sống trong bộ nhớ
+                    // trình duyệt, mất sạch mỗi lần reload trang dù tin thật sự vẫn chưa đọc gì cả.
+                    // COALESCE(cr.last_read_ts, 0): chưa từng đọc gì (không có dòng conversation_reads)
+                    // thì coi mốc là "từ đầu thời gian" -- MỌI tin của người khác đều tính là chưa đọc.
+                    + "    (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = cm.conversation_id "
+                    + "       AND m.from_user_id != ? AND m.deleted_at IS NULL "
+                    + "       AND m.created_at > to_timestamp(COALESCE("
+                    + "         (SELECT cr.last_read_ts FROM conversation_reads cr WHERE cr.conversation_id = cm.conversation_id AND cr.user_id = ?), 0"
+                    + "       ) / 1000.0)"
+                    + "    ) AS unread_count, "
+                    + "    min(cm.created_at) AS conv_created_at, "
+                    + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name "
+                    + "  FROM conversation_members cm "
+                    + "  WHERE cm.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = ?) "
+                    + "  GROUP BY cm.conversation_id"
+                    + ") t "
+                    + "ORDER BY COALESCE(last_message_at, conv_created_at) DESC")
+            .execute(Tuple.of(userId, userId, userId))
             .toCompletionStage()
             .thenApply(rows -> {
                 var result = new JsonArray();
@@ -132,11 +193,19 @@ public class ConversationMembershipRegistry {
                     var rawMemberIds = (Object[]) row.getValue("member_ids");
                     var memberIds = new JsonArray(Arrays.stream(rawMemberIds).map(String::valueOf).toList());
                     var lastMessageAt = row.getOffsetDateTime("last_message_at");
+                    var lastMessageDeleted = Boolean.TRUE.equals(row.getBoolean("last_message_deleted"));
+                    var lastMessageBodyText = row.getString("last_message_body");
+                    var lastMessageFromUserId = row.getUUID("last_message_from_user_id");
                     result.add(
                         new JsonObject()
                             .put("conversationId", row.getUUID("conversation_id").toString())
                             .put("memberUserIds", memberIds)
-                            .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli()));
+                            .put("name", row.getString("conv_name"))
+                            .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli())
+                            .put("lastMessageFromUserId", lastMessageFromUserId == null ? null : lastMessageFromUserId.toString())
+                            .put("lastMessageDeleted", lastMessageDeleted)
+                            .put("lastMessageBody", lastMessageDeleted || lastMessageBodyText == null ? null : Json.decodeValue(lastMessageBodyText))
+                            .put("unreadCount", row.getLong("unread_count")));
                 }
                 return result;
             }));

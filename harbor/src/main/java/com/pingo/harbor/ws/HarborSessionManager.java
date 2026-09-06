@@ -1,6 +1,7 @@
 package com.pingo.harbor.ws;
 
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.presence.PresenceRegistry;
 import com.pingo.connector.PingoConnector;
 import com.pingo.core.boot.start.LegoConfig1;
 import com.pingo.core.common.support.UUIDUtils;
@@ -17,6 +18,7 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClosedException;
 import io.vertx.core.http.ServerWebSocket;
+import io.vertx.core.json.JsonObject;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,6 +44,10 @@ public class HarborSessionManager {
     private static final long HEARTBEAT_SWEEP_INTERVAL_MS = 15_000;
     private static final long CLIENT_IDLE_TIMEOUT_MS = 60_000;
     private static final long DRAIN_GRACE_MS = 2_000;
+    /** PHẢI khớp {@code NotificationConsumer#READ_ACK_ADDRESS} bên herald. */
+    private static final String READ_ACK_ADDRESS = "message_read_ack";
+    /** PHẢI khớp {@code RoutingVersionSync#PRESENCE_ADDRESS} (nơi thật sự relay PRESENCE cho client). */
+    private static final String PRESENCE_ADDRESS = "user_presence_changed";
 
     @Getter
     private String serverId;
@@ -52,6 +58,13 @@ public class HarborSessionManager {
     private JwtHelper jwtHelper;
     private ConversationMembershipRegistry membership;
     /**
+     * Báo online/offline (xem {@link #handleAuth}/{@link #onClose}) — nguồn duy nhất để colony/
+     * herald biết "user X có đang nhận tin real-time ở đâu không" cho việc quyết định noti offline
+     * (xem {@code NotificationConsumer} bên herald). Chỉ harbor mới ghi vào đây vì chỉ harbor còn
+     * biết chính xác quan hệ 1-1 (session, userId), xem javadoc {@link PresenceRegistry}.
+     */
+    private PresenceRegistry presence;
+    /**
      * false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe.
      */
     @Getter
@@ -59,13 +72,14 @@ public class HarborSessionManager {
 
     public HarborSessionManager(
             String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper,
-            ConversationMembershipRegistry membership) {
+            ConversationMembershipRegistry membership, PresenceRegistry presence) {
         this.serverId = serverId;
         this.vertx = vertx;
         this.backendStreamGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient, new GrpcClientPool(vertx));
         this.routingVersionSync = new RoutingVersionSync(vertx, connector, backendStreamGateway, sessions, this::sendToClient);
         this.jwtHelper = jwtHelper;
         this.membership = membership;
+        this.presence = presence;
         vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
     }
 
@@ -98,6 +112,15 @@ public class HarborSessionManager {
         var session = sessions.remove(closedSession.getId());
         if (session == null) {
             return;
+        }
+        if (session.getUserId() != null) {
+            var userId = session.getUserId();
+            presence.markOffline(userId, session.getId());
+            // Chỉ báo "offline" khi ĐÂY LÀ session cuối cùng của user đó (vd nhiều tab/thiết bị) --
+            // đóng 1 tab không có nghĩa user đã thật sự offline, tránh báo sai cho các client khác.
+            if (!presence.isOnline(userId)) {
+                broadcastPresenceChange(userId, false);
+            }
         }
         backendStreamGateway.closeAllStreams(session);
         session.cleanUpAfterClose();
@@ -135,8 +158,15 @@ public class HarborSessionManager {
             if (idleMs > CLIENT_IDLE_TIMEOUT_MS) {
                 log.info("closing idle client session {} (userId={})", session.getId(), session.getUserId());
                 session.close();
-            } else if (idleMs > CLIENT_IDLE_TIMEOUT_MS / 2) {
+                continue;
+            }
+            if (idleMs > CLIENT_IDLE_TIMEOUT_MS / 2) {
                 sendToClient(session, SocketFrames.ping(UUIDUtils.timeBasedUuidAsString()));
+            }
+            if (session.getUserId() != null) {
+                // Làm mới TTL của PresenceRegistry -- nếu pod chết đột ngột (không đi qua onClose),
+                // nhịp touch này tự dừng, entry tự hết hạn thay vì kẹt "online" mãi mãi (xem javadoc PresenceRegistry).
+                presence.touch(session.getUserId(), session.getId());
             }
         }
     }
@@ -153,6 +183,10 @@ public class HarborSessionManager {
             case AUTH -> handleAuth(session, frame);
             case SUBSCRIBE -> handleSubscribe(session, frame);
             case MESSAGE -> handleMessage(session, frame);
+            case TYPING -> handleTyping(session, frame);
+            case REACTION -> handleReaction(session, frame);
+            case DELETE -> handleDelete(session, frame);
+            case READ -> handleRead(session, frame);
             case PING -> sendToClient(session, SocketFrames.pong(frame.getId()));
             default -> log.debug("unsupported frame type {} from client session {}", frame.getType(), session.getId());
         }
@@ -180,8 +214,20 @@ public class HarborSessionManager {
             return;
         }
         session.setUserId(userId);
+        // Chỉ báo "online" khi đây là session ĐẦU TIÊN của user đó (chuyển từ offline -> online) --
+        // mở thêm 1 tab/thiết bị nữa lúc đã online rồi không đổi trạng thái BÊN NGOÀI nhìn vào, không
+        // cần báo lại (dù báo thừa cũng vô hại, chỉ là nhiễu không cần thiết).
+        var wasOnline = presence.isOnline(userId);
+        presence.markOnline(userId, session.getId());
+        if (!wasOnline) {
+            broadcastPresenceChange(userId, true);
+        }
         sendToClient(session, SocketFrame.builder().type(MessageType.AUTH_OK).id(frame.getId()).serverId(serverId).ts(System.currentTimeMillis()).build());
         autoSubscribeAllConversations(session, userId);
+    }
+
+    private void broadcastPresenceChange(UUID userId, boolean online) {
+        vertx.eventBus().publish(PRESENCE_ADDRESS, new JsonObject().put("userId", userId.toString()).put("online", online));
     }
 
     /**
@@ -268,6 +314,79 @@ public class HarborSessionManager {
             return;
         }
         backendStreamGateway.sendMessage(session, frame, conversationId, routingVersionSync.currentVersion());
+    }
+
+    /** Tín hiệu tạm thời "đang gõ" -- forward xuống colony để fan-out cho MỌI subscriber khác của conversation đó, xem {@code BackendStreamGateway#sendTyping}. */
+    private void handleTyping(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId())) {
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        backendStreamGateway.sendTyping(session, frame, conversationId);
+    }
+
+    /** Đặt/đổi/huỷ reaction trên 1 tin nhắn -- forward xuống colony để fan-out + persist, xem {@code BackendStreamGateway#sendReaction}. */
+    private void handleReaction(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId()) || isBlank(frame.getId())) {
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        backendStreamGateway.sendReaction(session, frame, conversationId);
+    }
+
+    /**
+     * Xoá mềm 1 tin của CHÍNH MÌNH -- forward xuống colony để tự kiểm tra lại quyền (so
+     * {@code from_user_id} thật trong DB) rồi mới thực sự xoá + fan-out, xem
+     * {@code BackendStreamGateway#sendDelete} và {@code ChatSessionManager#handleDelete} bên colony.
+     * Harbor KHÔNG tự kiểm tra quyền ở đây -- không biết ai là người gửi gốc của tin đó (không lưu
+     * trạng thái tin nhắn phía harbor), việc đó thuộc về colony (nơi có DB thật).
+     */
+    private void handleDelete(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId()) || isBlank(frame.getId())) {
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        backendStreamGateway.sendDelete(session, frame, conversationId);
+    }
+
+    /**
+     * 2 việc, cả 2 đều best-effort: (1) báo herald huỷ push của candidate đang online nhưng thực ra
+     * đã xem tin (xem javadoc {@code MessageType#READ}); (2) forward xuống colony thành {@code SEEN}
+     * để fan-out cho MỌI subscriber khác, đặc biệt là người GỬI tin đó (dù đang ở pod harbor nào) —
+     * client vẽ dấu "đã xem" trên đúng tin nhắn của họ. Không phải request cần trả lời, im lặng bỏ
+     * qua nếu thiếu field/sai định dạng thay vì trả ERROR, không ảnh hưởng luồng chat chính nếu lỗi.
+     */
+    private void handleRead(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId()) || isBlank(frame.getId())) {
+            return;
+        }
+        var payload = new JsonObject()
+                .put("userId", session.getUserId().toString())
+                .put("conversationId", frame.getConversationId())
+                .put("messageId", frame.getId());
+        vertx.eventBus().publish(READ_ACK_ADDRESS, payload);
+
+        try {
+            var conversationId = UUID.fromString(frame.getConversationId());
+            backendStreamGateway.sendSeen(session, frame, conversationId);
+        } catch (IllegalArgumentException ignored) {
+            // conversationId sai dinh dang -- publish EventBus phia tren van chay binh thuong, chi bo qua rieng phan SEEN
+        }
     }
 
     private void sendToClient(HarborSession session, SocketFrame frame) {

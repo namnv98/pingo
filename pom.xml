@@ -13,6 +13,7 @@
         <module>chat-domain</module>
         <module>hall</module>
         <module>beacon</module>
+        <module>herald</module>
     </modules>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -50,6 +51,9 @@
              client moi io.prometheus.metrics.*), xem LegoBootStart.getPrometheusMeterRegistry(). -->
         <micrometer.version>1.16.6</micrometer.version>
         <caffeine.version>3.1.1</caffeine.version>
+        <!-- Chi herald dung (push notification that qua FCM, xem PushService), pin o day theo dung
+             quy uoc chung cua repo (quan ly version tap trung), du chi 1 module dung toi. -->
+        <firebase-admin.version>9.2.0</firebase-admin.version>
         <slf4j.version>2.0.13</slf4j.version>
         <log4j.version>2.23.1</log4j.version>
         <logstash.gelf.version>1.15.0</logstash.gelf.version>
@@ -534,6 +538,11 @@ exec java $JVM_OPTS -cp "$LOCAL_CLASSPATH" -Dworking.dir=$WORKING_DIR $MAIN_CLAS
                 <groupId>com.github.ben-manes.caffeine</groupId>
                 <artifactId>caffeine</artifactId>
                 <version>${caffeine.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.firebase</groupId>
+                <artifactId>firebase-admin</artifactId>
+                <version>${firebase-admin.version}</version>
             </dependency>
 
             <!-- T E S T I N G -->

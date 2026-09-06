@@ -32,6 +32,10 @@ public class RoutingVersionSync extends RoutingVersionTracker {
 
   /** Địa chỉ EventBus colony broadcast "user vừa được thêm vào conversation" (xem {@code ChatSessionManager#publishMembershipChanged}). */
   private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
+  /** Địa chỉ EventBus hall broadcast "conversation X vừa bị xoá hẳn" (xem {@code HallApiHandlers#deleteConversation}). */
+  private static final String CONVERSATION_DELETED_ADDRESS = "conversation_deleted";
+  /** Địa chỉ EventBus harbor tự publish (chính pod này hoặc pod khác) lúc 1 user đổi trạng thái online/offline, xem {@code HarborSessionManager#broadcastPresenceChange}. */
+  private static final String PRESENCE_ADDRESS = "user_presence_changed";
 
   private final BackendStreamGateway backendStreamGateway;
   private final Map<String, HarborSession> sessions;
@@ -45,6 +49,8 @@ public class RoutingVersionSync extends RoutingVersionTracker {
     this.sessions = sessions;
     this.relayToClient = relayToClient;
     vertx.eventBus().consumer(MEMBERSHIP_CHANGED_ADDRESS, this::onMembershipChanged);
+    vertx.eventBus().consumer(CONVERSATION_DELETED_ADDRESS, this::onConversationDeleted);
+    vertx.eventBus().consumer(PRESENCE_ADDRESS, this::onPresenceChanged);
   }
 
   @Override
@@ -108,6 +114,71 @@ public class RoutingVersionSync extends RoutingVersionTracker {
                 log.warn("failed to wake-subscribe session {} to newly-added conversation {}", session.getId(), conversationId, ex);
                 return null;
               });
+    }
+  }
+
+  /**
+   * Nhận broadcast "conversationId X vừa bị xoá hẳn" (xem {@code HallApiHandlers#deleteConversation})
+   * — chỉ pod đang giữ session có subscribe conversationId đó mới phản ứng: quên routing (xem
+   * {@link HarborSession#forgetConversation}, tránh lần đổi routing-version sau còn cố reconnect 1
+   * conversation không còn tồn tại) rồi relay {@code CONVERSATION_DELETED} để client tự dọn UI.
+   * KHÔNG chủ động đóng stream gRPC xuống colony (không có unsubscribe-riêng-1-conversation trên 1
+   * stream dùng chung nhiều conversation, xem BackendStreamGateway) -- chấp nhận được vì DB đã xoá
+   * xong (nguồn sự thật), phần routing còn sót trên colony chỉ là bộ nhớ đệm vô hại, tự dọn khi
+   * session đóng hẳn (xem {@code BackendStreamGateway#closeAllStreams}).
+   */
+  private void onConversationDeleted(Message<JsonObject> message) {
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(message.body().getString("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      return;
+    }
+    var finalConversationId = conversationId;
+    for (var session : sessions.values()) {
+      if (!session.subscribedConversationIds().contains(finalConversationId)) {
+        continue;
+      }
+      session.forgetConversation(finalConversationId);
+      relayToClient.accept(
+          session,
+          SocketFrame.builder()
+              .type(MessageType.CONVERSATION_DELETED)
+              .id(UUIDUtils.timeBasedUuidAsString())
+              .conversationId(finalConversationId.toString())
+              .ts(System.currentTimeMillis())
+              .build());
+    }
+  }
+
+  /**
+   * Nhận broadcast "user X vừa đổi trạng thái online/offline" (xem
+   * {@code HarborSessionManager#broadcastPresenceChange}) — relay {@code PRESENCE} cho MỌI session
+   * đang kết nối (đã AUTH) trên pod này, KHÔNG lọc theo "có liên quan không" (khác
+   * {@link #onMembershipChanged}/{@link #onConversationDeleted}, vốn biết chính xác ai cần biết) —
+   * presence không có khái niệm "ai đang theo dõi ai" ở tầng server, client tự lọc theo userId mình
+   * quan tâm (DM peer/thành viên group đang mở). Chấp nhận được vì đây chỉ là optimization hiển thị
+   * UI, không phải dữ liệu quan trọng — không đáng xây thêm cơ chế "subscribe presence theo user".
+   */
+  private void onPresenceChanged(Message<JsonObject> message) {
+    var body = message.body();
+    var userId = body.getString("userId");
+    if (userId == null) {
+      return;
+    }
+    var online = body.getBoolean("online", false);
+    var frame =
+        SocketFrame.builder()
+            .type(MessageType.PRESENCE)
+            .id(UUIDUtils.timeBasedUuidAsString())
+            .fromUserId(userId)
+            .body(Map.of("online", online))
+            .ts(System.currentTimeMillis())
+            .build();
+    for (var session : sessions.values()) {
+      if (session.getUserId() != null) {
+        relayToClient.accept(session, frame);
+      }
     }
   }
 

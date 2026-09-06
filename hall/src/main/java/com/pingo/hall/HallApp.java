@@ -13,11 +13,12 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Service REST thuần, KHÔNG cluster Hazelcast (không cần EventBus xuyên node — mọi route chỉ đọc/
- * ghi Postgres qua {@code chat-domain}), nên đơn giản hơn hẳn {@code HarborApp}/{@code ColonyApp}:
- * không có bước join/leave cluster, chỉ deploy 1 verticle rồi đóng {@code Vertx} khi dừng. Route
- * dispatch qua {@code LegoHttpServer} (core/http) — quét {@code @RegisterHandler} trong
- * {@code HallApiHandlers}, không tự viết {@code Router} tay như trước.
+ * Service REST — CÓ cluster Hazelcast (cần {@code vertx.eventBus().publish()} lúc tạo conversation
+ * mới, xem {@code HallApiHandlers#createConversation}/{@code HallBoot}), nhưng vẫn đơn giản hơn hẳn
+ * {@code HarborApp}/{@code ColonyApp}: không tự quản lý vòng đời cluster (giao hết cho
+ * {@code LegoBootStart}), chỉ deploy 1 verticle rồi đóng {@code Vertx} khi dừng. Route dispatch qua
+ * {@code LegoHttpServer} (core/http) — quét {@code @RegisterHandler} trong {@code HallApiHandlers},
+ * không tự viết {@code Router} tay như trước.
  */
 @RequiredArgsConstructor(onConstructor_ = {@Inject})
 public class HallApp extends AutoStopLifeCycle {

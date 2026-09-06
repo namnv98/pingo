@@ -22,6 +22,9 @@ public final class HallErrorKeys {
   @RegisterErrorMapper(409)
   public static final String CONFLICT = "hall.error.conflict";
 
+  @RegisterErrorMapper(404)
+  public static final String NOT_FOUND = "hall.error.not_found";
+
   @RegisterErrorMapper(503)
   public static final String DRAINING = "hall.error.draining";
 }

@@ -31,6 +31,27 @@ enum FrameType {
   // client<->harbor, xem HarborSessionManager#heartbeatSweep).
   PING = 9;
   PONG = 10;
+  // Bao "user X dang go trong conversation Y" cho MOI subscriber khac cua conversation do (fan-out
+  // giong het MESSAGE, dung lai deliverLocally/forwardToOwningNode) -- KHAC MESSAGE o cho KHONG
+  // persist (khong ghi bang messages), KHONG publish notification candidate, KHONG ACK ve nguoi gui
+  // -- chi la tin hieu tam thoi, mat di ngay neu khong ai nhan duoc cung khong sao.
+  TYPING = 11;
+  // Bao "user X vua thuc su xem 1 tin trong conversation Y" cho MOI subscriber khac (dung lai fan-out
+  // cua MESSAGE/TYPING) -- id = id cua tin nhan dang duoc xac nhan. Nguoi GUI tin do (o bat ky pod
+  // harbor nao) nhan duoc se tu ve dau "da xem" tren dung tin nhan cua minh. KHONG publish notification
+  // candidate, KHONG ACK -- nhung CO persist (bang message_reads, xem ChatSessionManager#handleSeen)
+  // de dau "da xem" song qua reload trang, khac cach TYPING lam (thuan tam thoi, khong luu gi ca).
+  SEEN = 12;
+  // Dat/doi/huy reaction (emoji) tren 1 tin nhan -- id = id tin nhan dang react, body_json =
+  // {"emoji": "..."} (dat/doi) hoac rong/thieu emoji (huy). Fan-out + CO persist (bang
+  // message_reactions), giong SEEN -- kieu Facebook: 1 nguoi chi co 1 reaction/tin, chon emoji khac
+  // THAY THE (khong cong don).
+  REACTION = 13;
+  // Xoa MEM 1 tin nhan (id = id tin) -- chi chinh nguoi gui goc moi xoa duoc (server tu kiem tra
+  // from_user_id that trong DB, khong tin client tu khai). Fan-out + CO persist (cot deleted_at
+  // bang messages), giong SEEN/REACTION -- moi subscriber khac tu thay noi dung bang placeholder
+  // "tin nhan da bi xoa" khi nhan duoc, hoac khi load lai lich su (GET /messages tra deleted=true).
+  DELETE = 14;
 }
 
 message Frame {

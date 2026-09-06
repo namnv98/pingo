@@ -1,0 +1,6 @@
+apiVersion: v2
+name: herald
+description: Service xu ly noti "ban co tin nhan moi" cho user offline hoan toan (chua co ha tang push that, chi luu lai trong Postgres)
+type: application
+version: 0.0.1
+appVersion: "0.0.1"

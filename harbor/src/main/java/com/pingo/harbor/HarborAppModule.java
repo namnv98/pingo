@@ -3,6 +3,7 @@ package com.pingo.harbor;
 import com.google.inject.AbstractModule;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
+import com.hazelcast.core.HazelcastInstance;
 import com.pingo.harbor.api.HealthCheckVerticle;
 import com.pingo.connector.PingoConnector;
 import com.pingo.core.boot.start.LegoConfig1;
@@ -10,6 +11,7 @@ import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.core.common.token.JwtHelper;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.presence.PresenceRegistry;
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.harbor.ws.HarborSessionManager;
 import com.pingo.core.socket.LegoSocketServer;
@@ -23,12 +25,20 @@ public class HarborAppModule extends AbstractModule {
 
   private final @NonNull Vertx vertx;
   private final LegoConfig1 config;
+  private final @NonNull HazelcastInstance hazelcastInstance;
 
   @Override
   protected void configure() {
     super.configure();
     bind(Vertx.class).toInstance(vertx);
     bind(LegoConfig1.class).toInstance(config);
+    bind(HazelcastInstance.class).toInstance(hazelcastInstance);
+  }
+
+  @Provides
+  @Singleton
+  private PresenceRegistry presenceRegistry(HazelcastInstance hazelcastInstance) {
+    return new PresenceRegistry(hazelcastInstance);
   }
 
   /**
@@ -47,8 +57,8 @@ public class HarborAppModule extends AbstractModule {
   @Provides
   @Singleton
   private HarborSessionManager harborSessionManager(
-      PingoConnector connector, JwtHelper jwtHelper, ConversationMembershipRegistry membership) {
-    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper, membership);
+      PingoConnector connector, JwtHelper jwtHelper, ConversationMembershipRegistry membership, PresenceRegistry presence) {
+    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper, membership, presence);
   }
 
   /**

@@ -51,6 +51,11 @@ public class HarborSession implements MessageSocket {
     return podByConversation.keySet();
   }
 
+  /** Quên routing của 1 conversationId đã bị xoá hẳn (xem {@code RoutingVersionSync#onConversationDeleted}) — tránh lần đổi routing-version sau còn cố reconnect 1 conversation không còn tồn tại. */
+  public void forgetConversation(UUID conversationId) {
+    podByConversation.remove(conversationId);
+  }
+
   @Override
   public CompletionStage<Void> send(Buffer data) {
     // Cố tình dùng writeTextMessage(), không phải writeBinaryMessage(): browser trả event.data là

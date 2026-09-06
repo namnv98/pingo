@@ -1,0 +1,48 @@
+# Cluster Hazelcast CHUNG voi beacon/colony/harbor/hall -- can de nhan broadcast EventBus tu
+# colony (xem NotificationConsumer) va doc PresenceRegistry (MultiMap Hazelcast dung chung).
+hazelcast:
+  file: herald/src/main/resources/hazelcast-local.xml
+  props: { }
+publicHttp:
+  tags: public
+  port: 8090
+  path:
+  headers:
+    content-type: application/json
+  printStackTrace: false
+# PHAI khop voi authTokenSecret cua hall/colony/harbor -- dung de verify JWT xac thuc client.
+authTokenSecret: pingo-local-dev-auth-secret
+
+database:
+  # Postgres cua chinh cum k3s local (xem postgres/helm), truy cap tu ngoai qua NodePort 31005 --
+  # dung khi chay local bang "mvn exec:java" (khong o trong k8s nen khong resolve duoc DNS "postgres").
+  parsedUri:
+    databaseType: postgres
+    scheme: steady
+    addresses:
+      - localhost:31005
+    path: pingo
+    user: pingo
+    password: pingo-local-dev
+    params:
+      maxSize: 8
+      maxWaitQueueSize: 256
+
+# Credentials Firebase Admin SDK (push qua FCM, xem PushService) -- KHONG duoc dien private key
+# THAT vao day (file nay nam trong git). Dien gia tri that vao LOCAL sau khi pull, KHONG commit lai.
+# Production phai override bang service account rieng, xem javadoc LegoConfig1.FirebaseConfig.
+firebase:
+  serviceAccountJson: |
+    {
+      "type": "service_account",
+      "project_id": "app-chat-5711a",
+      "private_key_id": "",
+      "private_key": "",
+      "client_email": "",
+      "client_id": "",
+      "auth_uri": "",
+      "token_uri": "",
+      "auth_provider_x509_cert_url": "",
+      "client_x509_cert_url": "",
+      "universe_domain": ""
+    }

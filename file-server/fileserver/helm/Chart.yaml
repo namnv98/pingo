@@ -1,0 +1,9 @@
+apiVersion: v2
+name: file-server
+description: File manager in land
+type: application
+version: 0.0.1
+appVersion: "0.0.1"
+kubeVersion: ">=1.19.0-0"
+maintainers:
+  - name: namnv

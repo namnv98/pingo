@@ -1,0 +1,24 @@
+uploadFolder: /home/luklak/v2/
+
+upload:
+  max: 20m
+ingress:
+  subdomain: static01
+  path: /
+
+# type/path/className/nodeAffinity cua cum cu bo het -- statefulset.yaml gio dung PVC tron +
+# storage class mac dinh cua k3s local, chi con can "size".
+storage:
+  size: 1Gi
+
+resources:
+  requests:
+    memory: 256M
+    cpu: 250m
+  limits:
+    memory: 1G
+    cpu: 2000m
+
+global:
+  environment: dev
+  baseDomain: logo.dev

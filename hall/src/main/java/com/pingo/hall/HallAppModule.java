@@ -5,8 +5,10 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
+import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.notification.NotificationRegistry;
 import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.registry.IApiRegistry;
 import com.pingo.core.boot.start.LegoConfig1;
@@ -70,6 +72,20 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private UserRegistry userRegistry(JdbcConnectionSupplier supplier) {
     return new UserRegistry(supplier);
+  }
+
+  /** Chỉ dùng cho {@code DELETE /conversations} (xoá notification liên quan) -- herald mới là nơi TẠO notification (offline noti), hall chỉ cần xoá. */
+  @Provides
+  @Singleton
+  private NotificationRegistry notificationRegistry(JdbcConnectionSupplier supplier) {
+    return new NotificationRegistry(supplier);
+  }
+
+  /** Metadata upload/download ảnh-video -- xem javadoc {@link FileRegistry}. */
+  @Provides
+  @Singleton
+  private FileRegistry fileRegistry(JdbcConnectionSupplier supplier) {
+    return new FileRegistry(supplier);
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */

@@ -1,0 +1,21 @@
+static01:
+  imageId: nnv98/legofile:1.1,1
+  uploadFolder: /home/luklak/v2/
+  upload:
+    max: 20m
+  ingress:
+    subdomain: lego_static01
+    path: /
+  storage:
+    initStorageClass: true
+    type: hostpath
+    path: /home/pv01/jadriver
+    className: jadriver-storage
+    size: 1Gi
+  resources:
+    requests:
+      memory: 256M
+      cpu: 250m
+    limits:
+      memory: 1G
+      cpu: 2000m

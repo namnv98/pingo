@@ -96,6 +96,63 @@ public class BackendStreamGateway {
   }
 
   /**
+   * Gửi tín hiệu "đang gõ" cho {@code conversationId} — xem {@link #sendEphemeral}.
+   */
+  public void sendTyping(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.TYPING, null);
+  }
+
+  /**
+   * Gửi tín hiệu "đã thực sự xem tin {@code frame.getId()}" cho {@code conversationId} — xem
+   * {@link #sendEphemeral}, {@code frame.getId()} PHẢI là id của chính tin nhắn đang xác nhận (quy
+   * ước correlation id, xem {@code MessageType#READ}).
+   */
+  public void sendSeen(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.SEEN, null);
+  }
+
+  /**
+   * Gửi tín hiệu đặt/đổi/huỷ reaction cho tin {@code frame.getId()} — xem {@link #sendEphemeral}.
+   * {@code frame.getBody()} tuỳ ý (thường {@code {emoji: "..."}} hoặc rỗng để huỷ), colony tự đọc.
+   */
+  public void sendReaction(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.REACTION, SocketFrames.encodeBackendBody(frame.getBody()));
+  }
+
+  /**
+   * Gửi yêu cầu xoá mềm tin {@code frame.getId()} — xem {@link #sendEphemeral}. Colony tự kiểm tra
+   * lại người gửi gốc trong DB trước khi thực sự xoá + fan-out (xem {@code ChatSessionManager#handleDelete}),
+   * không tin ngược lại session này đã xác thực đúng chủ tin.
+   */
+  public void sendDelete(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.DELETE, null);
+  }
+
+  /**
+   * Gửi 1 tín hiệu UI tạm thời (TYPING/SEEN/REACTION) — dùng LẠI stream chung đã mở sẵn (session
+   * PHẢI đã subscribe conversation này trước, luôn đúng trong thực tế vì client chỉ gõ/đọc/react
+   * được ở 1 conversation đã mở/đã auto-subscribe lúc AUTH). KHÔNG auto-subscribe-rồi-gửi như
+   * {@link #sendMessage} (không cần thiết), KHÔNG track pendingSends/timeout (colony không bao giờ
+   * phản hồi lại) -- im lặng bỏ qua nếu chưa có stream, chấp nhận rớt 1 lần hơn là thêm độ phức tạp.
+   */
+  private void sendEphemeral(HarborSession session, String frameId, UUID conversationId, FrameType type, String bodyJson) {
+    var podName = session.getPodFor(conversationId);
+    var stream = podName == null ? null : sharedStreams.get(podName);
+    if (stream == null || stream.isClosed()) {
+      return;
+    }
+    stream.write(
+        Frame.newBuilder()
+            .setId(frameId)
+            .setType(type)
+            .setFromUserId(session.getUserId().toString())
+            .setConversationId(conversationId.toString())
+            .setBodyJson(bodyJson == null ? "" : bodyJson)
+            .setTs(System.currentTimeMillis())
+            .build());
+  }
+
+  /**
    * "Đánh thức" 1 session vừa được thêm làm member của {@code conversationId} — subscribe ngầm,
    * KHÔNG relay SUBSCRIBE_OK lên client (caller tự gửi 1 frame CONVERSATION_ADDED riêng, xem
    * {@code RoutingVersionSync#onMembershipChanged}).
@@ -476,14 +533,16 @@ public class BackendStreamGateway {
           log.debug("received {} for unmatched/late message id {}", frame.getType(), frame.getId());
         }
       }
-      // MESSAGE la broadcast that su cho conversation -- fan-out cho MOI session cuc bo dang subscribe
-      // no tren pod nay (bao gom ca chinh nguoi gui, neu ho cung la subscriber -- giu dung hanh vi cu:
-      // nguoi gui thay lai tin cua minh qua kenh MESSAGE, tach biet voi ACK rieng).
-      case MESSAGE -> {
+      // MESSAGE/TYPING/SEEN/REACTION la broadcast that su cho conversation -- fan-out cho MOI session
+      // cuc bo dang subscribe no tren pod nay (bao gom ca chinh nguoi gui, neu ho cung la subscriber
+      // -- giu dung hanh vi cu: nguoi gui thay lai tin cua minh qua kenh MESSAGE, tach biet voi ACK
+      // rieng; voi TYPING/SEEN thi client tu loc fromUserId === minh de khong tu hien tin hieu cua
+      // chinh minh, con REACTION thi client CAN nhan lai chinh minh de dong bo UI nhieu tab/thiet bi).
+      case MESSAGE, TYPING, SEEN, REACTION, DELETE -> {
         var conversationId = UUIDUtils.parseOrDefault(frame.getConversationId());
         var localSubscribers = conversationId == null ? null : stream.getLocalSubscribersByConversation().get(conversationId);
         if (localSubscribers == null || localSubscribers.isEmpty()) {
-          log.debug("received MESSAGE for conversation {} with no local subscriber on this pod", frame.getConversationId());
+          log.debug("received {} for conversation {} with no local subscriber on this pod", frame.getType(), frame.getConversationId());
           return;
         }
         var socketFrame = SocketFrames.fromBackendFrame(frame);

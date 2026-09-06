@@ -52,10 +52,13 @@ IMAGE_TAG="${IMAGE_TAG:-local}"
 # gom nhom de xem trang thai (print_summary), khong con dung cho Hazelcast discovery nua.
 CLUSTER_LABEL_KEY="lego/vertx-cluster"
 CLUSTER_LABEL_VALUE="vertx-land-cluster"
-MODULES=(beacon colony hall harbor) # thu tu deploy: control-plane (beacon) truoc, khong bat
-  # buoc nhung hop ly. hall la service REST rieng (tach khoi colony, xem ARCHITECTURE.md muc
-  # 2/13) -- KHONG mang label Hazelcast cluster (khong clustered), nen print_summary() phai list pod
-  # theo "app in (...)" thay vi theo CLUSTER_LABEL_KEY nhu 3 service kia.
+MODULES=(beacon colony hall harbor herald) # thu tu deploy: control-plane (beacon) truoc, khong
+  # bat buoc nhung hop ly. hall/herald la service REST rieng (tach khoi colony, xem
+  # ARCHITECTURE.md muc 2/13) -- KHONG mang label CLUSTER_LABEL_KEY/VALUE (label do chi de gom
+  # nhom hien thi print_summary(), khong lien quan Hazelcast that -- ca hall lan herald DEU co
+  # cluster Hazelcast that su, can de nhan EventBus tu colony, xem HallBoot/HeraldBoot), nen
+  # print_summary() phai list pod theo "app in (...)" thay vi theo CLUSTER_LABEL_KEY nhu
+  # beacon/colony/harbor.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -155,8 +158,9 @@ install_helm() {
 # ============================================================================
 
 build_code() {
-  log "mvn clean package (beacon, colony, hall, harbor + core/discovery)..."
-  (cd "$REPO_ROOT" && mvn -q clean package -pl beacon,colony,hall,harbor -am -DskipTests)
+  log "mvn clean package (${MODULES[*]} + core/discovery)..."
+  local pl; pl="$(IFS=,; echo "${MODULES[*]}")"
+  (cd "$REPO_ROOT" && mvn -q clean package -pl "$pl" -am -DskipTests)
 }
 
 # ============================================================================
@@ -272,7 +276,7 @@ print_summary() {
 
 Test thu:
   - Mo demo.html tren trinh duyet, doi URL WebSocket thanh:
-      ws://localhost:31003/connect/websocket
+      ws://localhost:31003/connect
     (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor/helm/templates/services.yaml)
   - Xem log 1 pod:  kubectl logs -n ${NAMESPACE} deploy/harbor -f
   - Xoa sach:        ./deploy-k3s.sh --uninstall
@@ -284,11 +288,11 @@ EOF
 # ============================================================================
 
 do_uninstall() {
-  log "Go 6 helm release (namespace=${NAMESPACE})..."
+  log "Go $((${#MODULES[@]} + 2)) helm release (namespace=${NAMESPACE})..."
   for m in "${MODULES[@]}" hazelcast postgres; do
     helm uninstall "$m" -n "$NAMESPACE" --ignore-not-found || true
   done
-  log "Da go xong 6 helm release (beacon/colony/hall/harbor + hazelcast + postgres)."
+  log "Da go xong $((${#MODULES[@]} + 2)) helm release (${MODULES[*]} + hazelcast + postgres)."
   echo "PersistentVolumeClaim postgres-data KHONG tu bi xoa (du lieu conversation_members van con) --"
   echo "xoa tay neu muon mat het du lieu that su: kubectl delete pvc postgres-data -n ${NAMESPACE}"
   echo "k3s ban than KHONG bi go. Neu muon go han k3s: sudo /usr/local/bin/k3s-uninstall.sh"

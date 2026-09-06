@@ -57,6 +57,13 @@
             <groupId>io.vertx</groupId>
             <artifactId>vertx-grpc-common</artifactId>
         </dependency>
+        <dependency>
+            <!-- PresenceRegistry: MultiMap dung chung toan cluster de theo doi user nao dang
+                 online, harbor/colony/herald deu da co san instance Hazelcast rieng (xem
+                 LegoBootStart), o day chi can API cua no. -->
+            <groupId>com.hazelcast</groupId>
+            <artifactId>hazelcast</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

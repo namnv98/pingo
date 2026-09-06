@@ -19,6 +19,17 @@ data:
     -- ngay tu dau gan nhu khong ton chi phi gi, tranh phai them sau tren bang da co du lieu.
     CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members (user_id);
 
+    -- Ten rieng (tuy chon) cho 1 conversation, dung chung cho MOI thanh vien (khac ban dau chi luu
+    -- localStorage rieng tung trinh duyet) -- xem ConversationMembershipRegistry#upsertName,
+    -- HallApiHandlers POST/PUT /conversations. Loose-schema quen thuoc cua repo: KHONG bat buoc co
+    -- dong cho moi conversationId -- chi ton tai khi da tung duoc dat ten; client tu suy label tu
+    -- danh sach thanh vien khi khong co dong nao khop (xem conversationLabel trong demo.html).
+    CREATE TABLE IF NOT EXISTS conversations (
+        id UUID NOT NULL PRIMARY KEY,
+        name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- He thong login THAT: username + password (hash bang bcrypt, xem UserRegistry/RestApiVerticle
     -- POST /register, /login) -- khong con la "dang ky ten hien thi" don thuan nhu truoc nua.
     -- username la UNIQUE vi login tra cuu theo username. id do server tu sinh luc /register (khong
@@ -42,6 +53,97 @@ data:
         -- SocketFrame, server khong doc/hieu noi dung ben trong) -- chi can luu/tra lai nguyen
         -- ven cho list API, khong can query theo noi dung body.
         body TEXT,
-        created_at TIMESTAMPTZ NOT NULL
+        created_at TIMESTAMPTZ NOT NULL,
+        -- Xoa MEM: NULL = chua xoa, co gia tri = da xoa luc do (xem MessageHistoryRegistry#markDeleted).
+        -- Dong VAN CON trong bang (khong DELETE that) -- API doc (listMessages) tu an body/reactions
+        -- khi cot nay khac NULL, khong phai xoa du lieu that.
+        deleted_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages (conversation_id, created_at DESC);
+
+    -- Ai (user_id) da THUC SU xem 1 message_id -- nguon that cho dau "da xem" (khac SEEN qua WS,
+    -- von chi la tin hieu tam thoi khong luu, mat khi reload trang). PRIMARY KEY (message_id,
+    -- user_id): 1 nguoi chi can 1 dong "da xem" cho 1 tin, ON CONFLICT DO NOTHING khi ghi lai.
+    -- Khong FK toi messages, giu dung quy uoc loose-schema cua repo.
+    CREATE TABLE IF NOT EXISTS message_reads (
+        message_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        read_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads (message_id);
+
+    -- Reaction (emoji) tren 1 message_id, kieu Facebook: 1 NGUOI chi co 1 reaction cho 1 tin tai 1
+    -- thoi diem (chon emoji khac se THAY THE, khong cong don) -- PRIMARY KEY (message_id, user_id)
+    -- ep dung dieu do. emoji luu nguyen ky tu (vd "\xf0\x9f\x91\x8d") thay vi ten rieng, don gian
+    -- hoa ca ghi lan doc, client tu hien thi.
+    CREATE TABLE IF NOT EXISTS message_reactions (
+        message_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions (message_id);
+
+    -- Noti "ban co tin nhan moi" cho user OFFLINE HOAN TOAN luc tin toi (khong session WS nao song
+    -- o bat ky pod harbor nao -- xem PresenceRegistry, chat-domain). Chua co ha tang push that
+    -- (FCM/APNs/email), day la noi LUU LAI de nguoi dung thay khi quay lai (GET /notifications ben
+    -- herald) -- xem NotificationRegistry.
+    CREATE TABLE IF NOT EXISTS notifications (
+        id UUID NOT NULL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        conversation_id UUID NOT NULL,
+        from_user_id UUID NOT NULL,
+        body_preview TEXT,
+        created_at TIMESTAMPTZ NOT NULL,
+        read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;
+
+    -- Token push (FCM) cua tung thiet bi/trinh duyet -- xem PushTokenRegistry, herald PushService.
+    -- token la PRIMARY KEY (khong phai user_id) vi 1 token chi thuoc ve 1 thiet bi/cai dat tai 1
+    -- thoi diem -- dang ky lai (vd doi user dang nhap tren cung may) se UPSERT de token luon tro ve
+    -- dung user hien tai, khong con tro nham qua user cu.
+    CREATE TABLE IF NOT EXISTS push_tokens (
+        token TEXT NOT NULL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_tokens_user_id ON push_tokens (user_id);
+
+    -- Metadata cho anh/video gui trong chat (hall thay the service "jad" bi thieu ma module
+    -- file-server (nginx/Lua) can goi ra -- xem FileRegistry). "path" luon co dinh 1 gia tri
+    -- (STORAGE_PATH ben Java) -- file that nam o <uploadFolder cua file-server> + path + id.
+    -- mime/size/name deu con NULL luc vua tao (POST /file/create), duoc dien vao sau khi file-server
+    -- ghi xong bytes len dia (POST /file/update).
+    CREATE TABLE IF NOT EXISTS files (
+        id UUID NOT NULL PRIMARY KEY,
+        user_id UUID,
+        -- Gan thang file voi 1 conversationId (khong can bang trung gian rieng -- 1 file trong app
+        -- nay luon thuoc dung 1 conversation, khong bao gio dung chung giua nhieu noi) -- cho phep
+        -- liet ke lai truc tiep bang WHERE conversation_id = ?, khong can parse nguoc lai body cua
+        -- tung tin nhan (xem FileRegistry#listForConversation, tab "Files" panel Info demo.html).
+        conversation_id UUID,
+        path TEXT NOT NULL,
+        mime TEXT,
+        size BIGINT,
+        name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_conversation_created ON files (conversation_id, created_at DESC);
+
+    -- "Con tro da doc" cua TUNG user trong TUNG conversation -- 1 dong per (conversation, user), luon
+    -- CHI TIEN VE PHIA TRUOC (xem MessageHistoryRegistry#markRead, UPDATE ... WHERE EXCLUDED.last_read_ts
+    -- > conversation_reads.last_read_ts). Khac message_reads (1 dong PER MESSAGE, dung de tinh cot
+    -- "seen" tra ve tren MOI tin) -- bang nay chi giu DUY NHAT vi tri doc GAN NHAT, dung de client biet
+    -- "vao lai conversation thi cuon toi dau" (xem demo.html loadHistory) ma khong can quet lai toan
+    -- bo message_reads moi lan mo conversation.
+    CREATE TABLE IF NOT EXISTS conversation_reads (
+        conversation_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        last_read_message_id UUID NOT NULL,
+        last_read_ts BIGINT NOT NULL,
+        PRIMARY KEY (conversation_id, user_id)
+    );

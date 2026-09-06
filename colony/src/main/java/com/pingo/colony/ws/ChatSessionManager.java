@@ -14,6 +14,7 @@ import com.pingo.colony.ws.session.SessionRegistry;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.ConnectionPoolTooBusyException;
 import io.vertx.core.json.Json;
+import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.server.GrpcServerRequest;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -42,6 +43,13 @@ public class ChatSessionManager {
   private static final long HEARTBEAT_SWEEP_INTERVAL_MS = 15_000;
   private static final long SESSION_IDLE_TIMEOUT_MS = 60_000;
   private static final long DRAIN_GRACE_MS = 1_000;
+  /**
+   * Địa chỉ EventBus broadcast "1 tin nhắn vừa gửi tới conversationId X, đây là member (trừ người
+   * gửi)" cho herald tự lọc online/offline rồi lưu noti nếu cần — xem
+   * {@code NotificationConsumer} bên herald. Colony KHÔNG tự lọc (không cần thêm phụ thuộc
+   * PresenceRegistry/Hazelcast vào đường xử lý tin nhắn nóng), chỉ báo "ai CÓ THỂ cần noti".
+   */
+  private static final String NOTIFY_CANDIDATES_ADDRESS = "message_notify_candidates";
 
   private final String serverId;
   private final SessionRegistry registry = new SessionRegistry();
@@ -134,6 +142,10 @@ public class ChatSessionManager {
       case SUBSCRIBE -> handleSubscribe(session, frame);
       case SUBSCRIBE_BULK -> handleSubscribeBulk(session, frame);
       case MESSAGE -> handleMessage(session, frame);
+      case TYPING -> handleTyping(session, frame);
+      case SEEN -> handleSeen(session, frame);
+      case REACTION -> handleReaction(session, frame);
+      case DELETE -> handleDelete(session, frame);
       case PONG -> {} // chi can cham lastSeenAt (da lam o tren), khong can xu ly gi them
       default -> log.debug("unsupported frame type {} from session {}", frame.getType(), session.getId());
     }
@@ -237,7 +249,194 @@ public class ChatSessionManager {
       messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
     }
     persistMessage(frame, outgoing);
+    publishNotificationCandidates(outgoing);
     session.send(Frame.newBuilder().setId(frame.getId()).setType(FrameType.ACK).setTs(now()).build());
+  }
+
+  /**
+   * "User X đang gõ trong conversation Y" -- dùng LẠI đúng đường fan-out của MESSAGE
+   * (deliverLocally/forwardToOwningNode, xem {@link MessageDelivery}), nhưng KHÔNG persist, KHÔNG
+   * publish notification candidate, KHÔNG gửi ACK về người gửi -- chỉ là tín hiệu tạm thời, best-
+   * effort tuyệt đối (rớt 1 lần không sao, sẽ có lần gõ tiếp theo).
+   */
+  private void handleTyping(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    if (fromUserId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    var outgoing =
+        Frame.newBuilder()
+            .setId(frame.getId())
+            .setType(FrameType.TYPING)
+            .setFromUserId(fromUserId.toString())
+            .setConversationId(frame.getConversationId())
+            .setTs(now())
+            .build();
+    if (!messageDelivery.deliverLocally(outgoing)) {
+      messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+    }
+  }
+
+  /**
+   * "User X vừa THỰC SỰ xem tin {@code frame.getId()} trong conversation Y" -- fan-out giống
+   * {@link #handleTyping} (dùng lại deliverLocally/forwardToOwningNode, không notify/ACK), khác ở 2
+   * điểm: (1) đây là tín hiệu cho người GỬI tin đó biết (vẽ dấu "đã xem"), không phải cho người đọc;
+   * (2) CÓ persist ({@link #markRead}, bảng {@code message_reads}) để dấu "đã xem" sống qua reload
+   * trang -- khác TYPING (thuần tạm thời, không lưu gì). {@code frame.getId()} = id của chính tin
+   * nhắn đang được xác nhận (đúng quy ước correlation id của {@code MessageType#READ} bên harbor —
+   * client gửi READ với id đó, harbor forward xuống đây nguyên vẹn).
+   */
+  private void handleSeen(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    var messageId = UUIDUtils.parseOrDefault(frame.getId());
+    if (fromUserId == null || messageId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    var outgoing =
+        Frame.newBuilder()
+            .setId(frame.getId())
+            .setType(FrameType.SEEN)
+            .setFromUserId(fromUserId.toString())
+            .setConversationId(frame.getConversationId())
+            .setTs(now())
+            .build();
+    if (!messageDelivery.deliverLocally(outgoing)) {
+      messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+    }
+    markRead(messageId, fromUserId);
+  }
+
+  private void markRead(UUID messageId, UUID userId) {
+    history
+        .markRead(messageId, userId)
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to mark message {} as read", messageId, ex);
+              return null;
+            });
+  }
+
+  /**
+   * Đặt/đổi/huỷ reaction (emoji) trên tin {@code frame.getId()} -- cùng pattern {@link #handleSeen}
+   * (fan-out + persist). {@code frame.getBodyJson()} = {@code {"emoji": "..."}} để đặt/đổi, rỗng
+   * hoặc thiếu {@code emoji} để huỷ (bấm lại đúng emoji đang chọn, kiểu Facebook — logic "đây có
+   * phải bấm lại để huỷ không" nằm ở CLIENT, xem demo.html, colony chỉ biết "đặt X" hoặc "huỷ", không
+   * tự suy toggle).
+   */
+  private void handleReaction(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    var messageId = UUIDUtils.parseOrDefault(frame.getId());
+    if (fromUserId == null || messageId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    String emoji = null;
+    if (!frame.getBodyJson().isEmpty()) {
+      var body = (JsonObject) Json.decodeValue(frame.getBodyJson());
+      emoji = body.getString("emoji");
+    }
+    var finalEmoji = isBlank(emoji) ? null : emoji;
+    var outgoing =
+        Frame.newBuilder()
+            .setId(frame.getId())
+            .setType(FrameType.REACTION)
+            .setFromUserId(fromUserId.toString())
+            .setConversationId(frame.getConversationId())
+            .setBodyJson(finalEmoji == null ? "" : Json.encode(new JsonObject().put("emoji", finalEmoji)))
+            .setTs(now())
+            .build();
+    if (!messageDelivery.deliverLocally(outgoing)) {
+      messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+    }
+    var persist = finalEmoji == null ? history.removeReaction(messageId, fromUserId) : history.setReaction(messageId, fromUserId, finalEmoji);
+    persist.exceptionally(
+        ex -> {
+          logDbPoolThrottled("failed to save reaction for message {}", messageId, ex);
+          return null;
+        });
+  }
+
+  /**
+   * Xoá MỀM tin {@code frame.getId()} -- CHỈ chính người gửi gốc mới xoá được, kiểm tra thật trong
+   * DB ({@code from_user_id}, xem {@link MessageHistoryRegistry#markDeleted}) chứ KHÔNG tin
+   * {@code frame.getFromUserId()} client tự khai (session đã xác thực fromUserId lúc AUTH nên vẫn
+   * đáng tin cho MỤC ĐÍCH XÁC ĐỊNH AI ĐANG XOÁ, nhưng "có phải người gửi gốc không" phải hỏi DB).
+   * Xoá thất bại (không phải tin của mình, đã xoá rồi, hoặc id không tồn tại) -- im lặng bỏ qua,
+   * không fan-out gì cả (demo tool, không cần ERROR riêng cho path này).
+   */
+  private void handleDelete(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    var messageId = UUIDUtils.parseOrDefault(frame.getId());
+    if (fromUserId == null || messageId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    var finalConversationId = frame.getConversationId();
+    history
+        .markDeleted(messageId, fromUserId)
+        .thenAccept(
+            deleted -> {
+              if (!Boolean.TRUE.equals(deleted)) {
+                return;
+              }
+              var outgoing =
+                  Frame.newBuilder()
+                      .setId(frame.getId())
+                      .setType(FrameType.DELETE)
+                      .setFromUserId(fromUserId.toString())
+                      .setConversationId(finalConversationId)
+                      .setTs(now())
+                      .build();
+              if (!messageDelivery.deliverLocally(outgoing)) {
+                messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+              }
+            })
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to delete message {}", messageId, ex);
+              return null;
+            });
+  }
+
+  /**
+   * Báo cho herald "tin nhắn vừa gửi tới conversationId X, đây là member (trừ người gửi)" — herald
+   * tự lọc ai đang online (đã nhận real-time rồi, không cần noti) vs offline (lưu noti), xem
+   * {@code NotificationConsumer}. Best-effort, không chặn ACK — cùng tinh thần {@link #persistMessage},
+   * dùng chung throttle log khi DB pool quá tải (đọc {@code membership.getMembers} cũng qua pool đó).
+   */
+  private void publishNotificationCandidates(Frame outgoing) {
+    UUID conversationId;
+    UUID fromUserId;
+    try {
+      conversationId = UUID.fromString(outgoing.getConversationId());
+      fromUserId = UUID.fromString(outgoing.getFromUserId());
+    } catch (IllegalArgumentException | NullPointerException e) {
+      return;
+    }
+    var finalFromUserId = fromUserId;
+    membership
+        .getMembers(conversationId)
+        .thenAccept(
+            members -> {
+              var candidateUserIds =
+                  members.stream().filter(id -> !id.equals(finalFromUserId)).map(UUID::toString).toList();
+              if (candidateUserIds.isEmpty()) {
+                return;
+              }
+              var bodyPreview = outgoing.getBodyJson().isEmpty() ? null : outgoing.getBodyJson();
+              var payload =
+                  new JsonObject()
+                      .put("conversationId", conversationId.toString())
+                      .put("fromUserId", finalFromUserId.toString())
+                      .put("candidateUserIds", candidateUserIds)
+                      .put("bodyPreview", bodyPreview)
+                      .put("messageId", outgoing.getId())
+                      .put("ts", outgoing.getTs());
+              vertx.eventBus().publish(NOTIFY_CANDIDATES_ADDRESS, payload);
+            })
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to compute notification candidates for conversation {}", conversationId, ex);
+              return null;
+            });
   }
 
   /**
@@ -255,38 +454,65 @@ public class ChatSessionManager {
     } catch (IllegalArgumentException | NullPointerException e) {
       return;
     }
+    // messageId PHAI la id client da biet (outgoing.getId(), = frame.getId() client tu sinh) --
+    // KHONG duoc tu sinh UUID rieng o day: SEEN/REACTION client gui sau nay dung DUNG id nay de
+    // tham chieu (xem handleSeen/handleReaction), phai khop CHINH XAC voi PRIMARY KEY cua dong nay
+    // thi listMessages moi JOIN ra dung "seen"/"reactions" -- tung la bug that (dung random UUID rieng
+    // khien SEEN/REACTION luon tham chieu toi 1 id khong ton tai, "seen"/"reactions" luon rong sau
+    // reload du da luu DB dung). Fallback random UUID neu client lo gui id khong phai dinh dang UUID
+    // (khong nen xay ra voi client dung san, nhung khong de crash/mat tin nhan vi 1 id sai dinh dang).
+    UUID messageId;
+    try {
+      messageId = UUID.fromString(outgoing.getId());
+    } catch (IllegalArgumentException e) {
+      messageId = UUID.randomUUID();
+    }
     Object body = outgoing.getBodyJson().isEmpty() ? null : Json.decodeValue(outgoing.getBodyJson());
+    var savedMessageId = messageId;
     history
-        .saveMessage(UUID.randomUUID(), conversationId, fromUserId, body, outgoing.getTs())
+        .saveMessage(messageId, conversationId, fromUserId, body, outgoing.getTs())
+        // Tự người GỬI "đọc" luôn chính tin mình vừa gửi -- tiến LUÔN con trỏ đã đọc
+        // (conversation_reads, xem MessageHistoryRegistry#markRead) của họ tới tin này. Không có
+        // bước này: gửi 1 loạt tin liên tiếp mà bên kia chưa kịp đọc gì thêm sẽ khiến con trỏ đã đọc
+        // của MÌNH kẹt lại ở tin CUỐI CÙNG bên kia từng gửi (chỉ tiến khi có READ, mà READ chỉ gửi
+        // cho tin CỦA NGƯỜI KHÁC) -- mở lại conversation sẽ hiểu lầm toàn bộ tin mình vừa gửi là
+        // "chưa đọc", cuộn lệch về đúng chỗ tin cuối bên kia gửi thay vì xuống đáy thật. message_reads
+        // ghi thêm dòng (message_id, fromUserId) này KHÔNG ảnh hưởng cột "seen" trả cho client (đã lọc
+        // {@code mr.user_id != m.from_user_id}, xem listMessages) -- chỉ phục vụ tiến con trỏ.
+        .thenCompose(unused -> history.markRead(savedMessageId, fromUserId))
         .exceptionally(
             ex -> {
-              // DB pool qua tai (ConnectionPoolTooBusyException) la tin hieu backpressure THUONG GAP
-              // duoi tai cao, khong phai loi la. Van de thuc te gap phai: duoi tai nang, exception nay
-              // co the xay ra hang nghin lan/giay -- du chi log 1 dong ngan (khong full stack trace),
-              // toc do GHI LOG THO (moi dong qua Disruptor ring buffer roi Console appender ghi xuong
-              // container stdout pipe) van du lon de lam nghen chinh pipe do (container runtime doc
-              // khong kip), roi ACK cham theo, harbor tuong stream chet (MESSAGE_ACK_TIMEOUT) roi
-              // evict/error hang loat -- vong lap tu khuech dai (quan sat duoc: throughput sup do VA
-              // "kubectl logs" tra ve rong dong thoi trong luc nay, ca 2 cung mot nguyen nhan). Throttle
-              // con lai toi da 1 dong/giay cho dung 1 loai loi nay, kem so lan bi nen, la du de vong
-              // lap khong the hinh thanh trong khi van giu duoc tin hieu debug that su can.
-              var rootCause = ExceptionUtils.getRootCause(ex);
-              if (rootCause instanceof ConnectionPoolTooBusyException) {
-                var now = System.currentTimeMillis();
-                var last = lastPoolExhaustedLogAt.get();
-                if (now - last >= 1000 && lastPoolExhaustedLogAt.compareAndSet(last, now)) {
-                  var suppressed = poolExhaustedSuppressedCount.getAndSet(0);
-                  log.warn(
-                      "failed to persist message {} for conversation {}: {} ({} lan khac bi nen trong 1s qua)",
-                      frame.getId(), conversationId, rootCause.getMessage(), suppressed);
-                } else {
-                  poolExhaustedSuppressedCount.incrementAndGet();
-                }
-              } else {
-                log.warn("failed to persist message {} for conversation {}", frame.getId(), conversationId, ex);
-              }
+              logDbPoolThrottled("failed to persist message " + frame.getId() + " for conversation {}", conversationId, ex);
               return null;
             });
+  }
+
+  /**
+   * DB pool quá tải ({@link ConnectionPoolTooBusyException}) là tín hiệu backpressure THƯỜNG GẶP
+   * dưới tải cao, không phải lỗi lạ. Vấn đề thực tế đã gặp: dưới tải nặng, exception này có thể
+   * xảy ra hàng nghìn lần/giây — dù chỉ log 1 dòng ngắn (không full stack trace), tốc độ GHI LOG
+   * THÔ (mỗi dòng qua Disruptor ring buffer rồi Console appender ghi xuống container stdout pipe)
+   * vẫn đủ lớn để làm nghẽn chính pipe đó (container runtime đọc không kịp), rồi ACK chậm theo,
+   * harbor tưởng stream chết (MESSAGE_ACK_TIMEOUT) rồi evict/error hàng loạt — vòng lặp tự khuếch
+   * đại. Throttle còn lại tối đa 1 dòng/giây cho DÙNG 1 LOẠI LỖI này (dùng chung giữa
+   * {@link #persistMessage} và {@link #publishNotificationCandidates} — cả 2 đọc/ghi CÙNG 1 pool),
+   * kèm số lần bị nén, là đủ để vòng lặp không thể hình thành trong khi vẫn giữ được tín hiệu debug
+   * thật sự cần.
+   */
+  private void logDbPoolThrottled(String messageTemplate, UUID conversationId, Throwable ex) {
+    var rootCause = ExceptionUtils.getRootCause(ex);
+    if (rootCause instanceof ConnectionPoolTooBusyException) {
+      var now = System.currentTimeMillis();
+      var last = lastPoolExhaustedLogAt.get();
+      if (now - last >= 1000 && lastPoolExhaustedLogAt.compareAndSet(last, now)) {
+        var suppressed = poolExhaustedSuppressedCount.getAndSet(0);
+        log.warn(messageTemplate + ": {} ({} lan khac bi nen trong 1s qua)", conversationId, rootCause.getMessage(), suppressed);
+      } else {
+        poolExhaustedSuppressedCount.incrementAndGet();
+      }
+    } else {
+      log.warn(messageTemplate, conversationId, ex);
+    }
   }
 
   private String generateSessionId() {

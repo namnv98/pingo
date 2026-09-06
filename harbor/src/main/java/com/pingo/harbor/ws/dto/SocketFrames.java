@@ -39,6 +39,10 @@ public class SocketFrames {
             case MESSAGE -> MessageType.MESSAGE;
             case ACK -> MessageType.ACK;
             case ERROR -> MessageType.ERROR;
+            case TYPING -> MessageType.TYPING;
+            case SEEN -> MessageType.SEEN;
+            case REACTION -> MessageType.REACTION;
+            case DELETE -> MessageType.DELETE;
             default -> MessageType.ERROR;
         };
     }

@@ -37,7 +37,7 @@ public class HarborBoot extends LegoBootStart {
     try {
       var vertx = initVertx(config, meterRegistry).toCompletableFuture().get();
       var hazelcastInstance = getHazelcastInstance(vertx);
-      var injector = Guice.createInjector(new HarborAppModule(vertx, config));
+      var injector = Guice.createInjector(new HarborAppModule(vertx, config, hazelcastInstance));
       app = injector.getInstance(HarborApp.class);
       app.startSync();
       HarborApp finalApp = app;

@@ -107,7 +107,19 @@ public class MessageDelivery {
             });
   }
 
-  /** Nhận MESSAGE được forward tới đây từ một node khác, vì node này đang giữ subscriber(s) của conversation đó. */
+  /**
+   * TYPING/SEEN/REACTION -- rot 1 lan fan-out live (vd race luc subscriber vua roi conversation) chi
+   * dang {@code debug}, khac MESSAGE (mat tin that, dang {@code warn}). SEEN/REACTION CO persist
+   * rieng (message_reads/message_reactions, xem ChatSessionManager#handleSeen/handleReaction) --
+   * rot fan-out live khong mat du lieu, chi mat phan "cap nhat UI ngay lap tuc" cho session dang mo
+   * dung luc do, lan doc/react tiep theo (hoac F5) se thay dung.
+   */
+  private static final java.util.Set<FrameType> EPHEMERAL_TYPES = java.util.Set.of(FrameType.TYPING, FrameType.SEEN, FrameType.REACTION, FrameType.DELETE);
+
+  /**
+   * Nhận MESSAGE (hoặc TYPING/SEEN — tín hiệu tạm thời, xem javadoc tương ứng trong link.proto)
+   * được forward tới đây từ một node khác, vì node này đang giữ subscriber(s) của conversation đó.
+   */
   public void onRoutedMessage(Message<Buffer> message) {
     Frame frame;
     try {
@@ -116,11 +128,15 @@ public class MessageDelivery {
       log.warn("received an undecodable routed message", e);
       return;
     }
-    if (frame.getType() != FrameType.MESSAGE) {
+    if (frame.getType() != FrameType.MESSAGE && !EPHEMERAL_TYPES.contains(frame.getType())) {
       return;
     }
     if (!deliverLocally(frame)) {
-      log.warn("routed message {} for conversation {} has no local subscriber on this node", frame.getId(), frame.getConversationId());
+      if (frame.getType() == FrameType.MESSAGE) {
+        log.warn("routed message {} for conversation {} has no local subscriber on this node", frame.getId(), frame.getConversationId());
+      } else {
+        log.debug("routed {} signal {} for conversation {} has no local subscriber on this node", frame.getType(), frame.getId(), frame.getConversationId());
+      }
     }
   }
 }
