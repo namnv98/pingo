@@ -1,71 +1,301 @@
+
 #!/usr/bin/env bash
-# Build code (Maven) -> build Docker image -> push len registry local -> deploy Helm chart,
-# cho ca 4 service (beacon, colony, hall, harbor) len 1 cum k3s chay local.
+
+# ============================================================================
+# deploy-k3s.sh
 #
-# Khong dung Docker Hub o buoc nao ca (khong docker login/push len Hub) -- image build local roi
-# push len 1 registry chay ngay tren may (localhost:5000). Tranh dung build-image.sh cua tung module
-# (co credential Docker Hub dang plaintext trong file do, khong lien quan gi toi deploy local).
+# Build Maven -> Build Docker -> Push local registry -> Deploy Helm
 #
-# Setup 1 LAN DUY NHAT truoc khi chay script nay (can sudo, chi lam 1 lan cho ca doi):
-#   docker run -d -p 5000:5000 --restart=always --name local-registry registry:2
+# IMPORTANT:
+#   MODULE_PATH, IMAGE_NAME and RELEASE_NAME are intentionally separated.
+#
+# Java services:
+#   beacon
+#   colony
+#   hall
+#   harbor
+#
+# Nginx:
+#   file-server/fileserver
+#
+# Infrastructure:
+#   hazelcast
+#   postgres
+#
+# Total:
+#   4 Java services + 1 Nginx + Hazelcast + PostgreSQL
+#   = 7 Helm releases
+#
+# Local images:
+#   localhost:5000/<IMAGE_NAME>:<IMAGE_TAG>
+#
+# Example:
+#   file-server/fileserver
+#       MODULE_PATH  = file-server/fileserver
+#       IMAGE_NAME   = file-server
+#       RELEASE_NAME = file-server
+#
+# Usage:
+#
+#   ./deploy-k3s.sh
+#       Install/check k3s + helm
+#       Build Maven
+#       Build Docker images
+#       Push registry
+#       Deploy Helm
+#
+#   ./deploy-k3s.sh --skip-install
+#   ./deploy-k3s.sh --skip-build
+#   ./deploy-k3s.sh --skip-image
+#   ./deploy-k3s.sh --skip-deploy
+#   ./deploy-k3s.sh --uninstall
+#
+# Environment:
+#
+#   NAMESPACE=default
+#   IMAGE_TAG=local
+#
+# Example:
+#
+#   IMAGE_TAG=dev ./deploy-k3s.sh
+#   NAMESPACE=pingo IMAGE_TAG=local ./deploy-k3s.sh
+#
+# One-time local registry setup:
+#
+#   docker run -d \
+#     -p 5000:5000 \
+#     --restart=always \
+#     --name local-registry \
+#     registry:2
+#
 #   sudo tee /etc/rancher/k3s/registries.yaml <<'EOF'
 #   mirrors:
 #     "localhost:5000":
-#       endpoint: ["http://localhost:5000"]
+#       endpoint:
+#         - "http://localhost:5000"
 #   EOF
+#
 #   sudo systemctl restart k3s
-#   sudo chmod 644 /etc/rancher/k3s/k3s.yaml   # k3s reset lai quyen file nay moi lan restart
-# Sau buoc setup 1 lan do, script chay lai bao nhieu lan cung KHONG can sudo nua.
 #
-# Neu may dung firewalld (Fedora/Arch/EndeavourOS mac dinh bat san): firewalld chan traffic
-# pod-to-pod qua cac interface ao (cni0/flannel.1/docker0) vi chung roi vao zone "public" mac
-# dinh --> beacon khong join duoc Hazelcast (NoDataMemberInClusterException: "No member group is
-# available to assign partitions"), metrics-server khong scrape duoc kubelet ("no route to host").
-# Trieu chung de nhan: bat ky lenh nc/curl/kubectl pod-to-pod nao cung bao "no route to host" dau
-# du DNS resolve dung va route table co day du. Script tu kiem tra va canh bao o
-# ensure_firewalld_zones() ben duoi, nhung khong tu sudo thay ban -- chay tay 1 lan (can sudo):
-#   sudo firewall-cmd --permanent --zone=trusted --add-interface=cni0
-#   sudo firewall-cmd --permanent --zone=trusted --add-interface=flannel.1
-#   sudo firewall-cmd --permanent --zone=trusted --add-interface=docker0
-#   sudo firewall-cmd --reload
-#   sudo systemctl restart k3s   # de flannel/k3s ghi lai iptables/nftables rule sau reload
-# Sau buoc setup 1 lan do, script chay lai bao nhieu lan cung KHONG can lam lai (tru khi
-# cni0/flannel.1/docker0 bi xoa va tao lai voi ten khac, hiem khi xay ra).
-#
-# Usage:
-#   ./deploy-k3s.sh                  # lam tat: cai dat (neu thieu) + build + image + deploy
-#   ./deploy-k3s.sh --skip-install   # da co k3s/helm san roi, bo qua buoc cai dat
-#   ./deploy-k3s.sh --skip-build     # dung dist/ da build san, chi build lai image + deploy
-#   ./deploy-k3s.sh --skip-image     # dung image da push san, chi deploy lai helm (vd sua chart)
-#   ./deploy-k3s.sh --uninstall      # go 4 helm release + configmap (KHONG go k3s, KHONG go registry)
-#
-# Bien moi truong (tuy chon):
-#   NAMESPACE   namespace k8s de deploy (mac dinh: default -- xem ghi chu trong ensure_namespace())
-#   IMAGE_TAG   tag cho image local (mac dinh: local)
+# ============================================================================
 
 set -euo pipefail
 
+
+# ============================================================================
+# 0. CONFIG
+# ============================================================================
+
 NAMESPACE="${NAMESPACE:-default}"
 IMAGE_TAG="${IMAGE_TAG:-local}"
-# Label chung ca 3 pod deu mang (xem global.vertx.mainCluster.label trong tung helm/values.yaml) --
-# tu luc tach Hazelcast ra cluster doc lap (xem thu muc hazelcast/), label nay chi con y nghia
-# gom nhom de xem trang thai (print_summary), khong con dung cho Hazelcast discovery nua.
+
+REGISTRY="${REGISTRY:-localhost:5000}"
+
 CLUSTER_LABEL_KEY="lego/vertx-cluster"
 CLUSTER_LABEL_VALUE="vertx-land-cluster"
-MODULES=(beacon colony hall harbor herald) # thu tu deploy: control-plane (beacon) truoc, khong
-  # bat buoc nhung hop ly. hall/herald la service REST rieng (tach khoi colony, xem
-  # ARCHITECTURE.md muc 2/13) -- KHONG mang label CLUSTER_LABEL_KEY/VALUE (label do chi de gom
-  # nhom hien thi print_summary(), khong lien quan Hazelcast that -- ca hall lan herald DEU co
-  # cluster Hazelcast that su, can de nhan EventBus tu colony, xem HallBoot/HeraldBoot), nen
-  # print_summary() phai list pod theo "app in (...)" thay vi theo CLUSTER_LABEL_KEY nhu
-  # beacon/colony/harbor.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
-log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-warn() { printf '\033[1;33m!! %s\033[0m\n' "$*" >&2; }
-die()  { printf '\033[1;31mxx %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ============================================================================
+# MODULE DEFINITIONS
+#
+# IMPORTANT:
+#
+#   PATH          = filesystem path
+#   IMAGE         = Docker image repository name
+#   RELEASE       = Helm release name
+#
+# KHONG dung filesystem path de suy ra image name.
+# ============================================================================
+
+MAVEN_MODULES=(
+  "beacon"
+  "colony"
+  "hall"
+  "harbor"
+)
+
+DEPLOY_MODULES=(
+  "beacon"
+  "colony"
+  "hall"
+  "harbor"
+  "file-server/fileserver"
+)
+
+
+# ============================================================================
+# MODULE PATH
+# ============================================================================
+
+module_path() {
+  case "$1" in
+    beacon)
+      echo "beacon"
+      ;;
+
+    colony)
+      echo "colony"
+      ;;
+
+    hall)
+      echo "hall"
+      ;;
+
+    harbor)
+      echo "harbor"
+      ;;
+
+    file-server)
+      echo "file-server/fileserver"
+      ;;
+
+    file-server/fileserver)
+      echo "file-server/fileserver"
+      ;;
+
+    *)
+      die "Unknown module: $1"
+      ;;
+  esac
+}
+
+
+# ============================================================================
+# DOCKER IMAGE NAME
+#
+# This is deliberately NOT the filesystem path.
+#
+# Example:
+#
+#   file-server/fileserver -> file-server
+# ============================================================================
+
+image_name() {
+  case "$1" in
+    beacon)
+      echo "beacon"
+      ;;
+
+    colony)
+      echo "colony"
+      ;;
+
+    hall)
+      echo "hall"
+      ;;
+
+    harbor)
+      echo "harbor"
+      ;;
+
+    file-server)
+      echo "file-server"
+      ;;
+
+    file-server/fileserver)
+      echo "file-server"
+      ;;
+
+    *)
+      die "Unknown module for image: $1"
+      ;;
+  esac
+}
+
+
+# ============================================================================
+# HELM RELEASE NAME
+#
+# Helm release names must be valid Kubernetes resource names.
+# ============================================================================
+
+release_name() {
+  case "$1" in
+    beacon)
+      echo "beacon"
+      ;;
+
+    colony)
+      echo "colony"
+      ;;
+
+    hall)
+      echo "hall"
+      ;;
+
+    harbor)
+      echo "harbor"
+      ;;
+
+    file-server)
+      echo "file-server"
+      ;;
+
+    file-server/fileserver)
+      echo "file-server"
+      ;;
+
+    *)
+      die "Unknown module for Helm release: $1"
+      ;;
+  esac
+}
+
+
+# ============================================================================
+# CHART PATH
+# ============================================================================
+
+chart_path() {
+  local path
+
+  path="$(module_path "$1")"
+
+  echo "$REPO_ROOT/$path/helm"
+}
+
+
+# ============================================================================
+# IMAGE
+# ============================================================================
+
+image_ref() {
+  local module="$1"
+  local image
+
+  image="$(image_name "$module")"
+
+  echo "${REGISTRY}/${image}:${IMAGE_TAG}"
+}
+
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
+log() {
+  printf '\n\033[1;36m==> %s\033[0m\n' "$*"
+}
+
+
+warn() {
+  printf '\033[1;33m!! %s\033[0m\n' "$*" >&2
+}
+
+
+die() {
+  printf '\033[1;31mxx %s\033[0m\n' "$*" >&2
+  exit 1
+}
+
+
+# ============================================================================
+# FLAGS
+# ============================================================================
 
 DO_INSTALL=1
 DO_BUILD=1
@@ -73,262 +303,718 @@ DO_IMAGE=1
 DO_DEPLOY=1
 ACTION_UNINSTALL=0
 
+
 for arg in "$@"; do
   case "$arg" in
-    --skip-install) DO_INSTALL=0 ;;
-    --skip-build) DO_BUILD=0 ;;
-    --skip-image) DO_IMAGE=0 ;;
-    --skip-deploy) DO_DEPLOY=0 ;;
-    --uninstall) ACTION_UNINSTALL=1 ;;
+
+    --skip-install)
+      DO_INSTALL=0
+      ;;
+
+    --skip-build)
+      DO_BUILD=0
+      ;;
+
+    --skip-image)
+      DO_IMAGE=0
+      ;;
+
+    --skip-deploy)
+      DO_DEPLOY=0
+      ;;
+
+    --uninstall)
+      ACTION_UNINSTALL=1
+      ;;
+
     -h|--help)
-      sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    *) die "Khong nhan dien duoc tham so: $arg (dung --help de xem huong dan)" ;;
+
+    *)
+      die "Khong nhan dien duoc tham so: $arg (dung --help de xem huong dan)"
+      ;;
+
   esac
 done
 
+
 # ============================================================================
-# 0. Kiem tra firewalld co chan traffic pod-to-pod khong (chi CANH BAO, khong tu sudo thay ban --
-#    xem giai thich day du o comment dau file). Bo qua neu khong dung firewalld hoac khong co
-#    quyen doc zone (khong sao, se phat hien that su khi pod that su khong join duoc nhau).
+# 1. CHECK DOCKER
+# ============================================================================
+
+command -v docker >/dev/null 2>&1 \
+  || die "Can 'docker' de build image."
+
+
+# ============================================================================
+# 2. FIREWALLD
 # ============================================================================
 
 ensure_firewalld_zones() {
+
   command -v firewall-cmd >/dev/null 2>&1 || return 0
+
   systemctl is-active --quiet firewalld 2>/dev/null || return 0
 
-  local need_fix=0
+
+  local ifaces_to_fix=()
+
+
   for iface in cni0 flannel.1 docker0; do
-    ip link show "$iface" >/dev/null 2>&1 || continue # interface chua ton tai (vd lan dau chay), bo qua
+
+    ip link show "$iface" >/dev/null 2>&1 || continue
+
     local zone
-    zone="$(sudo firewall-cmd --get-zone-of-interface="$iface" 2>/dev/null || echo "")"
+
+    zone="$(
+      sudo firewall-cmd \
+        --get-zone-of-interface="$iface" \
+        2>/dev/null || true
+    )"
+
+
     if [ "$zone" != "trusted" ]; then
-      need_fix=1
+      ifaces_to_fix+=("$iface")
     fi
+
   done
 
-  if [ "$need_fix" -eq 1 ]; then
-    warn "firewalld dang chan traffic pod-to-pod (cni0/flannel.1/docker0 khong o zone 'trusted')." \
-         "Beacon se khong join duoc Hazelcast, metrics-server se khong scrape duoc kubelet." \
-         "Chay 1 lan de sua (xem chi tiet o comment dau file):" \
-         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=cni0" \
-         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=flannel.1" \
-         "  sudo firewall-cmd --permanent --zone=trusted --add-interface=docker0" \
-         "  sudo firewall-cmd --reload && sudo systemctl restart k3s"
-  fi
-}
 
-# ============================================================================
-# 1. Cai dat k3s + helm (idempotent -- bo qua neu da co)
-# ============================================================================
+  [ "${#ifaces_to_fix[@]}" -eq 0 ] && return 0
 
-install_k3s() {
-  if command -v k3s >/dev/null 2>&1; then
-    log "k3s da cai san, bo qua buoc cai dat"
-    return
-  fi
-  command -v curl >/dev/null 2>&1 || die "Can 'curl' de cai k3s"
-  log "Cai k3s (se hoi mat khau sudo)..."
-  # --write-kubeconfig-mode 644: cho user thuong doc duoc kubeconfig ma khong can sudo moi lan.
-  # --disable traefik: bo bot ingress controller mac dinh, khong dung toi trong project nay.
-  curl -sfL https://get.k3s.io | \
-    INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --disable traefik" sh -
-  log "Doi k3s node Ready..."
+
+  warn \
+    "firewalld dang chan traffic qua: ${ifaces_to_fix[*]}."
+
+
+  for iface in "${ifaces_to_fix[@]}"; do
+
+    sudo firewall-cmd \
+      --permanent \
+      --zone=trusted \
+      --add-interface="$iface" \
+      >/dev/null
+
+  done
+
+
+  sudo firewall-cmd --reload >/dev/null
+
+
+  log \
+    "Da chuyen ${ifaces_to_fix[*]} sang trusted."
+
+
+  log "Restart k3s..."
+
+
+  sudo systemctl restart k3s
+
+
   local tries=0
+
+
   until kubectl get node 2>/dev/null | grep -q ' Ready'; do
+
     tries=$((tries + 1))
-    [ "$tries" -gt 60 ] && die "k3s khong Ready sau 2 phut, kiem tra: sudo systemctl status k3s"
+
+
+    if [ "$tries" -gt 60 ]; then
+
+      die \
+        "k3s khong Ready sau restart. " \
+        "Kiem tra: sudo systemctl status k3s"
+
+    fi
+
+
     sleep 2
+
   done
+
+
   log "k3s da Ready"
 }
 
-install_helm() {
-  if command -v helm >/dev/null 2>&1; then
-    log "helm da cai san, bo qua buoc cai dat"
-    return
-  fi
-  log "Cai helm..."
-  curl -sfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-}
 
 # ============================================================================
-# 2. Build code bang Maven -> sinh dist/<module> cho tung service
+# 3. INSTALL K3S
+# ============================================================================
+
+install_k3s() {
+
+  if command -v k3s >/dev/null 2>&1; then
+
+    log "k3s da cai san."
+
+    return
+
+  fi
+
+
+  command -v curl >/dev/null 2>&1 \
+    || die "Can 'curl' de cai k3s."
+
+
+  log "Cai k3s..."
+
+
+  curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --disable traefik" \
+    sh -
+
+
+  log "Doi k3s node Ready..."
+
+
+  local tries=0
+
+
+  until kubectl get node 2>/dev/null | grep -q ' Ready'; do
+
+    tries=$((tries + 1))
+
+
+    if [ "$tries" -gt 60 ]; then
+
+      die \
+        "k3s khong Ready sau 2 phut. " \
+        "Kiem tra: sudo systemctl status k3s"
+
+    fi
+
+
+    sleep 2
+
+  done
+
+
+  log "k3s da Ready"
+}
+
+
+# ============================================================================
+# 4. INSTALL HELM
+# ============================================================================
+
+install_helm() {
+
+  if command -v helm >/dev/null 2>&1; then
+
+    log "helm da cai san."
+
+    return
+
+  fi
+
+
+  command -v curl >/dev/null 2>&1 \
+    || die "Can 'curl' de cai Helm."
+
+
+  log "Cai Helm..."
+
+
+  curl -sfL \
+    https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    | bash
+}
+
+
+# ============================================================================
+# 5. NAMESPACE
+# ============================================================================
+
+ensure_namespace() {
+
+  if [ "$NAMESPACE" = "default" ]; then
+    return
+  fi
+
+
+  if kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
+    return
+  fi
+
+
+  log "Tao namespace ${NAMESPACE}..."
+
+
+  kubectl create ns "$NAMESPACE"
+}
+
+
+# ============================================================================
+# 6. MAVEN BUILD
+#
+# Only Maven reactor modules.
+#
+# file-server/fileserver is NOT Maven.
 # ============================================================================
 
 build_code() {
-  log "mvn clean package (${MODULES[*]} + core/discovery)..."
-  local pl; pl="$(IFS=,; echo "${MODULES[*]}")"
-  (cd "$REPO_ROOT" && mvn -q clean package -pl "$pl" -am -DskipTests)
+
+  log \
+    "mvn clean package (${MAVEN_MODULES[*]} + dependencies)..."
+
+
+  local pl
+
+  pl="$(IFS=,; echo "${MAVEN_MODULES[*]}")"
+
+
+  (
+    cd "$REPO_ROOT"
+
+    mvn -q \
+      clean package \
+      -pl "$pl" \
+      -am \
+      -DskipTests
+  )
 }
 
-# ============================================================================
-# 3. Build Docker image local + day len registry local (khong dung Docker Hub)
-#    Can setup 1 lan (ngoai script, can sudo):
-#      docker run -d -p 5000:5000 --restart=always --name local-registry registry:2
-#      sudo tee /etc/rancher/k3s/registries.yaml <<'EOF'
-#      mirrors:
-#        "localhost:5000":
-#          endpoint: ["http://localhost:5000"]
-#      EOF
-#      sudo systemctl restart k3s
-#    Sau buoc setup 1 lan do, moi lan build/deploy ve sau KHONG can sudo nua.
-# ============================================================================
 
-REGISTRY="localhost:5000"
+# ============================================================================
+# 7. LOCAL REGISTRY
+# ============================================================================
 
 ensure_local_registry() {
-  if ! curl -sf "http://${REGISTRY}/v2/_catalog" >/dev/null 2>&1; then
-    if docker ps -a --format '{{.Names}}' | grep -qx local-registry; then
-      log "Container local-registry co san nhung dang khong chay, start lai..."
-      docker start local-registry >/dev/null
-    else
-      log "Chua co registry local, tao moi (docker run registry:2)..."
-      docker run -d -p 5000:5000 --restart=always --name local-registry registry:2 >/dev/null
-    fi
-    sleep 1
-    curl -sf "http://${REGISTRY}/v2/_catalog" >/dev/null 2>&1 \
-      || die "Registry local o ${REGISTRY} khong phan hoi -- kiem tra 'docker logs local-registry'"
+
+  if curl -sf \
+    "http://${REGISTRY}/v2/_catalog" \
+    >/dev/null 2>&1; then
+
+    log "Local registry ${REGISTRY} dang chay."
+
+    return
+
   fi
+
+
+  if docker ps -a \
+    --format '{{.Names}}' \
+    | grep -qx local-registry; then
+
+    log "Start local-registry..."
+
+
+    docker start local-registry >/dev/null
+
+  else
+
+    log "Tao local-registry..."
+
+
+    docker run -d \
+      -p 5000:5000 \
+      --restart=always \
+      --name local-registry \
+      registry:2 \
+      >/dev/null
+
+  fi
+
+
+  sleep 1
+
+
+  curl -sf \
+    "http://${REGISTRY}/v2/_catalog" \
+    >/dev/null 2>&1 \
+    || die \
+      "Registry ${REGISTRY} khong phan hoi. " \
+      "Kiem tra: docker logs local-registry"
 }
 
-build_images() {
-  for m in "${MODULES[@]}"; do
-    log "docker build ${REGISTRY}/${m}:${IMAGE_TAG}"
-    docker build -t "${REGISTRY}/${m}:${IMAGE_TAG}" "$REPO_ROOT/$m"
-  done
-}
-
-import_images() {
-  for m in "${MODULES[@]}"; do
-    log "docker push ${REGISTRY}/${m}:${IMAGE_TAG}"
-    docker push "${REGISTRY}/${m}:${IMAGE_TAG}"
-  done
-}
 
 # ============================================================================
-# 4. Toan bo ha tang Hazelcast -- helm chart rieng o hazelcast/helm (nhat quan voi
-#    beacon/colony/harbor, thay vi kubectl apply file tinh: duoc versioning, rollback, va quan
-#    trong nhat la "helm uninstall" don dep dung theo release, khong so sot tai nguyen nhu truoc):
-#      - backbone 3 pod FULL member co dinh, tu ghep cluster qua tcp-ip tinh (StatefulSet DNS on
-#        dinh), khong dinh gi toi vong doi scale/restart cua beacon/colony/harbor.
-#      - ConfigMap hazelcast-files-cfm -- beacon/colony/harbor mount file nay, tu embed 1
-#        lite-member roi join vao backbone qua tcp-ip.
+# 8. BUILD DOCKER IMAGES
+#
+# Filesystem path:
+#
+#   file-server/fileserver
+#
+# Docker image:
+#
+#   localhost:5000/file-server:local
+# ============================================================================
+
+build_images() {
+
+  for module in "${DEPLOY_MODULES[@]}"; do
+
+    local path
+    local image
+
+    path="$(module_path "$module")"
+    image="$(image_ref "$module")"
+
+
+    log "docker build ${image}"
+
+
+    docker build \
+      -t "$image" \
+      "$REPO_ROOT/$path"
+
+  done
+}
+
+
+# ============================================================================
+# 9. PUSH DOCKER IMAGES
+# ============================================================================
+
+push_images() {
+
+  for module in "${DEPLOY_MODULES[@]}"; do
+
+    local image
+
+    image="$(image_ref "$module")"
+
+
+    log "docker push ${image}"
+
+
+    docker push "$image"
+
+  done
+}
+
+
+# ============================================================================
+# 10. PRINT IMAGE MAP
+#
+# Useful for debugging path/name mismatch.
+# ============================================================================
+
+print_module_map() {
+
+  log "Module mapping:"
+
+
+  printf '\n'
+  printf '%-28s %-32s %-20s\n' \
+    "MODULE PATH" \
+    "DOCKER IMAGE" \
+    "HELM RELEASE"
+
+
+  printf '%-28s %-32s %-20s\n' \
+    "----------------------------" \
+    "--------------------------------" \
+    "--------------------"
+
+
+  for module in "${DEPLOY_MODULES[@]}"; do
+
+    printf '%-28s %-32s %-20s\n' \
+      "$(module_path "$module")" \
+      "$(image_ref "$module")" \
+      "$(release_name "$module")"
+
+  done
+
+
+  printf '\n'
+}
+
+
+# ============================================================================
+# 11. HAZELCAST
 # ============================================================================
 
 ensure_hazelcast_cluster() {
-  log "helm upgrade -i hazelcast (namespace=${NAMESPACE})"
-  helm upgrade -i hazelcast "$REPO_ROOT/hazelcast/helm" -n "$NAMESPACE" --wait --timeout 2m
+
+  log \
+    "helm upgrade -i hazelcast " \
+    "(namespace=${NAMESPACE})"
+
+
+  helm upgrade -i \
+    hazelcast \
+    "$REPO_ROOT/hazelcast/helm" \
+    -n "$NAMESPACE" \
+    --wait \
+    --timeout 2m
 }
 
+
 # ============================================================================
-# 4b. Postgres cho colony (bang conversation_members) -- helm chart rieng o postgres/helm, cung
-#     pattern voi hazelcast/helm: image cong khai (postgres:17, hazelcast/hazelcast:5.3.0) keo THANG
-#     tu Docker Hub, khong qua registry local (khac cac image tu build nhu colony/harbor/beacon/hall
-#     o tren, BAT BUOC qua localhost:5000 vi khong ton tai cong khai) -- node k3s co internet that,
-#     schema.sql tu dong chay 1 lan qua ConfigMap mount vao /docker-entrypoint-initdb.d/ (co san cua
-#     image postgres chinh thuc), du lieu ben qua PersistentVolumeClaim (local-path-provisioner
-#     mac dinh cua k3s).
+# 12. POSTGRES
 # ============================================================================
 
 ensure_postgres() {
-  log "helm upgrade -i postgres (namespace=${NAMESPACE})"
-  helm upgrade -i postgres "$REPO_ROOT/postgres/helm" -n "$NAMESPACE" --wait --timeout 2m
+
+  log \
+    "helm upgrade -i postgres " \
+    "(namespace=${NAMESPACE})"
+
+
+  helm upgrade -i \
+    postgres \
+    "$REPO_ROOT/postgres/helm" \
+    -n "$NAMESPACE" \
+    --wait \
+    --timeout 2m
 }
 
-ensure_namespace() {
-  # Mac dinh "default": K8sClientConfig ben beacon (BeaconAppModule) fallback ve "default" khi
-  # bien moi truong K8S_NAMESPACE khong duoc set -- va deployment.yml hien khong set bien do --
-  # nen deploy sang namespace khac "default" se khien beacon watch nham namespace. Chi doi
-  # NAMESPACE neu ban da tu chinh sua them K8S_NAMESPACE vao deployment.yml.
-  if [ "$NAMESPACE" != "default" ]; then
-    warn "NAMESPACE=${NAMESPACE} khac 'default' -- beacon hien KHONG doc bien K8S_NAMESPACE tu" \
-         "deployment.yml nen se van watch pod o namespace 'default', khong phai '${NAMESPACE}'."
-    kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
-  fi
-}
 
 # ============================================================================
-# 5. Deploy 4 helm chart, tro image ve tag local vua build
+# 13. DEPLOY HELM
+#
+# Each module:
+#
+#   MODULE_PATH
+#       |
+#       +--> Helm chart
+#
+#   IMAGE_NAME
+#       |
+#       +--> Docker image
+#
+#   RELEASE_NAME
+#       |
+#       +--> Helm release
 # ============================================================================
 
 deploy_helm() {
-  for m in "${MODULES[@]}"; do
-    log "helm upgrade -i ${m} (namespace=${NAMESPACE}, image=${REGISTRY}/${m}:${IMAGE_TAG})"
-    # imagePullPolicy=Always: tag ":local" la mutable (push de len cung tag moi lan build), IfNotPresent
-    # (mac dinh cua chart, hop ly cho prod voi tag version co dinh) se khien kubelet dung ban cache cu
-    # sau lan pull dau tien, khong bao gio thay code moi. Deploy local nen luon force pull lai.
-    helm upgrade -i "$m" "$REPO_ROOT/$m/helm" \
+  for module in "${DEPLOY_MODULES[@]}"; do
+    local release
+    local chart
+    local image
+
+    release="$(release_name "$module")"
+    chart="$(chart_path "$module")"
+    image="$(image_ref "$module")"
+
+    log \
+      "helm upgrade -i ${release} " \
+      "(namespace=${NAMESPACE}, image=${image})"
+    helm upgrade -i \
+      "$release" \
+      "$chart" \
       -n "$NAMESPACE" \
-      --set imageId="${REGISTRY}/${m}:${IMAGE_TAG}" \
-      --set imagePullPolicy=Always \
-      --wait --timeout 3m
+      --set-string imageId="$image" \
+      --set-string imagePullPolicy=Always \
+      --wait \
+      --timeout 3m
+
   done
 }
 
+# ============================================================================
+# 14. SUMMARY
+# ============================================================================
+
 print_summary() {
   log "Trang thai pod:"
-  local apps
-  apps="$(IFS=,; echo "${MODULES[*]}")"
-  kubectl get pods -n "$NAMESPACE" -l "app in (${apps})" -o wide
+  kubectl get pods \
+    -n "$NAMESPACE" \
+    -o wide
   cat <<EOF
 
-Test thu:
-  - Mo demo.html tren trinh duyet, doi URL WebSocket thanh:
-      ws://localhost:31003/connect
-    (NodePort 31003 -> containerPort 8888 cua harbor, xem harbor/helm/templates/services.yaml)
-  - Xem log 1 pod:  kubectl logs -n ${NAMESPACE} deploy/harbor -f
-  - Xoa sach:        ./deploy-k3s.sh --uninstall
+===============================================================================
+
+Docker images:
+
+  docker images | grep '${REGISTRY}'
+
+Registry:
+
+  curl http://${REGISTRY}/v2/_catalog
+
+Helm releases:
+
+  helm list -n ${NAMESPACE}
+
+Pods:
+
+  kubectl get pods -n ${NAMESPACE} -o wide
+
+Services:
+
+  kubectl get svc -n ${NAMESPACE}
+
+Harbor WebSocket:
+
+  ws://localhost:31003/connect
+
+Harbor logs:
+
+  kubectl logs -n ${NAMESPACE} deploy/harbor -f
+
+File server logs:
+
+  kubectl logs -n ${NAMESPACE} deploy/file-server -f
+
+Uninstall Helm:
+
+  ./deploy-k3s.sh --uninstall
+
+===============================================================================
+
 EOF
 }
 
 # ============================================================================
-# Uninstall
+# 15. UNINSTALL
+#
+# Does NOT:
+#   - remove k3s
+#   - remove local registry
+#   - remove PostgreSQL PVC
 # ============================================================================
 
 do_uninstall() {
-  log "Go $((${#MODULES[@]} + 2)) helm release (namespace=${NAMESPACE})..."
-  for m in "${MODULES[@]}" hazelcast postgres; do
-    helm uninstall "$m" -n "$NAMESPACE" --ignore-not-found || true
+
+  log \
+    "Go Helm releases trong namespace=${NAMESPACE}..."
+
+
+  for module in "${DEPLOY_MODULES[@]}"; do
+
+    local release
+
+    release="$(release_name "$module")"
+
+
+    log "helm uninstall ${release}"
+
+
+    helm uninstall \
+      "$release" \
+      -n "$NAMESPACE" \
+      --ignore-not-found \
+      || true
+
   done
-  log "Da go xong $((${#MODULES[@]} + 2)) helm release (${MODULES[*]} + hazelcast + postgres)."
-  echo "PersistentVolumeClaim postgres-data KHONG tu bi xoa (du lieu conversation_members van con) --"
-  echo "xoa tay neu muon mat het du lieu that su: kubectl delete pvc postgres-data -n ${NAMESPACE}"
-  echo "k3s ban than KHONG bi go. Neu muon go han k3s: sudo /usr/local/bin/k3s-uninstall.sh"
+
+
+  log "helm uninstall hazelcast"
+
+
+  helm uninstall \
+    hazelcast \
+    -n "$NAMESPACE" \
+    --ignore-not-found \
+    || true
+
+
+  log "helm uninstall postgres"
+
+
+  helm uninstall \
+    postgres \
+    -n "$NAMESPACE" \
+    --ignore-not-found \
+    || true
+
+
+  log "Da go xong Helm releases."
+
+
+  cat <<EOF
+
+PostgreSQL PVC KHONG bi xoa.
+
+Neu muon xoa PostgreSQL data:
+
+  kubectl delete pvc postgres-data -n ${NAMESPACE}
+
+Local Docker registry KHONG bi xoa.
+
+k3s KHONG bi xoa.
+
+Neu muon go han k3s:
+
+  sudo /usr/local/bin/k3s-uninstall.sh
+
+EOF
 }
 
-# ============================================================================
-# main
-# ============================================================================
 
-command -v docker >/dev/null 2>&1 || die "Can 'docker' de build image (chua thay trong PATH)"
+# ============================================================================
+# 16. UNINSTALL
+# ============================================================================
 
 if [ "$ACTION_UNINSTALL" -eq 1 ]; then
+
+  command -v helm >/dev/null 2>&1 \
+    || die "Can 'helm' de uninstall."
+
   do_uninstall
+
   exit 0
 fi
 
+
+# ============================================================================
+# 17. INSTALL
+# ============================================================================
+
 if [ "$DO_INSTALL" -eq 1 ]; then
+
   install_k3s
+
   install_helm
+
 fi
 
-command -v kubectl >/dev/null 2>&1 || die "Can 'kubectl' (thuong di kem k3s hoac cai rieng)"
-command -v helm >/dev/null 2>&1 || die "Can 'helm' -- chay lai khong co --skip-install de tu cai"
+
+# ============================================================================
+# 18. CHECK KUBECTL / HELM
+# ============================================================================
+
+command -v kubectl >/dev/null 2>&1 \
+  || die \
+    "Can 'kubectl'."
+
+
+command -v helm >/dev/null 2>&1 \
+  || die \
+    "Can 'helm'. Chay lai khong co --skip-install."
+
+
+# ============================================================================
+# 19. PREPARE K8S
+# ============================================================================
 
 ensure_firewalld_zones
 ensure_namespace
+
+
+# ============================================================================
+# 20. PRINT MAPPING
+# ============================================================================
+
+print_module_map
+
+# ============================================================================
+# 21. MAVEN BUILD
+# ============================================================================
 
 if [ "$DO_BUILD" -eq 1 ]; then
   build_code
 fi
 
+# ============================================================================
+# 22. DOCKER BUILD + PUSH
+# ============================================================================
+
 if [ "$DO_IMAGE" -eq 1 ]; then
   ensure_local_registry
   build_images
-  import_images
+  push_images
+
 fi
+# ============================================================================
+# 23. HELM DEPLOY
+# ============================================================================
 
 if [ "$DO_DEPLOY" -eq 1 ]; then
   ensure_hazelcast_cluster
