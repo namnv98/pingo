@@ -1,5 +1,19 @@
 imageId: nnv98/hall:1.0.0
 
+# Nameserver BO SUNG cho pod (khong thay the dnsPolicy ClusterFirst -- van giu CoreDNS de resolve duoc
+# service/headless trong cluster nhu hazelcast-0.hazelcast-headless).
+#
+# Ly do can: CoreDNS cua k3s `forward . /etc/resolv.conf`, tro toi gateway nha mang va bi timeout --
+# log coredns day "read udp 10.42.x->192.168.10.1:53: i/o timeout" cho MOI ten mien ngoai (google.com,
+# youtube.com, oembed.com...), nen hall khong fetch duoc og:/oEmbed cho link-preview, tra {"data":null}
+# cho tat ca. Them nameserver cong khai vao danh sach cua pod thi het.
+#
+# Kubernetes gioi han TONG 3 nameserver; ClusterFirst da chiem 1 cho CoreDNS nen chi con cho 2 o day.
+# Dat [] (hoac xoa key) de ve lai dnsPolicy mac dinh cua cluster.
+egressDnsNameservers:
+  - 8.8.8.8
+  - 1.1.1.1
+
 istio:
   sidecar_inject: true
 

@@ -21,6 +21,14 @@ spec:
         {{- end }}
     spec:
       terminationGracePeriodSeconds: 30
+      {{- if .Values.egressDnsNameservers }}
+      # DNS ra NGOAI cho link-preview (fetch og:/oEmbed) -- xem javadoc .Values.egressDnsNameservers.
+      dnsConfig:
+        nameservers:
+          {{- range .Values.egressDnsNameservers }}
+          - {{ . | quote }}
+          {{- end }}
+      {{- end }}
       volumes:
         - name: config-files
           configMap:
