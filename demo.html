@@ -558,6 +558,57 @@
         .bgUploadBtn:hover { border-color: var(--accent); color: var(--accent-dark); }
         .msg-caption { margin-top: 6px; }
         .bubble .mention { color: var(--accent-dark); font-weight: 600; }
+        /* Link trong tin nhắn chữ -- xanh + gạch chân (mine: nền màu đậm nên chỉ cần chữ đậm, không
+           gạch chân rối mắt trên nền xanh). */
+        .bubble .msgLink { color: var(--accent-dark); text-decoration: underline; word-break: break-all; }
+        .bubble-row.mine .bubble .msgLink { color: var(--my-bubble-fg, white); font-weight: 700; text-decoration: underline; }
+        /* Link-preview card -- tin nhắn CHỈ chứa 1 link: thay chữ thô bằng thẻ nhúng kiểu
+           Messenger/Telegram (ảnh + tiêu đề + mô tả + domain). media-only bỏ nền bubble, card tự lo. */
+        .linkPreviewCard { display: block; width: 100%; max-width: 320px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; text-decoration: none; color: inherit; cursor: pointer; box-shadow: var(--shadow-sm); }
+        .linkPreviewCard:hover { border-color: var(--accent); }
+        .linkPreviewImage { display: block; width: 100%; height: 150px; object-fit: cover; border-bottom: 1px solid var(--line); }
+        .linkPreviewInfo { padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+        .linkPreviewDomain { font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .3px; }
+        .linkPreviewTitle { font-size: 13.5px; font-weight: 700; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .linkPreviewDesc { font-size: 12.5px; color: var(--ink-faint); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        /* Skeleton CHỈ còn dùng cho tin CŨ (gửi trước khi server lưu body.preview) -- mọi tin mới đều
+           có preview ngay trong body nên vẽ ĐỒNG BỘ đúng kích thước, không có giai đoạn nở ra.
+           min-height khớp cỡ card thật (ảnh 150 + domain + title 2 dòng + desc 3 dòng) để phần co/dãn
+           còn lại là rất nhỏ, và được bù scrollTop triệt để bằng withScrollAnchored() bên dưới. */
+        .linkPreviewCard.skeleton { min-height: 264px; }
+        .linkPreviewSkeletonImage { width: 100%; height: 150px; border-bottom: 1px solid var(--line); }
+        .linkPreviewSkeletonLines { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+        .linkPreviewSkeletonBar { height: 11px; border-radius: 6px; }
+        .linkPreviewSkeletonBar.b1 { width: 34%; }
+        .linkPreviewSkeletonBar.b2 { width: 92%; height: 13px; }
+        .linkPreviewSkeletonBar.b3 { width: 74%; }
+        /* Shimmer chỉ là nền chuyển sắc chạy ngang -- dùng hoạ tiết riêng, không đụng biến màu nào. */
+        .linkPreviewCard.skeleton .linkPreviewSkeletonImage,
+        .linkPreviewCard.skeleton .linkPreviewSkeletonBar {
+            background: linear-gradient(90deg, var(--canvas) 0%, var(--line) 50%, var(--canvas) 100%);
+            background-size: 300% 100%;
+            animation: previewShimmer 1.3s ease-in-out infinite;
+        }
+        @keyframes previewShimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+        /* Ảnh preview tải lỗi (og:image hết hạn/403/chặn hotlink -- rất hay xảy ra với cdn mạng xã hội):
+           giữ NGUYÊN chỗ 150px bằng khối chữ domain, KHÔNG remove() -- xoá đi sẽ làm card co lại 150px
+           và đẩy mọi tin bên dưới trôi theo, đúng cái bug đang sửa ở đây. */
+        .linkPreviewImageFallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 150px; border-bottom: 1px solid var(--line); background: var(--canvas); color: var(--ink-faint); font-size: 13px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; overflow: hidden; }
+        /* ----- card xem TRƯỚC NGAY TRONG Ô NHẬP (pha compose, giống Slack chat.unfurlLink: dán link
+           vào là hiện card nhỏ + nút ✕ để từ chối, RỒI mới bấm gửi) -----
+           Chiều cao CỐ ĐỊNH 76px -- cao hơn là sao? Vì khối này nằm trong .conv-send, mỗi lần nó
+           hiện/ẩn làm khung .conv-log hẹp đi; composeResizeObserver đã tự bù scrollTop cho mọi lý do
+           đổi chiều cao khối soạn tin, nên chỉ cần kích thước ở đây ỔN ĐỊNH là đủ, không lo đẩy lịch sử. */
+        .composeLinkPreview { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; max-width: 320px; height: 76px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; }
+        .composeLinkPreviewThumb { width: 56px; height: 56px; flex: none; border-radius: 8px; overflow: hidden; background: var(--canvas); display: flex; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 15px; font-weight: 800; }
+        .composeLinkPreviewThumb img { width: 100%; height: 100%; object-fit: cover; }
+        .composeLinkPreviewBody { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .composeLinkPreviewDomain { font-size: 10px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .composeLinkPreviewTitle { font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .composeLinkPreviewDesc { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* Đang fetch (chưa có metadata) -- hiện khung "đang xem trước..." cũng ĐÚNG 76px, để lúc có
+           kết quả chỉ THAY NỘI DUNG bên trong, không thêm/bớt chiều cao khối soạn tin lần 2. */
+        .composeLinkPreview.pending { color: var(--ink-faint); font-size: 12px; align-items: center; }
         /* Placeholder tin đã xoá (mềm) -- ghi đè cả nền màu của bong bóng (mine/theirs) để không còn
            trông như 1 tin bình thường nữa. */
         .bubble.deletedPlaceholder { font-style: italic; color: var(--ink-faint); background: none; padding: 0; }
@@ -2372,6 +2423,128 @@ function ensureConversationCard(conversationId, label, subtitle) {
     var sendBtnEl = card.querySelector('.composeSendBtn');
     var previewEl = card.querySelector('.composePreview');
     var previewListEl = card.querySelector('.composePreviewList');
+    // Khối xem trước LINK NGAY TRONG Ô NHẬP (pha compose, đặt SÁT TRÊN logEl để bù scroll như với
+    // composePreview file) -- chèn ngay sau composePreview file, không đè lên vị trí file.
+    var composeLinkPreviewEl = null;
+    var composeLinkPreviewState = {url: null, meta: null, declined: false};
+    function ensureComposeLinkPreviewEl() {
+        if (composeLinkPreviewEl) return composeLinkPreviewEl;
+        composeLinkPreviewEl = document.createElement('div');
+        // Chèn NGAY TRƯỚC .composeRow nhưng vẫn trong .conv-send, ngay sau .composePreview file
+        // để MỌI khối trong conv-send đều được composeResizeObserver bù scrollTop như nhau.
+        convSendEl.insertBefore(composeLinkPreviewEl, card.querySelector('.composeRow'));
+        return composeLinkPreviewEl;
+    }
+    function renderComposeLinkPreview(url, meta, pending) {
+        var host = ensureComposeLinkPreviewEl();
+        host.innerHTML = '';
+        if (!url) { host.style.display = 'none'; return; }
+        host.style.display = 'block';
+        var cardEl = document.createElement('div');
+        cardEl.className = pending ? 'composeLinkPreview pending' : 'composeLinkPreview';
+        if (pending) {
+            cardEl.textContent = 'Dang xem truoc ' + hostnameOf(url) + '...';
+        } else {
+            var thumb = document.createElement('div');
+            thumb.className = 'composeLinkPreviewThumb';
+            if (meta && meta.image) {
+                var im = document.createElement('img');
+                im.src = meta.image;
+                im.alt = '';
+                im.onerror = function () { thumb.textContent = (meta.domain || 'LINK').slice(0, 8); };
+                thumb.appendChild(im);
+            } else {
+                thumb.textContent = (meta && meta.domain ? meta.domain : hostnameOf(url)).slice(0, 8);
+            }
+            cardEl.appendChild(thumb);
+            var bd = document.createElement('div');
+            bd.className = 'composeLinkPreviewBody';
+            var dom = document.createElement('div');
+            dom.className = 'composeLinkPreviewDomain';
+            dom.textContent = (meta && meta.domain) || hostnameOf(url);
+            bd.appendChild(dom);
+            if (meta && meta.title) {
+                var tt = document.createElement('div');
+                tt.className = 'composeLinkPreviewTitle';
+                tt.textContent = meta.title;
+                bd.appendChild(tt);
+            }
+            if (meta && meta.description) {
+                var dd = document.createElement('div');
+                dd.className = 'composeLinkPreviewDesc';
+                dd.textContent = meta.description;
+                bd.appendChild(dd);
+            }
+            cardEl.appendChild(bd);
+        }
+        var closer = document.createElement('button');
+        closer.type = 'button';
+        closer.className = 'composePreviewRemove';
+        closer.title = pending ? 'Bo xem truoc' : 'Bo the xem truoc (gui nhu link tran)';
+        closer.innerText = '✕';
+        closer.onclick = function (e) {
+            e.stopPropagation();
+            dismissComposeLinkPreview();
+            inputEl.focus();
+        };
+        cardEl.appendChild(closer);
+        host.appendChild(cardEl);
+    }
+    function dismissComposeLinkPreview() {
+        composeLinkPreviewState.declined = true;
+        composeLinkPreviewState.url = null;
+        composeLinkPreviewState.meta = null;
+        if (composeLinkPreviewEl) { composeLinkPreviewEl.innerHTML = ''; composeLinkPreviewEl.style.display = 'none'; }
+    }
+    var composeLinkDebounce = null;
+    function maybeFetchComposeLinkPreview() {
+        if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
+        var sole = extractSoleUrl(inputEl.value);
+        if (!sole || entry.pendingFiles.length > 0) {
+            if (composeLinkPreviewEl) { composeLinkPreviewEl.innerHTML = ''; composeLinkPreviewEl.style.display = 'none'; }
+            // Don URL moi sau khi xoas/dan khac text -- reset declined de no co co hoi fetch lai lan sau
+            if (!sole) composeLinkPreviewState.declined = false;
+            composeLinkPreviewState.url = null;
+            composeLinkPreviewState.meta = null;
+            return;
+        }
+        if (composeLinkPreviewState.declined && sole === composeLinkPreviewState.url) return; // user vua bam X tu choi -- khong fetch lai cung URL do
+        if (composeLinkPreviewState.meta && sole === composeLinkPreviewState.url) {
+            renderComposeLinkPreview(sole, composeLinkPreviewState.meta, false);
+            return;
+        }
+        // Cache cua pha render trong log da co (hall vua tra cho cung URL nay o tin cu) -- lay ngay, khong goi lai
+        if (linkPreviewCache[sole]) {
+            composeLinkPreviewState.url = sole;
+            composeLinkPreviewState.meta = linkPreviewCache[sole];
+            composeLinkPreviewState.declined = false;
+            renderComposeLinkPreview(sole, linkPreviewCache[sole], false);
+            return;
+        }
+        composeLinkPreviewState.url = sole;
+        composeLinkPreviewState.meta = null;
+        composeLinkPreviewState.declined = false;
+        renderComposeLinkPreview(sole, null, true);
+        composeLinkDebounce = setTimeout(function () {
+            var atCall = sole;
+            fetchLinkPreviewMeta(atCall)
+                .then(function (meta) {
+                    // Giua chung user da xoa input / xoa X / doi URL khac -- bo qua ket qua cu
+                    if (extractSoleUrl(inputEl.value) !== atCall) return;
+                    if (composeLinkPreviewState.declined) return;
+                    if (!meta || (!meta.title && !meta.description && !meta.image)) {
+                        dismissComposeLinkPreview();
+                        return;
+                    }
+                    composeLinkPreviewState.meta = meta;
+                    renderComposeLinkPreview(atCall, meta, false);
+                })
+                .catch(function () {
+                    if (extractSoleUrl(inputEl.value) !== atCall) return;
+                    composeLinkPreviewEl && (composeLinkPreviewEl.innerHTML = '') && (composeLinkPreviewEl.style.display = 'none');
+                });
+        }, 420); // debounce 420ms: vua nhan khi go xong, khong spam moi lan 'input'
+    }
     var jumpBtnEl = card.querySelector('.jumpToBottomBtn');
     var jumpBadgeEl = card.querySelector('.jumpBadge');
 
@@ -2573,6 +2746,12 @@ function ensureConversationCard(conversationId, label, subtitle) {
     var sendMsg = function () {
         var text = inputEl.value.trim();
         if (entry.pendingFiles.length) {
+            // Tin dinh kem file thi phan chu la CAPTION, khong phai "tin chi co 1 link" -- huy khoi
+            // xem truoc link dang hien trong o nhap di cho khoi hieu lam (maybeFetchComposeLinkPreview
+            // cung tu an khi pendingFiles > 0, day chi la don ngay luc bam gui).
+            if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
+            dismissComposeLinkPreview();
+            composeLinkPreviewState.declined = false;
             // Gửi TẤT CẢ file đã chọn trong CÙNG 1 TIN (body.files = [...], xem uploadAndSendFiles) --
             // giống Telegram/Messenger gộp cả album vào 1 bong bóng thay vì tách rời từng ảnh/video
             // thành nhiều tin lẻ. Chú thích gõ kèm (nếu có) gắn CHUNG cho cả tin đó.
@@ -2585,7 +2764,23 @@ function ensureConversationCard(conversationId, label, subtitle) {
             return;
         }
         if (!text) return;
-        send({type: 'MESSAGE', id: newId(), conversationId: conversationId, body: {message: text}});
+        // PHA 3 -- giong Slack `chat.postMessage` gui kem `unfurl`/`pending_slug_urls`: tin chi chua
+        // dung 1 link thi gui KEM `body.preview` da resolve tu luc dang go (pha compose o tren). colony
+        // chi viec Json.encode luu nguyen, moi client -- ke ca echo ve chinh minh -- ve card DONG BO
+        // dung kich thuoc ngay tu dau, khong con "no" sau lam day cac tin khac (bug goc cua task nay).
+        // Chua co meta (bam gui som hon fetch xong, hoac user bam X tu choi) thi CU GUI khong preview:
+        // colony tu enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview), tin van di ngay,
+        // khong bat user doi -- dung tinh than best-effort cua ca 3 pha.
+        var body = {message: text};
+        var soleUrlToSend = extractSoleUrl(text);
+        if (soleUrlToSend && !composeLinkPreviewState.declined && composeLinkPreviewState.meta
+            && composeLinkPreviewState.url === soleUrlToSend) {
+            body.preview = composeLinkPreviewState.meta;
+        }
+        send({type: 'MESSAGE', id: newId(), conversationId: conversationId, body: body});
+        if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
+        dismissComposeLinkPreview(); // an khoi xem truoc trong o nhap
+        composeLinkPreviewState.declined = false; // reset: lan dan link tiep theo phai duoc fetch lai
         inputEl.value = '';
         autoGrowComposeInput();
         updateSendButtonState();
@@ -2601,9 +2796,12 @@ function ensureConversationCard(conversationId, label, subtitle) {
     });
     // Báo "đang gõ" cho các thành viên khác -- throttle (không gửi mỗi keystroke), im lặng bỏ qua
     // nếu socket chưa sẵn sàng (best-effort, không phải luồng chính).
+    // pase LINK TRAN vao o nhap thi trigger pha slugify moi (giong Slack chat.slugifyUrl/khong goi
+    // la slugifyUrl thi client tu regex) -- khong phai user go tay từng ky tu van spams cap hall
     inputEl.addEventListener('input', function () {
         autoGrowComposeInput();
         updateSendButtonState();
+        maybeFetchComposeLinkPreview();
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         var now = Date.now();
         if (lastTypingSentAt[conversationId] && now - lastTypingSentAt[conversationId] < TYPING_THROTTLE_MS) return;
@@ -3250,17 +3448,251 @@ function messageBodyText(body) {
 }
 
 // Tô màu các cụm "@ai_đó" ngay trong nội dung tin -- thuần hiển thị (không tra cứu/link thật tới
-// user nào), giống cách mention hiện màu xanh trong ảnh tham khảo. PHẢI escape HTML trước khi chèn
-// bất kỳ thẻ nào (nội dung tin đến từ người dùng khác qua mạng) -- chỉ chèn thẻ span mention của
-// CHÍNH mình sau khi đã escape, không bao giờ tin trực tiếp text thô vào innerHTML.
+// user nào), giống cách mention hiện màu xanh trong ảnh tham khảo. Link http(s) trong tin KHÔNG kèm
+// ảnh -- biến thành <a> bấm được. PHẢI escape HTML trước khi chèn BẤT KỲ thẻ nào (nội dung tin đến
+// từ người dùng khác qua mạng) -- chỉ chèn thẻ span/a của CHÍNH mình sau khi đã escape, không bao giờ
+// tin trực tiếp text thô vào innerHTML.
 function renderMessageText(el, text) {
     var escaped = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    el.innerHTML = escaped.replace(/(^|\s)(@[^\s]+)/g, function (whole, pre, mention) {
+    var html = escaped.replace(/(^|\s)(@[^\s]+)/g, function (whole, pre, mention) {
         return pre + '<span class="mention">' + mention + '</span>';
     });
+    html = html.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g, function (whole, pre, url) {
+        var cleanUrl = url.replace(/[.,!?;:'")\]]+$/, '');
+        var trailing = url.slice(cleanUrl.length);
+        return pre + '<a class="msgLink" href="' + cleanUrl.replace(/"/g, '&quot;') +
+            '" target="_blank" rel="noopener noreferrer">' + cleanUrl + '</a>' + trailing;
+    });
+    el.innerHTML = html;
+}
+
+// Nhận dạng tin nhắn CHỈ chứa đúng 1 link (không kèm chữ nào khác) -- kiểu này thay vì hiện chữ
+// thô, vẽ 1 thẻ preview nhúng (ảnh + tiêu đề + mô tả + domain) như Messenger/Telegram/Zalo.
+function extractSoleUrl(text) {
+    var trimmed = (text || '').trim();
+    return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : null;
+}
+
+// Domain thuần từ URL (bỏ "www.") -- dùng làm nhãn nhỏ đầu thẻ preview.
+function hostnameOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ''); }
+    catch (e) { return url; }
+}
+
+// Cache kết quả preview theo URL -- 1 tab chỉ fetch 1 lần cho cùng 1 link, dù link xuất hiện ở nhiều
+// tin khác nhau (tránh spam hall mỗi lần load lại lịch sử có cùng link đó).
+//
+// KHÔNG còn chỉ in-memory như bản đầu: seed từ localStorage (có TTL) lúc khởi động, ghi ngược lại mỗi
+// lần fetch xong. Bản in-memory không sống qua reload, nghĩa là MỖI lần mở trang, toàn bộ tin CŨ chưa
+// có body.preview lại nở card gây giật layout lần nữa. Đây là đường cho TIN CŨ -- đường chính cho TIN
+// MỚI là body.preview (client gắn lúc gửi, colony enrich cho tin nào thiếu), vẽ đồng bộ, không fetch gì.
+var LINK_PREVIEW_CACHE_KEY = 'pingoLinkPreviewCache';
+var LINK_PREVIEW_CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
+var LINK_PREVIEW_CACHE_MAX = 300;
+
+// Đọc cache bền: trả map {url: {meta, at}} -- tự loại phần tử hết TTL. localStorage bị chặn (chế độ
+// riêng tư, quota) thì coi như rỗng, KHÔNG được ném lỗi làm sập cả script.
+function readLinkPreviewStore() {
+    try {
+        var raw = localStorage.getItem(LINK_PREVIEW_CACHE_KEY);
+        if (!raw) return {};
+        var parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return {};
+        var now = Date.now();
+        var live = {};
+        Object.keys(parsed).forEach(function (url) {
+            var entry = parsed[url];
+            if (entry && entry.meta && entry.exp > now) live[url] = entry;
+        });
+        return live;
+    } catch (e) {
+        return {};
+    }
+}
+
+// Ghi cache bền -- cắt còn LINK_PREVIEW_CACHE_MAX phần tử mới nhất (at = thời điểm fetch) để không phình
+// localStorage vô hạn. Lỗi quota cũng nuốt luôn: cache chỉ là tối ưu, mất thì fetch lại.
+function writeLinkPreviewStore(cache, at) {
+    try {
+        var now = Date.now();
+        var trimmed = {};
+        Object.keys(cache)
+            .sort(function (a, b) { return (at[b] || 0) - (at[a] || 0); })
+            .slice(0, LINK_PREVIEW_CACHE_MAX)
+            .forEach(function (url) { trimmed[url] = {meta: cache[url], exp: now + LINK_PREVIEW_CACHE_TTL_MS, at: at[url] || now}; });
+        localStorage.setItem(LINK_PREVIEW_CACHE_KEY, JSON.stringify(trimmed));
+    } catch (e) {
+        // bỏ qua -- xem javadoc
+    }
+}
+
+// 2 map in-memory song song: {url: meta} (shape KHÔNG đổi so với bản đầu -- meta chỉ có đúng 4 field
+// title/description/image/domain, nên gắn thẳng vào body.preview gửi lên server là sạch sẽ) và {url:
+// timestampFetch} riêng cho việc cắt TTL. Gộp `at` vào trong meta sẽ rò rỉ field thừa xuống DB body.
+var linkPreviewCache = {};
+var linkPreviewCacheAt = {};
+(function seedLinkPreviewCache() {
+    var store = readLinkPreviewStore();
+    Object.keys(store).forEach(function (url) {
+        linkPreviewCache[url] = store[url].meta;
+        linkPreviewCacheAt[url] = store[url].at || 0;
+    });
+})();
+
+// Tự fetch HTML của 1 trang bất kỳ từ trình duyệt BỊ CHẶN bởi CORS (trang khác origin) -- phải qua
+// hall GET /link-preview (backend tự fetch + parse og:, không phụ thuộc bên thứ 3 nào).
+function fetchLinkPreviewMeta(url) {
+    if (linkPreviewCache[url]) return Promise.resolve(linkPreviewCache[url]);
+    return fetch(HISTORY_API_BASE + '/link-preview?url=' + encodeURIComponent(url))
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (json) {
+            // hall LUÔN trả {"data": <preview>} hoặc {"data": null} (xem LinkPreviewRegistry) -- null
+            // nghĩa là "không có preview", KHÔNG phải lỗi. Bản cũ phải viết `json.data || json` để đoán
+            // shape vì nhánh lỗi trả {"domain":...} trần; giờ chỉ còn 1 dạng.
+            var data = json ? json.data : null;
+            if (!data) return null;
+            var result = {
+                title: data.title || null,
+                description: data.description || null,
+                image: data.image || null,
+                domain: data.domain || hostnameOf(url)
+            };
+            // Không có gì để vẽ (chỉ mỗi domain) thì coi như KHÔNG có preview, đừng cache kết quả vô
+            // dụng -- để lần sau còn thử lại, và để caller rơi đúng về nhánh chữ link trần.
+            if (!result.title && !result.description && !result.image) return null;
+            linkPreviewCache[url] = result;
+            linkPreviewCacheAt[url] = Date.now();
+            writeLinkPreviewStore(linkPreviewCache, linkPreviewCacheAt);
+            return result;
+        });
+}
+
+// Dựng card preview HOÀN CHỈNH từ metadata đã biết -- dùng cho CẢ 2 đường: vẽ đồng bộ khi body.preview
+// có sẵn (tin mới), và tô vào skeleton khi fetch xong (tin cũ). Cùng 1 hàm để 2 đường ra ĐÚNG 1 hình
+// dạng/kích thước, không mỗi nơi dựng 1 kiểu rồi lệch nhau.
+// meta.image có thể lỗi lúc tải (og:image hết hạn / chặn hotlink -- rất hay gặp với CDN mạng xã hội):
+// thay bằng khối chữ domain GIỮ NGUYÊN 150px, KHÔNG remove() -- xoá đi sẽ làm card co lại 150px và
+// đẩy mọi tin bên dưới trôi theo, đúng cái bug đang sửa ở đây.
+function buildLinkPreviewCard(url, meta) {
+    var card = document.createElement('a');
+    card.className = 'linkPreviewCard';
+    card.href = url;
+    card.target = '_blank';
+    card.rel = 'noopener noreferrer';
+    if (meta.image) {
+        var img = document.createElement('img');
+        img.className = 'linkPreviewImage';
+        img.src = meta.image;
+        img.alt = '';
+        img.onerror = function () {
+            var fallback = document.createElement('div');
+            fallback.className = 'linkPreviewImageFallback';
+            fallback.textContent = meta.domain || hostnameOf(url);
+            card.replaceChild(fallback, img);
+        };
+        card.appendChild(img);
+    }
+    var info = document.createElement('div');
+    info.className = 'linkPreviewInfo';
+    var domain = document.createElement('div');
+    domain.className = 'linkPreviewDomain';
+    domain.textContent = meta.domain || hostnameOf(url);
+    info.appendChild(domain);
+    if (meta.title) {
+        var title = document.createElement('div');
+        title.className = 'linkPreviewTitle';
+        title.textContent = meta.title;
+        info.appendChild(title);
+    }
+    if (meta.description) {
+        var desc = document.createElement('div');
+        desc.className = 'linkPreviewDesc';
+        desc.textContent = meta.description;
+        info.appendChild(desc);
+    }
+    card.appendChild(info);
+    return card;
+}
+
+// Vẽ card preview ĐỒNG BỘ cho tin ĐÃ CÓ sẵn metadata trong body (tin mới: client gắn lúc gửi, hoặc
+// colony đã enrich -- xem ChatSessionManager#enrichLinkPreview). Không fetch, không skeleton, không có
+// bất kỳ bước nào làm đổi chiều cao sau khi đã lên DOM -- đây chính là chỗ hết giật layout.
+function renderLinkPreviewSync(el, url, meta) {
+    el.appendChild(buildLinkPreviewCard(url, meta));
+}
+
+// Vẽ 1 tin chỉ-toàn-link CHƯA có metadata (tin CŨ gửi trước khi có body.preview): skeleton giữ đúng
+// footprint card thật (min-height khớp ảnh 150 + 3 cụm chữ) để phần co/dãn còn lại rất nhỏ, và MỌI
+// lần đổi chiều cao đều được bù scrollTop bằng withScrollAnchored() -- không đẩy tin đang xem đi đâu.
+function renderLinkPreview(el, url) {
+    var card = document.createElement('a');
+    card.className = 'linkPreviewCard skeleton';
+    card.href = url;
+    card.target = '_blank';
+    card.rel = 'noopener noreferrer';
+    var skelImg = document.createElement('div');
+    skelImg.className = 'linkPreviewSkeletonImage';
+    card.appendChild(skelImg);
+    var skelLines = document.createElement('div');
+    skelLines.className = 'linkPreviewSkeletonLines';
+    ['b1', 'b2', 'b3'].forEach(function (cls) {
+        var bar = document.createElement('div');
+        bar.className = 'linkPreviewSkeletonBar ' + cls;
+        skelLines.appendChild(bar);
+    });
+    card.appendChild(skelLines);
+    el.appendChild(card);
+
+    // Bọc mọi lần đổi DOM bên dưới qua withScrollAnchored: đo chiều cao bubble TRƯỚC và SAU, chênh lệch
+    // bao nhiêu thì cộng bấy nhiêu vào scrollTop của log nếu bubble nằm PHÍA TRÊN đỉnh khung nhìn
+    // (xem hàm đó). Không có lớp này thì skeleton -> card thật (hoặc -> chữ link trần khi fetch fail)
+    // vẫn đẩy nội dung đang đọc trôi đi, dù skeleton đã gần đúng cỡ.
+    var row = el.closest('.bubble-row');
+    var logEl = row ? row.closest('.conv-log') : null;
+
+    var toPlainText = function () {
+        withScrollAnchored(row, logEl, function () {
+            el.classList.remove('media-only');
+            el.innerHTML = '';
+            renderMessageText(el, url);
+        });
+    };
+
+    fetchLinkPreviewMeta(url).then(function (meta) {
+        // fetchLinkPreviewMeta trả null khi trang không khai báo og: HOẶC lỗi mạng -- trong cả 2
+        // trường hợp đều THẲNG THẮN bỏ hẳn thẻ preview (không để khung skeleton treo mãi ở đó), trở về
+        // đúng cách vẽ tin chữ link bình thường (bấm được, chỉ không có thẻ nhúng).
+        if (!meta) { toPlainText(); return; }
+        withScrollAnchored(row, logEl, function () {
+            el.replaceChild(buildLinkPreviewCard(url, meta), card);
+        });
+    }).catch(function (err) {
+        console.warn('không tải được preview cho link', url, err);
+        toPlainText();
+    });
+}
+
+// Bù scrollTop khi 1 bubble ĐỔI CHIỀU CAO (link preview tô vào skeleton, hoặc co về chữ link trần) --
+// `.conv-log { overflow-anchor: none }` (xem CSS) đã chủ động tắt cơ chế tự bù của trình duyệt, nên
+// phần này JS PHẢI tự làm, giống hệt việc prependOlderMessages/onMediaReady đang làm cho ảnh/video.
+// CHỈ bù khi bubble nằm hẳn PHÍA TRÊN đỉnh khung nhìn: đó mới là trường hợp nội dung đang đọc bị đẩy
+// trôi. Bubble đang hiện trong khung nhìn thì để nguyên -- người dùng thấy card tự "nở" ngay trước mắt,
+// đúng như các app khác; bubble nằm dưới khung nhìn thì càng không liên quan.
+function withScrollAnchored(row, logEl, mutate) {
+    if (!row || !logEl) { mutate(); return; }
+    var before = row.offsetHeight;
+    mutate();
+    var delta = row.offsetHeight - before;
+    if (delta === 0) return;
+    var logRect = logEl.getBoundingClientRect();
+    var rowRect = row.getBoundingClientRect();
+    if (rowRect.bottom <= logRect.top + 1) logEl.scrollTop += delta;
 }
 
 // Popup xem ảnh/video full-size (tạo 1 LẦN, tái dùng cho mọi lần bấm -- giống #reactionPicker) --
@@ -3511,8 +3943,29 @@ function renderMessageContent(el, body, onMediaReady) {
             el.appendChild(groupCaption);
         }
     } else {
-        el.classList.remove('media-only');
-        renderMessageText(el, messageBodyText(body));
+        var soleUrl = extractSoleUrl(messageBodyText(body));
+        if (soleUrl) {
+            // Tin CHỈ chứa đúng 1 link, không kèm chữ nào khác -- hiện dạng thẻ nhúng preview
+            // (ảnh + tiêu đề + mô tả + domain) như Messenger/Telegram, KHÔNG phải chữ link trần.
+            // Bỏ luôn cả nền/đệm bubble (media-only) như ảnh/video -- thẻ card tự lo phần nhìn.
+            el.classList.add('media-only');
+            var stored = body && body.preview;
+            if (stored && (stored.title || stored.description || stored.image)) {
+                // Metadata ĐÃ CÓ SẴN trong body: client gắn lúc gửi (pha compose, xem sendMsg) hoặc
+                // colony enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview). Vẽ ĐỒNG BỘ
+                // -- không fetch, không skeleton -- nên card lên DOM đã đúng kích thước cuối cùng,
+                // không bao giờ "nở" sau mà đẩy các tin khác đi. Đây chính là cách các app khác tránh
+                // giật layout: biết trước hình dạng cuối cùng thay vì fetch lúc render.
+                renderLinkPreviewSync(el, soleUrl, stored);
+            } else {
+                // TIN CŨ (gửi trước khi có body.preview) mới phải fetch lúc render -- có skeleton giữ
+                // chỗ + bù scrollTop để phần co/dãn còn lại không đẩy tin đang xem, xem renderLinkPreview.
+                renderLinkPreview(el, soleUrl);
+            }
+        } else {
+            el.classList.remove('media-only');
+            renderMessageText(el, messageBodyText(body));
+        }
     }
 }
 

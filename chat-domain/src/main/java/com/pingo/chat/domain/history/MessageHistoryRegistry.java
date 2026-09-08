@@ -40,6 +40,21 @@ public class MessageHistoryRegistry {
         .thenApply(unused -> null));
   }
 
+  /**
+   * Ghi đè {@code messages.body} của 1 tin ĐÃ lưu -- dùng cho link preview: colony lưu tin ngay để
+   * ACK/fan-out không bị chậm, rồi SAU đó mới resolve og: và vá {@code body.preview} vào (giống Slack
+   * {@code chat.unfurlLink} chạy sau {@code chat.postMessage}, chỉ khác là pingo không cần broadcast
+   * {@code message_changed} -- client tự fallback vẽ preview lúc render nếu body chưa có, xem
+   * demo.html {@code renderLinkPreview}). Gọi SAU khi {@link #saveMessage} đã xong nên không có race
+   * INSERT/UPDATE; {@code rowCount() == 0} nghĩa là tin không tồn tại (đã bị xoá conversation), bỏ qua.
+   */
+  public CompletionStage<Integer> updateBodyJson(UUID messageId, String bodyJson) {
+    return supplier.execute(conn -> conn.preparedQuery("UPDATE messages SET body = ? WHERE id = ?")
+        .execute(Tuple.of(bodyJson, messageId))
+        .toCompletionStage()
+        .thenApply(io.vertx.sqlclient.RowSet::rowCount));
+  }
+
   /** Xoá TOÀN BỘ tin nhắn của 1 conversationId — xem {@code HallApiHandlers#deleteConversation}. */
   public CompletionStage<Void> deleteForConversation(UUID conversationId) {
     return supplier.execute(conn -> conn.preparedQuery("DELETE FROM messages WHERE conversation_id = ?")

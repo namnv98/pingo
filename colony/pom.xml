@@ -55,6 +55,12 @@
             <version>1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
+            <!-- LinkPreviewService (chat-domain) fetch og: cua trang dich de enrich body.preview;
+                 WebClient can artifact nay o runtime. (khong duoc dung 2 gach ngang lien nhau trong comment XML) -->
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web-client</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
         </dependency>

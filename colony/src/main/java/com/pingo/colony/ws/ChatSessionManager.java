@@ -8,6 +8,7 @@ import com.pingo.chat.grpc.FrameType;
 import com.pingo.colony.ws.delivery.MessageDelivery;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.colony.ws.routing.RoutingVersionSync;
 import com.pingo.colony.ws.session.ChatSession;
 import com.pingo.colony.ws.session.SessionRegistry;
@@ -55,6 +56,7 @@ public class ChatSessionManager {
   private final SessionRegistry registry = new SessionRegistry();
   private final ConversationMembershipRegistry membership;
   private final MessageHistoryRegistry history;
+  private final LinkPreviewService linkPreviewService;
   private final Vertx vertx;
   private final RoutingVersionSync routingVersionSync;
   private final MessageDelivery messageDelivery;
@@ -69,11 +71,12 @@ public class ChatSessionManager {
   private final AtomicLong poolExhaustedSuppressedCount = new AtomicLong();
 
   public ChatSessionManager(
-      String serverId, Vertx vertx, PingoConnector connector, ConversationMembershipRegistry membership, MessageHistoryRegistry history) {
+      String serverId, Vertx vertx, PingoConnector connector, ConversationMembershipRegistry membership, MessageHistoryRegistry history, LinkPreviewService linkPreviewService) {
     this.serverId = serverId;
     this.vertx = vertx;
     this.membership = membership;
     this.history = history;
+    this.linkPreviewService = linkPreviewService;
     this.routingVersionSync = new RoutingVersionSync(vertx, connector);
     this.messageDelivery = new MessageDelivery(registry, connector);
     vertx.eventBus().consumer(serverId, messageDelivery::onRoutedMessage);
@@ -480,10 +483,55 @@ public class ChatSessionManager {
         // ghi thêm dòng (message_id, fromUserId) này KHÔNG ảnh hưởng cột "seen" trả cho client (đã lọc
         // {@code mr.user_id != m.from_user_id}, xem listMessages) -- chỉ phục vụ tiến con trỏ.
         .thenCompose(unused -> history.markRead(savedMessageId, fromUserId))
-        .exceptionally(
-            ex -> {
-              logDbPoolThrottled("failed to persist message " + frame.getId() + " for conversation {}", conversationId, ex);
-              return null;
+        .whenComplete(
+            (unused, ex) -> {
+              if (ex != null) {
+                logDbPoolThrottled("failed to persist message " + frame.getId() + " for conversation {}", conversationId, ex);
+                return;
+              }
+              // CHỈ enrich SAU khi dòng đã thật sự nằm trong DB -- UPDATE body mà chạy trước INSERT
+              // thì rowCount() = 0, preview mất luôn (race thật: fetch og: vài trăm ms có thể nhanh
+              // hơn 1 write DB lúc pool đang bận).
+              enrichLinkPreview(savedMessageId, body);
+            });
+  }
+
+  /**
+   * Vá {@code body.preview} vào 1 tin chỉ-chứa-1-link mà client KHÔNG tự resolve trước khi gửi (client
+   * cũ, hoặc client bấm gửi lúc fetch og: chưa về -- xem demo.html {@code maybeFetchComposeLinkPreview}).
+   * Client nào ĐÃ gửi kèm {@code preview} thì {@link LinkPreviewService#soleUrlToPreview} trả null,
+   * không fetch lại lần 2.
+   *
+   * <p>Best-effort tuyệt đối: fetch ra internet có thể chậm tới vài giây nên CHẠY SAU khi đã ACK +
+   * fan-out + persist xong, không ai đợi nó; lỗi/thì tin vẫn nguyên vẹn, chỉ thiếu preview (client
+   * render tự fetch bù qua hall {@code GET /link-preview}).
+   *
+   * <p>Giống pha 2 của Slack ({@code chat.unfurlLink} chạy sau {@code chat.postMessage}), khác ở chỗ
+   * pingo KHÔNG broadcast {@code message_changed}: người nhận đang online vẫn thấy card qua đường
+   * fallback của client, còn lần mở lại sau (đọc từ DB) đã có preview sẵn nên vẽ ĐỒNG BỘ đúng kích
+   * thước, không còn "nở" sau làm đẩy các tin khác.
+   */
+  private void enrichLinkPreview(UUID messageId, Object body) {
+    var url = LinkPreviewService.soleUrlToPreview(body);
+    if (url == null) {
+      return;
+    }
+    linkPreviewService
+        .fetch(url)
+        .whenComplete(
+            (preview, ex) -> {
+              if (ex != null || preview == null) {
+                return; // không có metadata -- giữ body nguyên trạng, client vẽ chữ link trần
+              }
+              // cast an toàn: soleUrlToPreview chỉ trả url khác null khi body đã là JsonObject
+              var enriched = ((JsonObject) body).copy().put("preview", preview);
+              history
+                  .updateBodyJson(messageId, enriched.encode())
+                  .exceptionally(
+                      dbEx -> {
+                        logDbPoolThrottled("failed to store link preview for message {}", messageId, dbEx);
+                        return null;
+                      });
             });
   }
 

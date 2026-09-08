@@ -9,6 +9,7 @@ import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.chat.domain.notification.NotificationRegistry;
+import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.registry.IApiRegistry;
 import com.pingo.core.boot.start.LegoConfig1;
@@ -66,6 +67,17 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private MessageHistoryRegistry messageHistoryRegistry(JdbcConnectionSupplier supplier) {
     return new MessageHistoryRegistry(supplier);
+  }
+
+  /**
+   * Resolve og: cho {@code GET /link-preview} (xem {@code LinkPreviewRegistry}) -- client gọi ngay lúc
+   * ĐANG GÕ để hiện card xem trước trong ô nhập, giống Slack {@code chat.unfurlLink}. Cùng lớp colony
+   * dùng cho pha enrich sau khi lưu tin, xem {@code ColonyAppModule}. Singleton để giữ 1 WebClient chung.
+   */
+  @Provides
+  @Singleton
+  private LinkPreviewService linkPreviewService() {
+    return new LinkPreviewService(vertx);
   }
 
   @Provides
