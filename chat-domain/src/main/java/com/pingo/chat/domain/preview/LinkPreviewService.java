@@ -10,46 +10,58 @@ import io.vertx.ext.web.codec.BodyCodec;
 import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Resolve "link preview" (OpenGraph) của 1 URL bất kỳ -- đặt ở {@code chat-domain} vì CẢ 2 nơi dùng:
- * {@code hall} expose ra REST {@code GET /link-preview} cho client xem trước ngay lúc ĐANG GÕ (pha
- * compose, giống Slack {@code chat.unfurlLink}), còn {@code colony} tự enrich những tin mà client
- * KHÔNG gửi kèm {@code body.preview} (client cũ, hoặc client resolve thất bại) rồi ghi ngược lại
- * {@code messages.body} -- xem {@code ChatSessionManager#enrichLinkPreview}.
+ * Resolve "link preview" của 1 URL bất kỳ -- đặt ở {@code chat-domain} vì CẢ 2 nơi dùng: {@code hall}
+ * expose ra REST {@code GET /link-preview} cho client xem trước ngay lúc ĐANG GÕ (pha compose, giống
+ * Slack {@code chat.unfurlLink}), còn {@code colony} tự enrich những tin mà client KHÔNG gửi kèm
+ * {@code body.preview} (client cũ, hoặc client resolve thất bại) rồi ghi ngược lại {@code messages.body}
+ * -- xem {@code ChatSessionManager#enrichLinkPreview}.
  *
  * <p>Kết quả là {@link JsonObject} {@code {title?, description?, image?, domain}} -- trả {@code null}
  * (KHÔNG phải exception) cho MỌI trường hợp không dùng được: URL sai định dạng, host nội bộ, trang
- * không khai báo gì, timeout, redirect lỗi... Gọi luôn best-effort, không được để hỏng đường gửi tin.
+ * không khai báo gì, timeout, bị chặn... Gọi luôn best-effort, không được để hỏng đường gửi tin.
  *
- * <p><b>3 tầng trích xuất, 100% theo chuẩn mở -- KHÔNG hardcode theo host</b> (một trang có thể thiếu
- * tầng trên, rơi xuống tầng dưới; thêm site MỚI không bao giờ phải sửa code ở đây):
+ * <p><b>Thứ tự 4 tầng, 100% theo chuẩn mở -- KHÔNG hardcode theo host.</b> Thêm site mới KHÔNG bao giờ
+ * phải sửa code ở đây:
  * <ol>
- *   <li>{@code <meta>} og:/twitter: -- chuẩn phổ biến nhất, báo chí/mạng xã hội đều có.</li>
- *   <li>JSON-LD ({@code <script type="application/ld+json">}) -- {@code name/headline/image}, nhiều
- *       trang dùng thay og: (đặc biệt trang thương mại/doanh nghiệp).</li>
- *   <li>oEmbed -- CHỈ dùng endpoint do chính trang khai qua {@code <link rel="alternate"
- *       type="application/json+oembed" href="...">} (chuẩn oEmbed discovery). Cách này tự động đúng với
- *       MỌI site hỗ trợ oEmbed -- Youtube/Wordpress/Medium/Flickr/Spotify... -- mà không cần biết trước
- *       host nào. Cố tình KHÔNG dựng endpoint cứng kiểu {@code youtube.com/oembed?url=...}: làm vậy thì
- *       mỗi site mới lại phải thêm 1 case, và bản thân Youtube cũng đã khai {@code <link>} chuẩn nên
- *       hardcode là thừa.</li>
+ *   <li><b>oEmbed qua danh bạ chuẩn</b> ({@link OEmbedProviders}, tải từ {@code oembed.com/providers.json})
+ *       -- CHẠY TRƯỚC, trước cả khi tải HTML. Đây là cách Slack/Discord/Telegram làm với video/social:
+ *       endpoint oEmbed công khai, trả JSON gọn (~1KB) thay vì phải scrape trang 1.2MB, và KHÔNG bị các
+ *       trang lớn chặn bot. Phủ ~200 provider (Youtube, Twitter/X, TikTok, Vimeo, Spotify, Flickr,
+ *       Imgur, Twitch, Reddit...) và tự mở rộng khi oEmbed.org cập nhật danh bạ.</li>
+ *   <li><b>{@code <meta>} og:/twitter:</b> -- chuẩn phổ biến nhất, báo chí/trang thường đều có.</li>
+ *   <li><b>JSON-LD</b> ({@code <script type="application/ld+json">}) -- {@code headline/name/image},
+ *       nhiều trang thương mại/doanh nghiệp dùng thay og:.</li>
+ *   <li><b>oEmbed discovery</b> -- {@code <link rel="alternate" type="application/json+oembed">} mà chính
+ *       trang khai: bắt được provider KHÔNG nằm trong danh bạ.</li>
  * </ol>
  *
- * <p><b>Giới hạn độ dài HTML ({@value #MAX_HTML_BYTES} byte):</b> KHÔNG được cắt thấp hơn dung lượng thật
- * của mấy trang heavy như Youtube -- og: của họ nằm ở byte ~700.000 của file 1,2MB, cắt 512KB (mốc cũ)
- * là MẤT HẲN og: dù HTTP 200 và parse regex hoàn toàn đúng (đã gặp thật, trông như "Youtube không có
- * og:"). Trang lớn hơn mức này thì chấp nhận có thể hụt.
+ * <p><b>Vì sao tầng 1 phải chạy trước chứ không phải "thử scrape rồi mới fallback":</b> các trang video
+ * lớn CHẶN scrape HTML từ IP datacenter -- Youtube trả {@code 302 -> google.com/sorry} (trang captcha,
+ * 387 byte) thay vì HTML, đã gặp thật khi gọi {@code /watch} từ pod. Scrape trước thì luôn trắng tay với
+ * mấy trang đó dù code parse đúng hoàn toàn. oEmbed thì vẫn trả JSON bình thường.
  *
- * <p><b>SSRF:</b> URL do người dùng đưa vào, server tự đi fetch -- bắt buộc chặn host phân giải về
- * dải nội bộ (loopback / RFC1918 / link-local gồm metadata 169.254.169.254 / ULA IPv6), chặn CẢ sau
- * mỗi lần redirect: {@code setFollowRedirects(false)} rồi tự follow từng chặng, vì để WebClient tự
- * follow thì 1 {@code Location: http://127.0.0.1:8080/} vẫn bị fetch mà guard không kịp nhìn thấy.
+ * <p><b>Cache ({@value #CACHE_TTL_SUCCESS_MS} ms thành công / {@value #CACHE_TTL_EMPTY_MS} ms rỗng):</b>
+ * 1 link dán vào nhóm 100 người KHÔNG được thành 100 lần fetch ra internet -- vừa tốn băng thông vừa là
+ * lý do chính khiến IP bị rate-limit. Cache cũng làm tin cũ reload lại không phải resolve lần nữa.
+ *
+ * <p><b>Giới hạn độ dài HTML ({@value #MAX_HTML_BYTES} byte):</b> KHÔNG được cắt thấp hơn dung lượng
+ * thật của trang heavy -- og: của Youtube nằm ở byte ~700.000 của file 1,2MB, cắt 512KB (mốc cũ) là MẤT
+ * HẲN og: dù HTTP 200 và regex parse hoàn toàn đúng (đã gặp thật, trông như "Youtube không có og:").
+ *
+ * <p><b>SSRF:</b> URL do người dùng đưa vào, server tự đi fetch -- bắt buộc chặn host phân giải về dải
+ * nội bộ (loopback / RFC1918 / link-local gồm metadata 169.254.169.254 / ULA IPv6), chặn CẢ với endpoint
+ * oEmbed suy ra từ danh bạ và CẢ sau mỗi lần redirect: {@code setFollowRedirects(false)} rồi tự follow
+ * từng chặng, vì để WebClient tự follow thì 1 {@code Location: http://127.0.0.1:8080/} vẫn bị fetch mà
+ * guard không kịp nhìn thấy.
  *
  * <p><b>Giới hạn đã biết:</b> check DNS xong rồi mới {@code getAbs(hostname)} -- giữa 2 bước đó server
  * đích có thể đổi bản ghi DNS (DNS rebinding) để lần phân giải thứ 2 ra IP nội bộ. Chặn tuyệt đối cần
@@ -59,11 +71,12 @@ import lombok.extern.slf4j.Slf4j;
 public class LinkPreviewService {
 
   /**
-   * UA trình duyệt THƯỜNG, không phải UA bot. Nhiều trang (Facebook/Instagram một số CDN) chặn hẳn
-   * response có og: khi thấy UA bot -- cùng 1 URL, đổi UA là có/không có metadata.
+   * UA trình duyệt THƯỜNG cho tầng scrape, không phải UA bot: nhiều trang trả HTML khác hẳn (hoặc không
+   * có og:) khi thấy UA bot. Tầng oEmbed thì dùng UA riêng ngắn gọn -- endpoint đó là API công khai.
    */
   private static final String USER_AGENT =
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+  private static final String OEMBED_USER_AGENT = "PingoLinkPreview/1.0 (+https://pingo.chat/bot)";
 
   private static final int CONNECT_TIMEOUT_MS = 3_000;
   /**
@@ -79,11 +92,23 @@ public class LinkPreviewService {
   /** Tin "chỉ chứa đúng 1 link" -- khớp đúng {@code extractSoleUrl()} bên demo.html, 2 bên PHẢI giống nhau. */
   private static final Pattern SOLE_URL = Pattern.compile("^https?://\\S+$", Pattern.CASE_INSENSITIVE);
 
+  private static final long CACHE_TTL_SUCCESS_MS = 24 * 3600 * 1000L;
+  /** Rỗng cũng cache (ngắn hơn): trang không có metadata thì lần sau đừng fetch lại liên tục. */
+  private static final long CACHE_TTL_EMPTY_MS = 10 * 60 * 1000L;
+  private static final int CACHE_MAX_ENTRIES = 5_000;
+
+  private record CacheEntry(JsonObject preview, long expiresAt) {}
+
   private final Vertx vertx;
+  private final OEmbedProviders oEmbedProviders;
+  private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
   private WebClient webClient;
 
   public LinkPreviewService(Vertx vertx) {
     this.vertx = vertx;
+    var client = client();
+    this.oEmbedProviders = new OEmbedProviders(vertx, client);
+    this.oEmbedProviders.start();
   }
 
   /**
@@ -127,6 +152,10 @@ public class LinkPreviewService {
     if (host == null || !isHttp(target)) {
       return CompletableFuture.completedStage(null);
     }
+    var cached = cache.get(target);
+    if (cached != null && cached.expiresAt() > System.currentTimeMillis()) {
+      return CompletableFuture.completedStage(cached.preview());
+    }
     var out = new CompletableFuture<JsonObject>();
     checkHostPublicAsync(host)
         .whenComplete(
@@ -138,24 +167,171 @@ public class LinkPreviewService {
                 out.complete(null);
                 return;
               }
-              fetchHtml(target, MAX_REDIRECTS)
-                  .whenComplete(
-                      (html, fetchEx) -> {
-                        if (fetchEx != null) {
-                          log.debug("link-preview: fetch {} failed: {}", target, fetchEx.getMessage());
-                        }
-                        var page = html == null ? "" : toStringUtf8(html);
-                        var fromPage = parse(page, target);
-                        if (fromPage != null) {
-                          out.complete(fromPage);
-                          return;
-                        }
-                        // Trang không có og:/JSON-LD -- thử oEmbed (Youtube/Vimeo/SoundCloud SPA).
-                        tryOEmbed(target, page).whenComplete((viaOEmbed, oEmbedEx) -> out.complete(viaOEmbed));
-                      });
+              resolve(target).whenComplete((preview, resolveEx) -> out.complete(remember(target, preview)));
             });
     return out;
   }
+
+  /**
+   * 4 tầng theo đúng thứ tự ưu tiên (xem javadoc lớp). Mỗi tầng trả {@code null} thì rơi xuống tầng kế;
+   * KHÔNG dừng ở tầng 1 chỉ vì endpoint oEmbed tồn tại -- provider có thể trả lỗi cho URL cụ thể đó
+   * (video private/gỡ bỏ), lúc ấy scrape og: vẫn có thể có ích.
+   */
+  private CompletionStage<JsonObject> resolve(String target) {
+    return fetchViaOEmbedRegistry(target)
+        .thenCompose(
+            viaRegistry -> {
+              if (viaRegistry != null) {
+                return CompletableFuture.completedStage(viaRegistry);
+              }
+              return fetchHtml(target, MAX_REDIRECTS)
+                  .thenCompose(
+                      html -> {
+                        var page = html == null ? "" : toStringUtf8(html);
+                        var fromPage = parse(page, target);
+                        if (fromPage != null) {
+                          return CompletableFuture.completedStage(fromPage);
+                        }
+                        // Tầng cuối: oEmbed do CHÍNH TRANG khai trong <link> (provider ngoài danh bạ).
+                        return fetchViaDiscoveredOEmbed(target, page);
+                      });
+            })
+        .exceptionally(
+            ex -> {
+              log.debug("link-preview: resolve {} failed: {}", target, ex.getMessage());
+              return null;
+            });
+  }
+
+  private JsonObject remember(String url, JsonObject preview) {
+    var ttl = preview == null ? CACHE_TTL_EMPTY_MS : CACHE_TTL_SUCCESS_MS;
+    evictIfFull();
+    cache.put(url, new CacheEntry(preview, System.currentTimeMillis() + ttl));
+    return preview;
+  }
+
+  /**
+   * Dọn entry hết hạn trước; vẫn quá trần thì xoá sạch (demo/internal scale, đơn giản hơn LRU mà không
+   * sai kết quả -- chỉ tốn 1 lần fetch lại cho những link còn nóng).
+   */
+  private void evictIfFull() {
+    if (cache.size() < CACHE_MAX_ENTRIES) {
+      return;
+    }
+    var now = System.currentTimeMillis();
+    cache.entrySet().removeIf(e -> e.getValue().expiresAt() <= now);
+    if (cache.size() >= CACHE_MAX_ENTRIES) {
+      cache.clear();
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Tầng 1 + 4: oEmbed (danh bạ chuẩn, rồi tới link do chính trang khai)
+  // ---------------------------------------------------------------------------------------------
+
+  private CompletionStage<JsonObject> fetchViaOEmbedRegistry(String pageUrl) {
+    var endpoint = oEmbedProviders.match(pageUrl);
+    return endpoint == null ? CompletableFuture.completedStage(null) : callOEmbed(endpoint, pageUrl);
+  }
+
+  private CompletionStage<JsonObject> fetchViaDiscoveredOEmbed(String pageUrl, String html) {
+    var endpoint = discoveredOEmbedEndpoint(html);
+    if (endpoint == null) {
+      return CompletableFuture.completedStage(null);
+    }
+    // href trong <link> có thể là tương đối -- ghép về tuyệt đối theo chính trang vừa đọc.
+    return callOEmbed(resolveAbsolute(pageUrl, endpoint), pageUrl);
+  }
+
+  /**
+   * Gọi 1 endpoint oEmbed: CHẶN SSRF lại lần nữa (endpoint này có thể do nội dung trang đích chỉ định ở
+   * tầng discovery, tức là do người khác kiểm soát -- không được tin như danh bạ), rồi parse JSON chuẩn
+   * oEmbed {@code {title, author_name, thumbnail_url}}.
+   */
+  private CompletionStage<JsonObject> callOEmbed(String endpoint, String pageUrl) {
+    if (endpoint == null || endpoint.length() > MAX_URL_LENGTH || !isHttp(endpoint)) {
+      return CompletableFuture.completedStage(null);
+    }
+    var host = hostOf(endpoint);
+    if (host == null) {
+      return CompletableFuture.completedStage(null);
+    }
+    var out = new CompletableFuture<JsonObject>();
+    checkHostPublicAsync(host)
+        .whenComplete(
+            (allowed, ex) -> {
+              if (ex != null || !Boolean.TRUE.equals(allowed)) {
+                log.debug("link-preview: oembed endpoint {} blocked", endpoint);
+                out.complete(null);
+                return;
+              }
+              client()
+                  .getAbs(endpoint)
+                  .putHeader("User-Agent", OEMBED_USER_AGENT)
+                  .putHeader("Accept", "application/json")
+                  .timeout(FETCH_TIMEOUT_MS)
+                  .as(BodyCodec.buffer())
+                  .send()
+                  .onSuccess(
+                      resp -> {
+                        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+                          out.complete(null);
+                          return;
+                        }
+                        out.complete(toPreviewFromOEmbed(toStringUtf8(truncate(resp.body(), MAX_OEMBED_BYTES)), pageUrl));
+                      })
+                  .onFailure(fetchEx -> out.complete(null));
+            });
+    return out;
+  }
+
+  private static String discoveredOEmbedEndpoint(String html) {
+    if (html == null || html.isBlank()) {
+      return null;
+    }
+    var tag = Pattern.compile("<link\\b([^>]*)/?>", Pattern.CASE_INSENSITIVE).matcher(html);
+    while (tag.find()) {
+      var attrs = tag.group(1);
+      var rel = attribute(attrs, "rel");
+      var type = attribute(attrs, "type");
+      if (rel == null || !"alternate".equalsIgnoreCase(rel.strip())) {
+        continue;
+      }
+      if (type == null || !type.toLowerCase().contains("oembed")) {
+        continue;
+      }
+      // Ưu tiên JSON; thẻ XML cũng nhận (parse XML thì chưa cần, đa số provider có cả 2).
+      if (!type.toLowerCase().contains("json")) {
+        continue;
+      }
+      var href = attribute(attrs, "href");
+      if (href != null && !href.isBlank()) {
+        return decode(href);
+      }
+    }
+    return null;
+  }
+
+  private static JsonObject toPreviewFromOEmbed(String json, String pageUrl) {
+    if (json == null || json.isBlank() || json.strip().charAt(0) != '{') {
+      return null; // "Bad Request" text/plain của Youtube cũng rơi vào đây
+    }
+    JsonObject oembed;
+    try {
+      oembed = new JsonObject(json);
+    } catch (Exception e) {
+      return null;
+    }
+    return build(
+        pageUrl,
+        oembed.getString("title"),
+        oembed.getString("author_name"),
+        oembed.getString("thumbnail_url", oembed.getString("url")));
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Tầng 2 + 3: scrape HTML (og:/twitter: rồi JSON-LD)
+  // ---------------------------------------------------------------------------------------------
 
   /**
    * Đọc HTML của {@code url}, TỰ follow redirect để kiểm tra lại TỪNG chặng (xem javadoc lớp về SSRF).
@@ -187,9 +363,14 @@ public class LinkPreviewService {
                   return;
                 }
               }
+              log.debug("link-preview: {} -> http {}", url, status);
               out.complete(null);
             })
-        .onFailure(ex -> out.complete(null));
+        .onFailure(
+            ex -> {
+              log.debug("link-preview: {} fetch error {}", url, ex.getMessage());
+              out.complete(null);
+            });
     return out;
   }
 
@@ -220,6 +401,53 @@ public class LinkPreviewService {
               fetchBody(next, redirectsLeft - 1, maxBytes).whenComplete((body, fetchEx) -> out.complete(fetchEx != null ? null : body));
             });
     return true;
+  }
+
+  /**
+   * {@code {title?, description?, image?, domain}} -- luôn có ít nhất {@code domain}. Trả {@code null}
+   * khi trang KHÔNG khai báo gì đủ dùng: vẽ 1 card chỉ có mỗi tên domain thì rỗng thông tin mà vẫn
+   * chiếm chỗ, thà để client vẽ chữ link trần còn hơn (demo.html cũng đang fallback đúng như vậy).
+   */
+  private static JsonObject parse(String html, String url) {
+    if (html == null || html.isBlank()) {
+      return null;
+    }
+    var title = metaContent(html, "property", "og:title");
+    if (title == null) {
+      title = metaContent(html, "name", "twitter:title");
+    }
+    var description = metaContent(html, "property", "og:description");
+    if (description == null) {
+      description = metaContent(html, "name", "description");
+    }
+    if (description == null) {
+      description = metaContent(html, "name", "twitter:description");
+    }
+    var image = metaContent(html, "property", "og:image");
+    if (image == null) {
+      image = metaContent(html, "name", "twitter:image");
+    }
+    if (title == null || description == null || image == null) {
+      var jsonLd = jsonLd(html);
+      if (jsonLd != null) {
+        if (title == null) {
+          title = jsonLdText(jsonLd, "headline", "name");
+        }
+        if (description == null) {
+          description = jsonLdText(jsonLd, "description");
+        }
+        if (image == null) {
+          image = jsonLdImage(jsonLd);
+        }
+      }
+    }
+    if (title == null) {
+      title = titleTag(html);
+    }
+    if (image != null) {
+      image = resolveAbsolute(url, image);
+    }
+    return build(url, title, description, image);
   }
 
   private WebClient client() {
@@ -310,69 +538,18 @@ public class LinkPreviewService {
   }
 
   private static String toStringUtf8(Buffer buffer) {
-    return new String(buffer.getBytes(), StandardCharsets.UTF_8);
-  }
-
-  // ---------------------------------------------------------------------------------------------
-  // Trích xuất metadata
-  // ---------------------------------------------------------------------------------------------
-
-  /**
-   * {@code {title?, description?, image?, domain}} -- luôn có ít nhất {@code domain}. Trả {@code null}
-   * khi trang KHÔNG khai báo gì đủ dùng: vẽ 1 card chỉ có mỗi tên domain thì rỗng thông tin mà vẫn
-   * chiếm chỗ, thà để client vẽ chữ link trần còn hơn (demo.html cũng đang fallback đúng như vậy).
-   */
-  private static JsonObject parse(String html, String url) {
-    if (html == null || html.isBlank()) {
-      return null;
-    }
-    var title = metaContent(html, "property", "og:title");
-    if (title == null) {
-      title = metaContent(html, "name", "twitter:title");
-    }
-    var description = metaContent(html, "property", "og:description");
-    if (description == null) {
-      description = metaContent(html, "name", "description");
-    }
-    if (description == null) {
-      description = metaContent(html, "name", "twitter:description");
-    }
-    var image = metaContent(html, "property", "og:image");
-    if (image == null) {
-      image = metaContent(html, "name", "twitter:image");
-    }
-    if (title == null || description == null || image == null) {
-      var jsonLd = jsonLd(html);
-      if (jsonLd != null) {
-        if (title == null) {
-          title = jsonLdText(jsonLd, "headline", "name");
-        }
-        if (description == null) {
-          description = jsonLdText(jsonLd, "description");
-        }
-        if (image == null) {
-          image = jsonLdImage(jsonLd);
-        }
-      }
-    }
-    if (title == null) {
-      title = titleTag(html);
-    }
-    if (image != null) {
-      image = resolveAbsolute(url, image);
-    }
-    return build(url, title, description, image);
+    return buffer == null ? "" : new String(buffer.getBytes(), StandardCharsets.UTF_8);
   }
 
   /**
-   * Đọc {@code content} của thẻ {@code <meta>} được định danh bởi 1 thuộc tính bất kỳ
-   * ({@code property} cho og:/twitter:, {@code name} cho chuẩn HTML).
+   * Đọc {@code content} của thẻ {@code <meta>} được định danh bởi 1 thuộc tính bất kỳ ({@code property}
+   * cho og:/twitter:, {@code name} cho chuẩn HTML).
    *
-   * <p>VIẾT LẠI toàn bộ so với regex cũ vì regex cũ ({@code content=[\"']([^\"']+)[\"']}) loại dấu
-   * ngoặc đơn NGAY TRONG value, nên mọi title có dấu phẩy đơn kiểu "Brazil's golden ball" bị coi là
-   * không match -- im lặng mất metadata trên rất nhiều bài báo. Ở đây tách riêng việc quét thẻ
-   * {@code <meta>} và việc đọc attribute, tôn trọng đúng loại ngoặc của từng attribute, và KHÔNG phụ
-   * thuộc thứ tự attribute (có trang đặt {@code content} trước {@code property}).
+   * <p>VIẾT LẠI toàn bộ so với regex cũ vì regex cũ ({@code content=[\"']([^\"']+)[\"']}) loại dấu ngoặc
+   * đơn NGAY TRONG value, nên mọi title có dấu phẩy đơn kiểu "Brazil's golden ball" bị coi là không
+   * match -- im lặng mất metadata trên rất nhiều bài báo. Ở đây tách riêng việc quét thẻ {@code <meta>}
+   * và việc đọc attribute, tôn trọng đúng loại ngoặc của từng attribute, và KHÔNG phụ thuộc thứ tự
+   * attribute (có trang đặt {@code content} trước {@code property}).
    */
   private static String metaContent(String html, String attrName, String attrValue) {
     var tag = Pattern.compile("<meta\\b([^>]*)/?>", Pattern.CASE_INSENSITIVE).matcher(html);
@@ -389,12 +566,11 @@ public class LinkPreviewService {
     return null;
   }
 
-  /** Giá trị 1 attribute trong chuỗi thuộc tính của thẻ HTML: {@code "..."}. {@code '...'} hoặc không ngoặc. */
+  /** Giá trị 1 attribute trong chuỗi thuộc tính của thẻ HTML: {@code "..."}, {@code '...'} hoặc không ngoặc. */
   private static String attribute(String attrs, String name) {
     var m =
-        Pattern.compile(
-                "\\b" + Pattern.quote(name) + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]+))",
-                Pattern.CASE_INSENSITIVE)
+        Pattern
+            .compile("\\b" + Pattern.quote(name) + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]+))", Pattern.CASE_INSENSITIVE)
             .matcher(attrs);
     if (!m.find()) {
       return null;
@@ -402,15 +578,11 @@ public class LinkPreviewService {
     return m.group(1) != null ? m.group(1) : (m.group(2) != null ? m.group(2) : m.group(3));
   }
 
-  /**
-   * JSON-LD đầu tiên đọc được trong trang (nhiều trang nhúng 1 khối {@code @graph} -- trả về nguyên
-   * object để {@link #jsonLdText} tự đi tìm field, kể cả bên trong @graph).
-   */
+  /** JSON-LD đầu tiên đọc được trong trang (nhiều trang nhúng 1 khối {@code @graph}). */
   private static JsonObject jsonLd(String html) {
     var m =
-        Pattern.compile(
-                "<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(.*?)</script>",
-                Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
+        Pattern
+            .compile("<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(.*?)</script>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
             .matcher(html);
     while (m.find()) {
       var raw = m.group(1).trim();
@@ -420,7 +592,7 @@ public class LinkPreviewService {
       try {
         return new JsonObject(raw);
       } catch (Exception e) {
-        // JSON-LD bị động kinh tế/chèn script nội bộ -- bỏ qua khối này, thử khối kế tiếp
+        // JSON-LD bị chèn script nội bộ/lỗi cú pháp -- bỏ qua khối này, thử khối kế tiếp
       }
     }
     return null;
@@ -429,28 +601,31 @@ public class LinkPreviewService {
   /** Tìm field dạng chuỗi trong JSON-LD, lặn qua {@code @graph}/{@code mainEntity} 1 tầng. */
   private static String jsonLdText(JsonObject node, String... fields) {
     for (var field : fields) {
-      var v = node.getValue(field);
-      if (v instanceof String s && !s.isBlank()) {
+      if (node.getValue(field) instanceof String s && !s.isBlank()) {
         return s;
       }
     }
     for (var wrap : new String[] {"@graph", "mainEntity", "itemListElement"}) {
-      var nested = node.getValue(wrap);
-      if (nested instanceof JsonArray arr) {
-        for (var item : arr) {
-          if (item instanceof JsonObject obj) {
-            var found = jsonLdText(obj, fields);
-            if (found != null) {
-              return found;
-            }
+      var found = jsonLdTextIn(node.getValue(wrap), fields);
+      if (found != null) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  private static String jsonLdTextIn(Object nested, String... fields) {
+    if (nested instanceof JsonArray arr) {
+      for (var item : arr) {
+        if (item instanceof JsonObject obj) {
+          var found = jsonLdText(obj, fields);
+          if (found != null) {
+            return found;
           }
         }
-      } else if (nested instanceof JsonObject obj) {
-        var found = jsonLdText(obj, fields);
-        if (found != null) {
-          return found;
-        }
       }
+    } else if (nested instanceof JsonObject obj) {
+      return jsonLdText(obj, fields);
     }
     return null;
   }
@@ -460,21 +635,9 @@ public class LinkPreviewService {
     var image = node.getValue("image");
     if (image == null) {
       for (var wrap : new String[] {"@graph", "mainEntity"}) {
-        var nested = node.getValue(wrap);
-        if (nested instanceof JsonArray arr) {
-          for (var item : arr) {
-            if (item instanceof JsonObject obj) {
-              var found = jsonLdImage(obj);
-              if (found != null) {
-                return found;
-              }
-            }
-          }
-        } else if (nested instanceof JsonObject obj) {
-          var found = jsonLdImage(obj);
-          if (found != null) {
-            return found;
-          }
+        var found = jsonLdImageIn(node.getValue(wrap));
+        if (found != null) {
+          return found;
         }
       }
       return null;
@@ -499,6 +662,22 @@ public class LinkPreviewService {
     if (image instanceof JsonObject obj) {
       var url = obj.getString("url", obj.getString("contentUrl", null));
       return url == null || url.isBlank() ? null : url;
+    }
+    return null;
+  }
+
+  private static String jsonLdImageIn(Object nested) {
+    if (nested instanceof JsonArray arr) {
+      for (var item : arr) {
+        if (item instanceof JsonObject obj) {
+          var found = jsonLdImage(obj);
+          if (found != null) {
+            return found;
+          }
+        }
+      }
+    } else if (nested instanceof JsonObject obj) {
+      return jsonLdImage(obj);
     }
     return null;
   }
@@ -528,91 +707,7 @@ public class LinkPreviewService {
   }
 
   private static String truncateText(String s, int max) {
-    if (s.length() <= max) {
-      return s;
-    }
-    return s.substring(0, max).stripTrailing() + "...";
-  }
-
-  // ---------------------------------------------------------------------------------------------
-  // oEmbed -- tầng dự phòng cho SPA không có og: (Youtube/Vimeo/SoundCloud...)
-  // ---------------------------------------------------------------------------------------------
-
-  /**
-   * Thử oEmbed CHUẨN discovery: đọc {@code <link rel="alternate" type="application/json+oembed">} mà
-   * chính trang khai rồi fetch endpoint đó. Cách này KHÔNG cần biết host -- Youtube/Wordpress/Medium/
-   * Flickr/Spotify... đều tự khai link này, nên thêm site mới không phải sửa gì ở đây. Trang không khai
-   * thì coi như không hỗ trợ oEmbed, trả null (đã có og:/JSON-LD ở tầng trên lo phần lớn trường hợp).
-   */
-  private CompletionStage<JsonObject> tryOEmbed(String pageUrl, String html) {
-    var endpoint = discoveredOEmbedEndpoint(html);
-    if (endpoint == null) {
-      return CompletableFuture.completedStage(null);
-    }
-    // href trong <link> có thể là tương đối -- ghép về tuyệt đối theo chính trang đang đọc.
-    var resolved = resolveAbsolute(pageUrl, endpoint);
-    var host = hostOf(resolved);
-    if (host == null || !isHttp(resolved)) {
-      return CompletableFuture.completedStage(null);
-    }
-    var out = new CompletableFuture<JsonObject>();
-    checkHostPublicAsync(host)
-        .whenComplete(
-            (allowed, ex) -> {
-              if (ex != null || !Boolean.TRUE.equals(allowed)) {
-                out.complete(null);
-                return;
-              }
-              fetchBody(resolved, 1, MAX_OEMBED_BYTES)
-                  .whenComplete(
-                      (body, fetchEx) -> {
-                        if (fetchEx != null || body == null) {
-                          out.complete(null);
-                          return;
-                        }
-                        out.complete(toPreviewFromOEmbed(toStringUtf8(body), pageUrl));
-                      });
-            });
-    return out;
-  }
-
-  private static String discoveredOEmbedEndpoint(String html) {
-    if (html == null || html.isBlank()) {
-      return null;
-    }
-    var tag = Pattern.compile("<link\\b([^>]*)/?>", Pattern.CASE_INSENSITIVE).matcher(html);
-    while (tag.find()) {
-      var attrs = tag.group(1);
-      var type = attribute(attrs, "type");
-      var rel = attribute(attrs, "rel");
-      if (rel == null || !"alternate".equalsIgnoreCase(rel.strip())) {
-        continue;
-      }
-      if (type == null || !type.toLowerCase().contains("oembed")) {
-        continue;
-      }
-      var href = attribute(attrs, "href");
-      if (href != null && !href.isBlank()) {
-        return decode(href);
-      }
-    }
-    return null;
-  }
-
-  private static JsonObject toPreviewFromOEmbed(String json, String pageUrl) {
-    if (json == null || json.isBlank() || json.strip().charAt(0) != '{') {
-      return null; // "Bad Request" text/plain của Youtube cũng rơi vào đây
-    }
-    JsonObject oembed;
-    try {
-      oembed = new JsonObject(json);
-    } catch (Exception e) {
-      return null;
-    }
-    var title = oembed.getString("title", null);
-    var author = oembed.getString("author_name", null);
-    var image = oembed.getString("thumbnail_url", null);
-    return build(pageUrl, title, author, image);
+    return s.length() <= max ? s : s.substring(0, max).stripTrailing() + "...";
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -643,7 +738,7 @@ public class LinkPreviewService {
     }
   }
 
-  /** Ghép URL tương đối (og:image, header Location) về tuyệt đối theo {@code base}; giữ nguyên nếu ghép lỗi. */
+  /** Ghép URL tương đối (og:image, header Location, href oembed) về tuyệt đối theo {@code base}. */
   private static String resolveAbsolute(String base, String maybeRelative) {
     try {
       return new URI(base).resolve(maybeRelative.trim()).toString();
@@ -653,7 +748,7 @@ public class LinkPreviewService {
   }
 
   /**
-   * Giải mã entity HTML thường gặp + entity số thập phân/ thập lục ({@code &#8217;}, {@code &#x27;}) --
+   * Giải mã entity HTML thường gặp + entity số thập phân/thập lục ({@code &#8217;}, {@code &#x27;}) --
    * các site tin tức dùng nhiều, để lại nguyên văn thì client hiện chữ {@code &#8217;} ngay trong title.
    */
   private static String decode(String s) {
