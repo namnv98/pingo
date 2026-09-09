@@ -91,6 +91,16 @@ public class LinkPreviewService {
   private static final int MAX_URL_LENGTH = 2048;
   /** Tin "chỉ chứa đúng 1 link" -- khớp đúng {@code extractSoleUrl()} bên demo.html, 2 bên PHẢI giống nhau. */
   private static final Pattern SOLE_URL = Pattern.compile("^https?://\\S+$", Pattern.CASE_INSENSITIVE);
+  /**
+   * Link viết tắt KHÔNG có scheme ("youtube.com/x", "t.me/abc") -- người dùng dán kiểu này rất nhiều,
+   * chỉ nhận {@code https?://} thì dán "youtube.com" là cả client lẫn colony đều coi như "không phải
+   * link" (client không vẽ skeleton, colony không enrich). Ràng buộc chặt để chữ thường không bị biến
+   * thành link: nguyên chuỗi không khoảng trắng, mỗi nhãn bắt đầu/kết thúc bằng chữ-số, TLD 2-24 ký tự
+   * CHỈ chữ cái (loại "1.2.3.4", "3.14"). Giữ GIỐNG HỆT regex bên demo.html.
+   */
+  private static final Pattern BARE_DOMAIN = Pattern.compile(
+      "^(?:[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?\\.)+[a-z]{2,24}(?::\\d{1,5})?(?:/\\S*)?$",
+      Pattern.CASE_INSENSITIVE);
 
   private static final long CACHE_TTL_SUCCESS_MS = 24 * 3600 * 1000L;
   /** Rỗng cũng cache (ngắn hơn): trang không có metadata thì lần sau đừng fetch lại liên tục. */
@@ -136,7 +146,25 @@ public class LinkPreviewService {
       return null;
     }
     var trimmed = text.strip();
-    return SOLE_URL.matcher(trimmed).matches() ? trimmed : null;
+    if (trimmed.isEmpty() || trimmed.length() > MAX_URL_LENGTH) {
+      return null;
+    }
+    if (SOLE_URL.matcher(trimmed).matches()) {
+      return trimmed;
+    }
+    if (!BARE_DOMAIN.matcher(trimmed).matches()) {
+      return null;
+    }
+    try {
+      var uri = new URI("https://" + trimmed);
+      var host = uri.getHost();
+      if (host == null || !host.contains(".")) {
+        return null;
+      }
+      return "https://" + trimmed;
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   /**

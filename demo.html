@@ -188,12 +188,13 @@
         #sidebarHead { flex: none; padding: 20px 18px 4px; }
         #sidebarHead .brand { font-weight: 800; letter-spacing: -.01em; font-size: 21px; }
         /* Ô tìm kiếm hội thoại luôn hiện sẵn (không phải ẩn sau 1 icon bấm-vào-không-làm-gì như
-           trước) -- pill trắng nổi trên nền canvas, đúng kiểu ô search rộng rãi trong ảnh tham khảo. */
-        #sidebarSearchWrap { flex: none; margin: 14px 18px 6px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; display: flex; align-items: center; gap: 9px; transition: border-color .12s, box-shadow .12s; }
-        #sidebarSearchWrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+           trước) -- bo góc vừa (radius-md) ĐỒNG NHẤT với ô tìm user trong panel tạo mới, KHÔNG còn
+           pill tròn 999px (nhìn lệch với phần còn lại). KHÔNG đổi viền/glow tím lúc focus -- giữ
+           nguyên 1 kiểu cho cả lúc rỗng lẫn lúc đang gõ. */
+        #sidebarSearchWrap { flex: none; margin: 14px 18px 6px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; align-items: center; gap: 9px; }
         #sidebarSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
-        #conversationSearchInput { flex: 1; min-width: 0; border: none; background: none; font-size: 13px; font-family: inherit; color: var(--ink); }
-        #conversationSearchInput:focus { outline: none; }
+        #conversationSearchInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        #conversationSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
         /* Nút "Cuộc trò chuyện mới" giờ là NÚT TRÒN NỔI (FAB) neo cố định góc dưới-phải sidebar, đúng
            kiểu nút soạn tin của Telegram -- không còn nằm trong dòng chảy nội dung phía trên danh
            sách hội thoại nữa (position: absolute, xem position:relative ở #sidebar). Đây là nút DUY
@@ -225,11 +226,61 @@
            riêng của từng thẻ .conv-list-item.
            bottom: 88px = 20px lề dưới nút + 56px cao nút + 12px khoảng cách -- panel bắt đầu ngay phía
            trên nút tròn, không đè lên chính nút.
-           max-height vẫn giữ mốc calc(100vh - 108px) -- 108px ≈ 88px (khoảng trống dưới panel) + 20px
-           lề trên cùng, để trên màn hình rất thấp (điện thoại xoay ngang) panel tự co lại thay vì tràn
-           lên trên (đã gặp thật lúc thử không có mốc này). */
-        #newConvPanel[open] #newConvBody { display: flex; position: absolute; left: 12px; right: 12px; bottom: 88px; z-index: 20; max-height: min(85vh, 700px, calc(100vh - 108px)); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-lg); }
-        #newConvBody { padding: 22px 24px 24px; flex-direction: column; gap: 16px; }
+           top: 118px + BỎ max-height -- neo CẢ cạnh trên lẫn dưới nên panel TỰ GIÃN CHE KÍN toàn bộ
+           vùng danh sách hội thoại (#sidebarListHead + #conversationList, bắt đầu ngay dưới ô tìm
+           kiếm), đúng kiểu overlay phủlist chứ không phải 1 thẻ nhỏ nổi lên giữa. Nội dung dài thì
+           chính panel cuộn trong nó (overflow-y: auto), không lộ hội thoại ra sau nữa. */
+        #newConvPanel[open] #newConvBody { display: flex; position: absolute; left: 12px; right: 12px; top: 118px; bottom: 88px; z-index: 20; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-lg); }
+        #newConvBody { padding: 14px; flex-direction: column; gap: 12px; overflow: hidden; }
+        /* Header panel: tiêu đề + nút đóng, đồng nhất với header auth/topbar (chữ đậm, chữ mờ bên dưới). */
+        #newConvHead { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        #newConvHeadText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        #newConvTitle { font-size: 14px; font-weight: 800; color: var(--ink); letter-spacing: -.015em; }
+        #newConvSub { font-size: 11.5px; color: var(--ink-faint); line-height: 1.4; }
+        #newConvCloseBtn { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft); display: flex; align-items: center; justify-content: center; padding: 0; }
+        #newConvCloseBtn:hover { background: var(--canvas); color: var(--ink); }
+        /* Thanh tìm kiếm trong panel -- ô bo góc vừa (radius-md), nền canvas chìm nhẹ trên mặt surface
+           của panel, không viền để đỡ nặng; icon search mờ bên trái, nút refresh dạng ghost sát phải.
+           cao cố định 42px + focus chỉ đổi màu icon, không viền/glow -- gọn mà vẫn rõ là ô nhập. */
+        #newConvSearchWrap { flex: none; display: flex; align-items: center; gap: 9px; height: 42px; background: var(--canvas); border: 1px solid transparent; border-radius: var(--radius-md); padding: 0 6px 0 12px; }
+        #newConvSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
+        /* input:focus ở đây PHẢI đè rule chung input[type=text]:focus (viền tím + glow 3px) -- người
+           dùng không muốn ô tìm kiếm đổi viền lúc bấm vào. !important vì rule chung dùng selector
+           thuộc tính, specificity ngang, ghi đè bằng !important cho chắc. */
+        #newConvSearchWrap input { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        #newConvSearchWrap input:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        #newConvSearchWrap input::placeholder { color: var(--ink-faint); }
+        #newConvSearchWrap button { flex: none; width: 30px; height: 30px; padding: 0; border: none; background: none; color: var(--ink-faint); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+        #newConvSearchWrap button:hover { background: var(--surface); color: var(--ink); border: none; }
+        /* Tab DM/Group -- giữ đúng kiểu segmented cũ (nền canvas, bo radius-sm, tab active nổi lên bằng
+           nền surface + shadow + chữ accent), KHÔNG dùng pill tròn 999px vì nhìn không hợp với phần còn
+           lại của panel. */
+        .tab-row { flex: none; display: flex; gap: 3px; background: var(--canvas); border-radius: var(--radius-sm); padding: 3px; }
+        .tab-btn { flex: 1; background: none; border: none; border-radius: 7px; padding: 9px 6px; color: var(--ink-soft); font-weight: 600; }
+        .tab-btn:hover { background: rgba(109,91,245,.08); }
+        .tab-btn.active { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-sm); }
+        /* Danh sách user cuộn -- MỖI hàng là 1 userRow (avatar + tên + tick), KHÔNG còn cụm chips bọc. */
+        .tab-pane { display: none; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+        .tab-pane.active { display: flex; }
+        .userList { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; padding: 2px 2px 4px 0; flex: 1; min-height: 0; }
+        .userList:empty::before { content: 'Không tìm thấy ai khớp'; font-size: 12px; color: var(--ink-faint); font-style: italic; padding: 18px 10px; text-align: center; }
+        .userRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; cursor: pointer; transition: background .12s, border-color .12s; border: 1px solid transparent; }
+        .userRow:hover { background: var(--canvas); border-color: var(--line); }
+        .userRow.selected { background: var(--accent-soft); border-color: var(--accent); }
+        .userRow .userRowAvatar { width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 800; }
+        .userRow .userName { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .userRow .userCheck { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: transparent; flex: none; background: var(--surface); transition: background .12s, border-color .12s, color .12s; }
+        .userRow:hover .userCheck { border-color: var(--ink-faint); }
+        .userRow.selected .userCheck { background: var(--accent); border-color: var(--accent); color: white; }
+        .userRow:not(.canSelect) .userCheck { display: none; }
+        /* Chân panel: toggle test + ô tên nhóm + nút tạo. Ẩn/hiện bằng [hidden] -- không render layout thừa. */
+        #newConvFoot { flex: none; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+        #newConvFoot[hidden] { display: none; }
+        .testAccToggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-faint); cursor: pointer; user-select: none; }
+        .testAccToggle input { accent-color: var(--accent); }
+        #groupNameInput, #createGroupBtn { width: 100%; }
+        #memberCount { font-size: 11.5px; color: var(--ink-faint); font-weight: 600; }
+        /* Giữ tương thích nếu chỗ khác còn dùng .chips/.chip (không xoá ngay để tránh vỡ layout lạ). */
         .field-row { display: flex; flex-direction: column; gap: 7px; }
         .field-row .inline { display: flex; gap: 6px; }
         .field-row .inline select, .field-row .inline input { flex: 1; min-width: 0; }
@@ -240,14 +291,6 @@
         .chips:empty::before { content: '(không có user nào khớp bộ lọc)'; font-size: 11.5px; color: var(--ink-faint); font-style: italic; }
         .toggle-row { display: flex; align-items: center; justify-content: space-between; }
         .toggle-row label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
-
-        /* ---------- tab DM / Group trong panel tạo mới ---------- */
-        .tab-row { display: flex; gap: 3px; background: var(--canvas); border-radius: var(--radius-sm); padding: 3px; margin-bottom: 2px; }
-        .tab-btn { flex: 1; background: none; border: none; border-radius: 7px; padding: 9px 6px; color: var(--ink-soft); font-weight: 600; }
-        .tab-btn:hover { background: rgba(109,91,245,.08); }
-        .tab-btn.active { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-sm); }
-        .tab-pane { display: none; flex-direction: column; gap: 8px; }
-        .tab-pane.active { display: flex; }
 
         #sidebarListHead { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 18px 18px 4px; }
         #sidebarListHead span { font-weight: 800; font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .07em; }
@@ -261,58 +304,38 @@
            #newConvPanel) đè lên, không thì thẻ hội thoại CUỐI CÙNG lúc cuộn hết xuống sẽ bị nút tròn
            che mất 1 phần, không bấm được. */
         #conversationList { flex: 1; overflow-y: auto; padding: 0 12px 92px; }
-        /* Mỗi hội thoại giờ là 1 THẺ trắng nổi trên nền canvas của sidebar (box-shadow + bo góc rõ),
-           đúng kiểu thẻ đổ bóng trong ảnh tham khảo -- trước đây chỉ là 1 hàng phẳng, chỉ đổi màu nền
-           nhạt khi hover/active, không có ranh giới thẻ nào cả nên nhìn "cứ bình thường"/rời rạc. Thẻ
-           đang mở (.active) nổi RÕ hơn hẳn các thẻ khác (shadow màu tím, viền tím nhạt) -- đúng cách
-           ảnh tham khảo làm nổi bật hội thoại đang xem giữa cả danh sách. */
-        /* Không viền, không đổ bóng, không hiệu ứng di chuyển/phóng to lúc hover -- phẳng tuyệt đối,
-           chỉ đổi màu nền lúc hover/active. */
-        .conv-list-item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; cursor: pointer; margin-bottom: 8px; background: var(--surface); transition: background .12s; }
-        /* var(--btn-hover-bg) (KHÔNG phải var(--canvas)) -- canvas TRÙNG với chính màu nền #sidebar,
-           dùng nhầm sẽ khiến thẻ "biến mất" lúc hover thay vì nổi lên, phải 1 tông khác hẳn cả nền thẻ
-           (surface) lẫn nền sidebar (canvas) mới thấy rõ hiệu ứng. */
+        /* Mỗi hội thoại = 1 HÀNG phẳng tối giản trên nền sidebar xám (kiểu iMessage): trong suốt, bo góc,
+           KHÔNG thẻ trắng/shadow dày đặc. Hover = 1 lớp_lift rất nhẹ (btn-hover-bg -- KHÁC tông nền
+           canvas của sidebar, dùng canvas sẽ vô hình). Active = accent-soft + thanh accent dọc trái mảnh.
+           Phẳng, không phóng to/di chuyển. */
+        .conv-list-item { position: relative; display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 12px; cursor: pointer; margin-bottom: 1px; background: transparent; transition: background .12s; }
         .conv-list-item:hover { background: var(--btn-hover-bg); }
         .conv-list-item.active { background: var(--accent-soft); }
         .conv-list-item.active:hover { background: var(--accent-soft); }
+        /* Thanh accent dọc trái cho dòng ĐANG MỞ -- mảnh 3px, cao ~58% tâm giữa, bo mép phải. */
+        .conv-list-item.active::before { content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 3px; height: 58%; border-radius: 0 3px 3px 0; background: var(--accent); }
         .conv-list-item.active .label { color: var(--accent-dark); }
         .conv-list-item .avatar-wrap { position: relative; flex: none; }
-        .conv-list-item .avatar { width: 42px; height: 42px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 14.5px; font-weight: 700; }
-        .status-dot { position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; border-radius: 50%; background: #b0b4c2; border: 2.5px solid var(--surface); visibility: hidden; }
+        .conv-list-item .avatar { width: 44px; height: 44px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 15px; font-weight: 700; }
+        .status-dot { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; border-radius: 50%; background: #b0b4c2; border: 2.5px solid var(--surface); visibility: hidden; }
         .status-dot.online { background: #22c55e; visibility: visible; }
-        /* Badge tròn đếm số CHƯA đọc (kiểu WhatsApp/Messenger) -- thay ".dot" cũ (1 chấm trơn 9px chỉ
-           báo có/không, không nói lên bao nhiêu, "nhìn cứ bình thường"/xấu theo đúng phản hồi). Rộng
-           tối thiểu = cao (tròn đều khi 1 chữ số), tự giãn thành pill khi số dài hơn (2-3 chữ số). */
-        .conv-list-item .unreadBadge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: white; font-size: 11px; font-weight: 800; flex: none; margin-left: auto; display: none; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(109,91,245,.35); }
+        /* Badge số CHƯA đọc ở góc phải cùng hàng tên; khi chưa đọc thì GIỜ bị ẩn để badge chiếm đúng
+           vị trí đó (1 điểm thông báo duy nhất, không cả giờ lẫn badge cùng chen). Pill accent tự giãn. */
+        .conv-list-item .unreadBadge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: white; font-size: 11px; font-weight: 800; flex: none; align-self: center; display: none; align-items: center; justify-content: center; }
         .conv-list-item.unread .unreadBadge { display: flex; }
         .conv-list-item .info { flex: 1; min-width: 0; }
-        .convTopRow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-        /* Cỡ chữ thay đổi ("vừa xong" ngắn, "23 giờ trước"/"28 thg 5" dài hơn) khiến biên giữa tên và
-           giờ lệch qua lại giữa các dòng, nhìn không thẳng hàng -- cố định 1 chiều rộng + canh phải
-           để mọi dòng có giờ bắt đầu ĐÚNG 1 vị trí như nhau, giống cột trong bảng thật. */
-        .convTopRow .time { flex: none; width: 62px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--ink-faint); font-weight: 500; }
-        .conv-list-item.unread .convTopRow .time { color: var(--accent-dark); font-weight: 700; }
-        .conv-list-item .label { flex: 1; min-width: 0; font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .conv-list-item.unread .label { font-weight: 800; }
-        /* white-space: nowrap -- .meta là flex container, nhưng phần TEXT THƯỜNG (tin nhắn chữ, gán
-           thẳng qua .innerText, xem buildConvListItem) là 1 text node con của CHÍNH nó, không đi qua
-           .metaPrefix/.metaCaption (2 span đó CHỈ dùng cho tin có file) -- thiếu nowrap ở đây thì tin
-           nhiều dòng (Shift+Enter) hoặc tin dài sẽ tự XUỐNG DÒNG bên trong .meta thay vì gọn 1 dòng
-           kèm "...", phá vỡ chiều cao cố định của cả dòng hội thoại trong sidebar (đã gặp thật: "tin
-           nhắn mới nhất... chưa thu gọn"). Không ảnh hưởng nhánh có pill (.metaPrefix/.metaCaption đã
-           tự lo overflow/ellipsis riêng, flex-wrap mặc định của .meta vốn đã là nowrap sẵn). */
-        .conv-list-item .meta { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
-        /* Tin xem trước CŨNG đậm/tối hơn khi chưa đọc (giống WhatsApp/Telegram) -- trước đây meta
-           luôn 1 màu xám nhạt bất kể đã đọc hay chưa, cùng với chấm trơn là 2 thứ khiến cả dòng
-           "chưa đọc" trông không khác gì dòng bình thường ngoài 1 chấm bé tí góc phải. */
-        .conv-list-item.unread .meta { color: var(--ink); font-weight: 600; }
+        .convTopRow { display: flex; align-items: baseline; gap: 8px; }
+        .convTopRow .label { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conv-list-item.unread .label { font-weight: 700; }
+        /* Giờ khi ĐÃ đọc: mờ góc phải; khi CHƯA đọc ẩn đi (badge chiếm chỗ). */
+        .convTopRow .time { flex: none; font-size: 11px; color: var(--ink-faint); font-weight: 500; white-space: nowrap; }
+        .conv-list-item.unread .convTopRow .time { display: none; }
+        /* Xem trước tin gần nhất -- 1 dòng gọn "..."; chưa đọc ĐẬM hơn nhẹ, đọc rồi xám thường. */
+        .conv-list-item .meta { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; margin-top: 2px; }
+        .conv-list-item.unread .meta { color: var(--ink-soft); font-weight: 600; }
         .conv-list-item .metaPrefix, .conv-list-item .metaCaption, .conv-list-item .metaText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .conv-list-item .metaPrefix { flex: none; }
         .conv-list-item .metaCaption { min-width: 20px; }
-        /* flex: 1; min-width: 0 -- BẮT BUỘC phải có cả 2 (không chỉ overflow/ellipsis ở trên) thì
-           text-overflow mới thật sự cắt "..." đúng chỗ -- 1 flex item không có min-width:0 sẽ giữ
-           nguyên độ rộng NỘI DUNG THẬT của nó (mặc định flex-basis:auto), không bao giờ bị coi là
-           "tràn" để kích hoạt ellipsis, dù CSS overflow:hidden đã khai đúng. */
         .conv-list-item .metaText { flex: 1; min-width: 0; }
         /* Pill màu cho tin có file (ảnh/video) -- kiểu "Photo"/"Video (x3)" trong ảnh tham khảo, thay
            vì chỉ ghép 1 emoji vào ngay trong chuỗi chữ xám như trước (không nổi bật/không phân biệt
@@ -335,7 +358,10 @@
         #chatEmpty::before { content: '👋'; font-size: 30px; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; background: var(--canvas); border-radius: 50%; margin-bottom: 4px; }
         .conv { display: none; flex-direction: column; height: 100%; min-height: 0; }
         .conv.active { display: flex; }
-        .conv-head { flex: none; background: var(--surface); border-bottom: 1px solid var(--line); padding: 11px 20px; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 10px; z-index: 1; }
+        /* min-height 59px (đã gồm border-bottom 1px, box-sizing border-box toàn cục) -- ÉP cho đầu
+           khung chat CAO BẰNG đúng đầu panel Info bên phải (cùng mốc dưới đây), không để 2 header lệch
+           nhau vài px chỉ vì padding/icon cỡ khác nhau. align-items:center tự canh giữa nội dung. */
+        .conv-head { flex: none; min-height: 59px; background: var(--surface); border-bottom: 1px solid var(--line); padding: 11px 20px; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 10px; z-index: 1; }
         .conv-head .headLeft { display: flex; align-items: center; gap: 11px; min-width: 0; }
         .conv-head .avatar { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; background: var(--ink-faint); }
         /* Cụm icon bên phải conv-head (đổi tên/xoá/thông tin) -- giống dải icon "..., ⭐, ✨, ⓘ" ở
@@ -357,58 +383,81 @@
         .typing-indicator { flex: none; padding: 4px 20px; font-size: 11.5px; color: var(--accent); font-style: italic; display: none; }
         .typing-indicator.show { display: block; }
 
-        /* ---------- panel thông tin/thành viên bên phải (kiểu Slack/Discord "Details") ---------- */
-        #infoPanel { width: 356px; flex: none; border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+        /* ---------- panel thông tin/thành viên bên phải -- kiểu Telegram "Bot Info" ---------- */
+        /* Nền panel XÁM (canvas), các khối nội dung là THẺ TRẮNG (surface) bo góc nổi lên -- đúng bố cục
+           Telegram: avatar+tên trên nền xám, bên dưới là 1 card trắng chứa các dòng thông tin. */
+        #infoPanel { width: 356px; flex: none; border-left: 1px solid var(--line); background: var(--canvas); display: flex; flex-direction: column; min-height: 0; }
         #infoPanel.collapsed { display: none; }
-        #infoPanelHead { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--line); }
-        /* "Info | Pins | Files | Links" -- đúng dải tab đầu panel phải trong ảnh tham khảo. Chỉ "Info"
-           thật sự có dữ liệu (Pins/Files/Links là khái niệm không tồn tại trong hệ thống chat này --
-           để disabled thay vì giả vờ hoạt động, tránh gây hiểu lầm là tính năng thật). */
-        #infoTabRow { display: flex; gap: 3px; background: var(--canvas); border-radius: var(--radius-sm); padding: 3px; }
-        .infoTabBtn { border: none; background: none; padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--ink-faint); border-radius: 7px; cursor: pointer; }
-        .infoTabBtn.active { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); cursor: default; }
+        #infoPanelHead { flex: none; min-height: 59px; display: flex; align-items: center; justify-content: center; padding: 10px 44px 10px 16px; background: var(--canvas); position: relative; }
+        #infoPanelHead > button.icon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+        /* Dải tab đầu panel: pill trắng trên nền xám, tab active nổi bằng nền accent-soft + chữ accent
+           (kiểu "Media" đang chọn trong ảnh Telegram), không dùng segmented xám như trước. */
+        #infoTabRow { display: flex; align-items: center; gap: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+        .infoTabBtn { display: inline-flex; align-items: center; justify-content: center; height: 28px; line-height: 1; border: none; background: none; padding: 0 14px; font-size: 12px; font-weight: 600; color: var(--ink-faint); border-radius: 999px; cursor: pointer; }
+        .infoTabBtn.active { color: var(--accent-dark); background: var(--accent-soft); cursor: default; }
         /* Pins/Files/Links: VẪN bấm được (không dùng disabled) -- bấm vào báo rõ "demo chưa hỗ trợ"
            thay vì im lặng không phản ứng gì, đỡ gây cảm giác nút bị hỏng/chết. */
-        .infoTabBtn.soon { opacity: .55; }
-        .infoTabBtn:hover { background: var(--canvas); }
-        .infoTabBtn.active:hover { background: var(--surface); }
+        .infoTabBtn.soon { opacity: .5; }
+        .infoTabBtn:hover { color: var(--ink); }
+        .infoTabBtn.active:hover { color: var(--accent-dark); background: var(--accent-soft); }
         #infoEmpty { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; color: var(--ink-faint); font-size: 12px; line-height: 1.5; }
         #infoPanelBody { flex: 1; min-height: 0; overflow-y: auto; display: none; flex-direction: column; }
         #infoFilesBody { flex: 1; min-height: 0; overflow-y: auto; display: none; flex-direction: column; }
-        .fileListItem { display: flex; align-items: center; gap: 12px; padding: 8px 6px; border-radius: var(--radius-sm); cursor: pointer; }
+        .fileListItem { display: flex; align-items: center; gap: 12px; padding: 9px 14px; cursor: pointer; transition: background .1s; border-bottom: 1px solid var(--line); }
+        .fileListItem:last-child { border-bottom: none; }
         .fileListItem:hover { background: var(--canvas); }
-        .fileListThumb { width: 46px; height: 46px; border-radius: 9px; overflow: hidden; flex: none; background: var(--canvas); position: relative; }
+        .fileListThumb { width: 46px; height: 46px; border-radius: 10px; overflow: hidden; flex: none; background: var(--canvas); position: relative; }
         .fileListThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
         /* Tam giác play nhỏ đè lên góc thumbnail video -- phân biệt nhanh với ảnh thường trong danh sách. */
         .fileListThumb.isVideo::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent white; filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); }
-        .fileListInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-        .fileListName { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .fileListMeta { font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        #infoPanelTop { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 30px 20px 26px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--canvas), var(--surface) 85%); }
-        #infoPanelAvatar { width: 76px; height: 76px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 25px; font-weight: 700; margin-bottom: 14px; box-shadow: 0 0 0 4px var(--surface); }
-        #infoPanelName { font-weight: 700; font-size: 14.5px; }
-        #infoPanelSubtitle { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
-        .infoSection { padding: 16px 20px; }
-        .infoSectionTitle { font-size: 11px; font-weight: 800; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
-        .infoCard { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 3px 14px; background: var(--canvas); }
-        .infoRow { display: flex; align-items: center; gap: 11px; padding: 11px 4px; font-size: 13px; border-bottom: 1px solid var(--line); border-radius: 6px; transition: background .1s; }
-        .infoRow:last-child { border-bottom: none; }
-        .infoRow:hover { background: var(--surface); }
-        .infoRowIcon { width: 18px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--ink-faint); }
-        .infoRowLabel { color: var(--ink-soft); flex: 1; }
-        .infoRowValue { font-weight: 700; }
-        .infoRowValue.badge { font-family: ui-monospace, monospace; font-weight: 500; font-size: 11px; background: var(--surface); padding: 2px 7px; border-radius: 6px; }
-        .infoMemberRow { display: flex; align-items: center; gap: 11px; padding: 8px 4px; border-radius: var(--radius-sm); }
+        .fileListInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .fileListName { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .fileListMeta { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* ---------- khối đầu panel: avatar to + tên + phụ đề, căn giữa trên nền xám ---------- */
+        #infoPanelTop { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 34px 20px 28px; }
+        #infoPanelAvatarWrap { position: relative; margin-bottom: 16px; }
+        #infoPanelAvatar { width: 96px; height: 96px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 30px; font-weight: 700; box-shadow: var(--shadow-md); }
+        /* Chấm trạng thái tổng quan của hội thoại -- xanh nếu có ai khác online, xám nếu ngoại tuyến. */
+        #infoPanelStatusDot { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 50%; background: #c2c6d2; border: 3px solid var(--canvas); }
+        #infoPanelStatusDot.online { background: #22c55e; }
+        #infoPanelName { font-weight: 700; font-size: 17px; letter-spacing: -.01em; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #infoPanelSubtitle { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+
+        /* ---------- từng khối nội dung: 1 THẺ TRẮNG bo góc nổi trên nền xám ---------- */
+        .infoSection { padding: 0 16px 16px; }
+        .infoSectionTitle { display: none; } /* Telegram không có tiêu đề khối -- card tự nói lên nội dung */
+        .infoCard { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; box-shadow: var(--shadow-sm); overflow: hidden; }
+        /* Mỗi dòng: icon trái mờ + 2 dòng chữ (giá trị đậm trên, nhãn mờ dưới) -- đúng kiểu từng dòng
+           trong card Bot Info của Telegram (@username / Username, Bio / ...). */
+        /* MỖI DÒNG 1 HÀNG ngang: icon trái + nhãn mờ (chiếm giữa) + giá trị phải đậm. Bỏ layout 2
+           dòng chồng nhau (value/nhãn) -- yêu cầu gọn thành 1 hàng duy nhất mỗi thông tin. */
+        .infoRow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 13px; }
+        .infoRow + .infoRow { border-top: 1px solid var(--line); }
+        .infoRowIcon { width: 20px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--ink-faint); }
+        .infoRowLabel { color: var(--ink-soft); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoRowValue { font-weight: 600; color: var(--ink); text-align: right; flex: none; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoRowValue.badge { font-family: ui-monospace, monospace; font-weight: 500; font-size: 12px; }
+        /* Giá trị "Trạng thái" = 1 chấm + chữ, ĐỒNG BỘ ngôn ngữ với danh sách thành viên bên dưới. */
+        .infoStatusVal { display: inline-flex !important; align-items: center; gap: 7px; justify-content: flex-end; }
+        .infoStatusVal::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #c2c6d2; flex: none; }
+        .infoStatusVal.online { color: var(--ink); }
+        .infoStatusVal.online::before { background: #22c55e; }
+
+        /* ---------- danh sách thành viên: cũng là 1 thẻ trắng, cùng ngôn ngữ với card trên ---------- */
+        #infoMemberList { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; box-shadow: var(--shadow-sm); overflow: hidden; }
+        .infoMemberRow { display: flex; align-items: center; gap: 12px; padding: 10px 16px; transition: background .1s; }
+        .infoMemberRow + .infoMemberRow { border-top: 1px solid var(--line); }
         .infoMemberRow:hover { background: var(--canvas); }
         .infoMemberRow .avatar-wrap { position: relative; flex: none; }
-        .infoMemberRow .avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12.5px; font-weight: 700; }
-        .infoMemberRow .name { font-size: 12.5px; font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        /* Badge pastel theo trạng thái online/offline -- giống tinh thần badge màu vai trò (Design/
-           Management/Development) trong ảnh tham khảo, chỉ khác là dùng đúng dữ liệu THẬT mình có
-           (trạng thái online) thay vì bịa ra "chức danh" không tồn tại trong hệ thống. */
-        .infoMemberRow .roleBadge { font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 6px; white-space: nowrap; flex: none; }
-        .infoMemberRow .roleBadge.online { background: #dcfce7; color: #15803d; }
-        .infoMemberRow .roleBadge.offline { background: var(--canvas); color: var(--ink-faint); }
+        .infoMemberRow .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; }
+        .infoMemberRow .name { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoMemberRow .name .you { color: var(--ink-faint); font-weight: 500; }
+        /* Trạng thái thành viên: chấm + chữ nhỏ bên phải, nhẹ và sạch. */
+        .infoMemberRow .roleBadge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; flex: none; }
+        .infoMemberRow .roleBadge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #c2c6d2; }
+        .infoMemberRow .roleBadge.online { color: var(--ink-soft); }
+        .infoMemberRow .roleBadge.online::before { background: #22c55e; }
 
         /* ---------- log tin nhắn: bong bóng chat kiểu Facebook Messenger, DÙNG CHUNG cho cả DM (1-1)
            và nhóm -- theo đúng yêu cầu: "bỏ giao diện chat nhóm khác chat riêng đi, làm giống chat
@@ -599,16 +648,36 @@
            Chiều cao CỐ ĐỊNH 76px -- cao hơn là sao? Vì khối này nằm trong .conv-send, mỗi lần nó
            hiện/ẩn làm khung .conv-log hẹp đi; composeResizeObserver đã tự bù scrollTop cho mọi lý do
            đổi chiều cao khối soạn tin, nên chỉ cần kích thước ở đây ỔN ĐỊNH là đủ, không lo đẩy lịch sử. */
-        .composeLinkPreview { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; max-width: 320px; height: 76px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; }
+        /* KHÔNG dùng overflow:hidden ở đây -- nút ✕ (.composePreviewRemove) neo top:-6px;right:-6px
+           ĐÈ LÊN góc thẻ, overflow:hidden sẽ CẮT mất nửa nút (đã gặp thật). Ảnh thumb tự bo góc bằng
+           chính border-radius + overflow:hidden của nó nên không cần card cắt hộ. */
+        .composeLinkPreview { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; max-width: 320px; height: 76px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
         .composeLinkPreviewThumb { width: 56px; height: 56px; flex: none; border-radius: 8px; overflow: hidden; background: var(--canvas); display: flex; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 15px; font-weight: 800; }
         .composeLinkPreviewThumb img { width: 100%; height: 100%; object-fit: cover; }
         .composeLinkPreviewBody { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
         .composeLinkPreviewDomain { font-size: 10px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .composeLinkPreviewTitle { font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .composeLinkPreviewDesc { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        /* Đang fetch (chưa có metadata) -- hiện khung "đang xem trước..." cũng ĐÚNG 76px, để lúc có
-           kết quả chỉ THAY NỘI DUNG bên trong, không thêm/bớt chiều cao khối soạn tin lần 2. */
-        .composeLinkPreview.pending { color: var(--ink-faint); font-size: 12px; align-items: center; }
+        /* Đang fetch (chưa có metadata) -- vẽ skeleton GIỮ ĐÚNG hình dạng card thật (thumb 56px + domain
+           + 2 thanh title/desc) chứ không phải 1 dòng chữ, để lúc có kết quả chỉ thay nội dung từng phần,
+           chiều cao 76px CỐ ĐỊNH không đổi lần nào và mắt không bị nhảy hình. */
+        .composeLinkPreview.pending { align-items: center; }
+        /* Shimmer dùng chung hoạ tiết với skeleton card trong log (.linkPreviewCard.skeleton) -- cùng 1
+           keyframes previewShimmer, chỉ khác kích thước khối. */
+        .composeLinkPreviewThumb.skeleton { border-radius: 8px; }
+        .composeLinkPreview.pending .composeLinkPreviewThumb.skeleton,
+        .composeLinkPreview.pending .composeLinkPreviewSkeletonBar {
+            background: linear-gradient(90deg, var(--canvas) 0%, var(--line) 50%, var(--canvas) 100%);
+            background-size: 300% 100%;
+            animation: previewShimmer 1.3s ease-in-out infinite;
+        }
+        .composeLinkPreviewSkeletonBar { height: 9px; border-radius: 5px; }
+        .composeLinkPreviewSkeletonBar.b1 { width: 72%; height: 11px; }
+        .composeLinkPreviewSkeletonBar.b2 { width: 46%; }
+        .composeLinkPreview.pending .composeLinkPreviewBody { gap: 5px; justify-content: center; }
+        /* Domain biết được ngay từ URL (không cần fetch) -- hiện CHỮ THẬT giữa đống skeleton, vừa có tín
+           hiệu "đang xem trước link nào" vừa không phải chờ metadata. */
+        .composeLinkPreview.pending .composeLinkPreviewDomain { animation: none; }
         /* Placeholder tin đã xoá (mềm) -- ghi đè cả nền màu của bong bóng (mine/theirs) để không còn
            trông như 1 tin bình thường nữa. */
         .bubble.deletedPlaceholder { font-style: italic; color: var(--ink-faint); background: none; padding: 0; }
@@ -713,15 +782,17 @@
            phải icon xám nhạt) cho đính kèm/emoji, y hệt các nút tròn xanh trong ảnh. Nút gửi vẫn giữ
            trạng thái "xám khi rỗng -> tím khi có nội dung" (cải tiến so với ảnh tham khảo tĩnh, đúng
            hành vi app chat thật) thay vì tô màu cứng bất kể có gõ gì chưa. */
-        .conv-send { flex: none; padding: 14px 20px 18px; background: var(--surface); border-top: 1px solid var(--line); }
+        .conv-send { flex: none; padding: 10px 20px 10px; background: var(--surface); border-top: 1px solid var(--line); }
         .composeCard { background: none; }
         /* Dải xem trước NHIỀU file cùng lúc (gửi multi-file) -- mỗi file 1 thẻ vuông nhỏ trong 1 hàng
            cuộn ngang (không phải 1 thẻ to full-width kèm tên file như bản chỉ-1-file trước đây, không
            đủ chỗ cho nhiều thẻ). Tên file bỏ khỏi hiển thị (không đủ chỗ với nhiều thẻ cạnh nhau) --
            xem qua title (tooltip hover) thay vì chữ luôn hiện. */
+        /* Thẻ file: overflow-x:visible để nút ✕ góc trên-phải không bị cắt (KHÔNG để overflow:hidden
+           trên chính item). thumb tự bo góc riêng. */
         .composePreview { padding-bottom: 10px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
-        .composePreviewList { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
-        .composePreviewItem { position: relative; flex: none; }
+        .composePreviewList { display: flex; gap: 10px; overflow-x: auto; overflow-y: visible; padding: 6px 6px 2px 0; }
+        .composePreviewItem { position: relative; flex: none; overflow: visible; }
         .composePreviewThumb { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--canvas); display: flex; }
         .composePreviewThumb img, .composePreviewThumb video { width: 100%; height: 100%; object-fit: cover; }
         /* Nút ✕ ĐÈ LÊN góc thẻ (không nằm cùng hàng như trước) -- đúng kiểu WhatsApp/Telegram gỡ bớt
@@ -740,24 +811,28 @@
            dòng rồi tự cuộn BÊN TRONG ô nhập, không phình vô hạn chiếm hết khung chat. */
         textarea.composeInput { flex: 1; min-width: 0; border: none; background: none; padding: 8px 2px; font-family: inherit; font-size: 14.5px; line-height: 1.4; resize: none; max-height: 132px; overflow-y: auto; }
         textarea.composeInput:focus { outline: none; border: none; box-shadow: none; }
-        /* Đính kèm + emoji: nút tròn màu ĐẶC (tím thương hiệu thay vì xanh của ảnh tham khảo, giữ
-           đúng bảng màu riêng của app) -- KHÁC hẳn kiểu icon xám nhạt trước đây, đúng độ "chắc/nổi"
-           trong ảnh tham khảo (mọi nút hành động ở đây đều là hình tròn tô màu đặc, không phải icon
-           đường viền mờ nhạt). */
-        .composeIconBtn { border: none; background: var(--accent); color: white; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; box-shadow: 0 2px 6px rgba(109,91,245,.3); transition: background .12s, transform .08s; }
-        .composeIconBtn:hover { background: var(--accent-dark); }
-        .composeIconBtn:active { transform: scale(.92); }
-        .composeIconBtn:disabled { background: var(--canvas); color: var(--ink-faint); box-shadow: none; cursor: not-allowed; }
-        /* Nút gửi: tròn, XÁM/trung tính khi chưa có gì để gửi (input rỗng + chưa chọn file) -- TÍM +
-           đổ bóng nhẹ ngay khi có nội dung (xem updateSendButtonState() -- input event, chọn/bỏ file,
-           gửi xong reset). Bấm lúc rỗng vô hại (disabled, không làm gì) thay vì phải tự đoán "gõ gì
-           chưa mà bấm được". */
-        .composeSendBtn { border: none; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; background: var(--canvas); color: var(--ink-faint); transition: background .12s, color .12s, transform .08s, box-shadow .12s; }
-        .composeSendBtn svg { margin-left: 1px; } /* icon gửi hơi lệch trái do hình tam giác -- bù 1px cho cân giữa nút tròn */
-        .composeSendBtn.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(109,91,245,.4); cursor: pointer; }
-        .composeSendBtn.active:hover { background: var(--accent-dark); }
-        .composeSendBtn.active:active { transform: scale(.92); }
-        .composeSendBtn:disabled { cursor: default; }
+        /* Đính kèm + emoji: NÚT ICON TINH GIẢN (ghost) -- trong, chỉ hiện nền xám nhạt lúc hover. Trước
+           đây cả 3 nút đều là hình tròn TÍM ĐẶC giống hệt nhau nên tranh giành sự chú ý, nút gửi không
+           còn là hành động chính. Giờ để 2 nút phụ nhẹ nhàng, dồn điểm nhấn vào nút Gửi. */
+        .composeIconBtn { border: none; background: transparent; color: var(--ink-faint); width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; transition: background .12s, color .12s, transform .08s; }
+        .composeIconBtn:hover { background: var(--canvas); color: var(--ink); }
+        .composeIconBtn:active { transform: scale(.9); }
+        .composeIconBtn:disabled { background: transparent; color: var(--line); cursor: not-allowed; }
+        /* Nút GỬI: HÌNH TRÒN ĐẶC nổi bật -- là hành động CHÍNH duy nhất giữa 2 nút phụ ghost. To hơn
+           hẳn (44px) + nền GRADIENT tím (accent -> accent-dark) tạo chiều sâu + bóng đổ có GLOW tím lan
+           ra, nên "đập vào mắt" ngay khi có nội dung. 2 trạng thái:
+           - rỗng (disabled): nền canvas, icon mờ, không bóng, bấm vô hại;
+           - có nội dung (.active): gradient + glow + tự "thở" nhẹ (pulse) để mời bấm, hover nổi lên,
+             active ép xuống. */
+        .composeSendBtn { border: none; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; background: var(--canvas); color: var(--ink-faint); cursor: default; transition: background .12s, color .12s, transform .1s, box-shadow .15s; }
+        .composeSendBtn svg { flex: none; width: 17px; height: 17px; }
+        .composeSendBtn.active { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%); color: white; box-shadow: 0 4px 14px rgba(109,91,245,.5), 0 0 0 4px rgba(109,91,245,.12); cursor: pointer; animation: sendPulse 2.2s ease-in-out infinite; }
+        .composeSendBtn.active:hover { transform: translateY(-2px) scale(1.04); box-shadow: 0 7px 20px rgba(109,91,245,.55), 0 0 0 5px rgba(109,91,245,.16); animation: none; }
+        .composeSendBtn.active:active { transform: scale(.9); box-shadow: 0 2px 8px rgba(109,91,245,.5); animation: none; }
+        /* "Thở" nhẹ: glow co giãn quanh nút mời bấm -- chỉ chạy lúc active, tắt ngay khi hover/active
+           để không cạnh tranh với phản hồi tương tác thật. */
+        @keyframes sendPulse { 0%, 100% { box-shadow: 0 4px 14px rgba(109,91,245,.5), 0 0 0 4px rgba(109,91,245,.12); } 50% { box-shadow: 0 4px 14px rgba(109,91,245,.5), 0 0 0 8px rgba(109,91,245,.04); } }
+        .composeSendBtn .sendBtnLabel { display: none; } /* chỉ dùng icon, không chữ -- đúng kiểu Telegram */
 
         /* ---------- responsive: máy tính bảng/điện thoại ---------- */
         .backBtn { display: none; border: none; background: none; padding: 6px; margin-right: 2px; }
@@ -858,30 +933,41 @@
                     <span class="navChevron">›</span>
                 </summary>
                 <div id="newConvBody">
-                    <div class="field-row">
-                        <label>Tìm user theo tên</label>
-                        <div class="inline">
-                            <input type="text" id="userSearch" placeholder="gõ để lọc..." oninput="renderUserPickers()">
-                            <button class="icon" id="userListRefreshBtn" onclick="refreshUserList()" title="Làm mới danh sách user"></button>
+                    <div id="newConvHead">
+                        <div id="newConvHeadText">
+                            <span id="newConvTitle">Cuộc trò chuyện mới</span>
+                            <span id="newConvSub">Tìm người rồi bấm để bắt đầu</span>
                         </div>
-                        <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="showTestAccounts" onchange="renderUserPickers()"> hiện cả tài khoản test (tên dạng UUID)</label>
+                        <button type="button" id="newConvCloseBtn" onclick="closeNewConvPanel()" title="Đóng (Esc)"></button>
+                    </div>
+
+                    <div id="newConvSearchWrap">
+                        <span id="newConvSearchIcon"></span>
+                        <input type="text" id="userSearch" placeholder="Tìm người theo tên..." oninput="renderUserPickers()">
+                        <button type="button" class="icon" id="userListRefreshBtn" onclick="refreshUserList()" title="Làm mới danh sách user"></button>
                     </div>
 
                     <div class="tab-row">
-                        <button type="button" class="tab-btn active" id="tabDmBtn" onclick="switchNewConvTab('dm')">💬 Nhắn 1-1</button>
-                        <button type="button" class="tab-btn" id="tabGroupBtn" onclick="switchNewConvTab('group')">👥 Tạo group</button>
+                        <button type="button" class="tab-btn active" id="tabDmBtn" onclick="switchNewConvTab('dm')">Nhắn 1-1</button>
+                        <button type="button" class="tab-btn" id="tabGroupBtn" onclick="switchNewConvTab('group')">Tạo group</button>
                     </div>
 
                     <div class="tab-pane active" id="dmTab">
-                        <label>Bấm tên để bắt đầu nhắn 1-1 ngay</label>
-                        <div class="chips" id="dmPicker"></div>
+                        <div class="userList" id="dmPicker"></div>
                     </div>
 
                     <div class="tab-pane" id="groupTab">
-                        <label>Bấm tên để thêm/bớt thành viên</label>
-                        <div class="chips" id="memberPicker"></div>
-                        <input type="text" id="groupNameInput" placeholder="Tên nhóm (tuỳ chọn — không đặt thì tự lấy tên thành viên)">
-                        <button class="primary" onclick="startGroup()">Tạo group</button>
+                        <div class="userList" id="memberPicker"></div>
+                    </div>
+
+                    <div id="newConvFoot">
+                        <label class="testAccToggle">
+                            <input type="checkbox" id="showTestAccounts" onchange="renderUserPickers()">
+                            <span>hiện cả tài khoản test</span>
+                        </label>
+                        <input type="text" id="groupNameInput" placeholder="Tên nhóm (để trống tự đặt)" hidden>
+                        <button class="primary" id="createGroupBtn" onclick="startGroup()" hidden>Tạo group</button>
+                        <span id="memberCount" hidden></span>
                     </div>
 
                 </div>
@@ -913,7 +999,7 @@
             <div id="infoEmpty">Chọn 1 cuộc trò chuyện để xem thông tin.</div>
             <div id="infoPanelBody">
                 <div id="infoPanelTop">
-                    <span id="infoPanelAvatar"></span>
+                    <div id="infoPanelAvatarWrap"><span id="infoPanelAvatar"></span><span id="infoPanelStatusDot"></span></div>
                     <div id="infoPanelName"></div>
                     <div id="infoPanelSubtitle"></div>
                 </div>
@@ -1043,11 +1129,12 @@ var ICON = {
     activity: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
     messageCircle: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
     back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
-    send: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>',
+    send: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
     down: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>',
     emoji: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
     play: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
     close: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>',
+    closeSm: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>',
     chevronLeft: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
     chevronRight: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
     image: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
@@ -1059,6 +1146,8 @@ var ICON = {
 // Nút tĩnh trong HTML (không tự vẽ lại qua JS) -- gán icon 1 lần lúc script chạy, DOM đã có sẵn vì
 // <script> nằm cuối <body>.
 document.getElementById('sidebarSearchIcon').innerHTML = ICON.search;
+document.getElementById('newConvSearchIcon').innerHTML = ICON.search;
+document.getElementById('newConvCloseBtn').innerHTML = ICON.closeSm;
 document.getElementById('userListRefreshBtn').innerHTML = ICON.refresh;
 document.getElementById('convListRefreshBtn').innerHTML = ICON.refresh;
 document.getElementById('infoStatusIcon').innerHTML = ICON.activity;
@@ -1304,10 +1393,14 @@ function renderInfoPanel(conversationId) {
         return (bOnline ? 1 : 0) - (aOnline ? 1 : 0);
     });
     // "Trạng thái" tổng quan: có bất kỳ ai khác (ngoài mình) đang online trong hội thoại này không --
-    // pill xanh/xám tái dùng đúng style .pill đã có ở topbar (ok/pending), không cần CSS riêng.
+    // vẽ dạng chấm + chữ (.infoStatusVal) ĐỒNG BỘ với danh sách thành viên bên dưới, không dùng pill
+    // xanh/vàng kiểu topbar (làm khối Thông tin chính lệch tông, rối mắt).
     var anyoneElseOnline = conv.memberUserIds.some(function (id) { return id !== myUserId && !!onlineUserIds[id]; });
     var statusEl = document.getElementById('infoStatusValue');
-    statusEl.innerHTML = '<span class="pill ' + (anyoneElseOnline ? 'ok">Đang hoạt động' : 'pending">Ngoại tuyến') + '</span>';
+    statusEl.className = 'infoRowValue infoStatusVal' + (anyoneElseOnline ? ' online' : '');
+    statusEl.innerText = anyoneElseOnline ? 'Đang hoạt động' : 'Ngoại tuyến';
+    // Chấm trạng thái trên avatar đầu panel dùng CÙNG tín hiệu đó (xanh có ai online / xám không).
+    document.getElementById('infoPanelStatusDot').classList.toggle('online', anyoneElseOnline);
     var listEl = document.getElementById('infoMemberList');
     listEl.innerHTML = '';
     sorted.forEach(function (id) {
@@ -1320,7 +1413,14 @@ function renderInfoPanel(conversationId) {
         var a = row.querySelector('.avatar');
         a.style.background = avatarColor(id);
         a.innerText = avatarInitial(displayName(id));
-        row.querySelector('.name').innerText = displayName(id) + (isMe ? ' (bạn)' : '');
+        var nameEl = row.querySelector('.name');
+        nameEl.innerText = displayName(id);
+        if (isMe) {
+            var you = document.createElement('span');
+            you.className = 'you';
+            you.innerText = ' (bạn)';
+            nameEl.appendChild(you);
+        }
         listEl.appendChild(row);
     });
 }
@@ -1971,6 +2071,12 @@ function switchNewConvTab(tab) {
     document.getElementById('tabGroupBtn').classList.toggle('active', tab === 'group');
     document.getElementById('dmTab').classList.toggle('active', tab === 'dm');
     document.getElementById('groupTab').classList.toggle('active', tab === 'group');
+    // Ô tên nhóm + nút tạo + đếm thành viên CHỈ thuộc tab Group -- ẩn ở tab DM cho đỡ rối mắt.
+    var isGroup = tab === 'group';
+    document.getElementById('groupNameInput').hidden = !isGroup;
+    document.getElementById('createGroupBtn').hidden = !isGroup;
+    document.getElementById('memberCount').hidden = !isGroup;
+    if (isGroup) updateGroupFoot();
 }
 
 // Panel "Cuộc trò chuyện mới" giờ nổi thành thẻ riêng phía trên nút tròn (FAB, xem CSS
@@ -1985,10 +2091,10 @@ document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') document.getElementById('newConvPanel').open = false;
 });
 
-// Vẽ lại chip DM (bấm 1 phát là nhắn ngay) + chip chọn thành viên group, từ knownUsers đã fetch
-// sẵn (không gọi lại API) — tách riêng khỏi refreshUserList() để checkbox/ô tìm kiếm chỉ cần vẽ
-// lại, không cần fetch lại mỗi lần gõ/tick. KHÔNG còn ô nhập UUID tay -- chọn bằng tên duy nhất
-// (không ai gõ nổi 1 UUID 36 ký tự chính xác), search-by-name đã đủ để tìm giữa hàng nghìn user.
+// Vẽ lại danh sách user ở CẢ 2 tab (DM + Group) thành các hàng .userRow (avatar + tên + ô tick),
+// từ knownUsers đã fetch sẵn (không gọi lại API) — tách riêng khỏi refreshUserList() để checkbox/ô
+// tìm kiếm chỉ cần vẽ lại, không cần fetch lại mỗi lần gõ/tick. KHÔNG còn ô nhập UUID tay -- chọn
+// bằng tên duy nhất (không ai gõ nổi 1 UUID 36 ký tự chính xác), search-by-name đã đủ giữa hàng nghìn user.
 function renderUserPickers() {
     var showTest = document.getElementById('showTestAccounts').checked;
     var query = document.getElementById('userSearch').value.trim().toLowerCase();
@@ -2002,32 +2108,64 @@ function renderUserPickers() {
     var dmPicker = document.getElementById('dmPicker');
     dmPicker.innerHTML = '';
     visible.forEach(function (u) {
-        var chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'chip';
-        chip.innerText = u.username;
-        chip.title = u.id;
-        chip.onclick = function () { startDm(u.id); };
-        dmPicker.appendChild(chip);
+        var row = buildUserRow(u, false);
+        row.onclick = function () { startDm(u.id); };
+        dmPicker.appendChild(row);
     });
 
     var groupPicker = document.getElementById('memberPicker');
     groupPicker.innerHTML = '';
     visible.forEach(function (u) {
-        var chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'chip' + (selectedGroupMemberIds.indexOf(u.id) !== -1 ? ' selected' : '');
-        chip.innerText = u.username;
-        chip.title = u.id;
-        chip.onclick = function () { toggleGroupMember(u.id, chip); };
-        groupPicker.appendChild(chip);
+        var row = buildUserRow(u, true);
+        if (selectedGroupMemberIds.indexOf(u.id) !== -1) row.classList.add('selected');
+        row.onclick = function () { toggleGroupMember(u.id, row); };
+        groupPicker.appendChild(row);
     });
 }
 
-function toggleGroupMember(userId, chipEl) {
+// Dựng 1 hàng user (avatar màu ổn định theo id + tên + ô tick bên phải). canSelect=true (tab Group)
+// thì hiện ô tick tròn để chọn/bỏ nhiều người; tab DM (canSelect=false) không có tick -- bấm là nhắn ngay.
+function buildUserRow(u, canSelect) {
+    var row = document.createElement('div');
+    row.className = 'userRow' + (canSelect ? ' canSelect' : '');
+    row.title = u.id;
+    var av = document.createElement('div');
+    av.className = 'userRowAvatar';
+    av.style.background = avatarColor(u.id);
+    av.innerText = avatarInitial(u.username);
+    row.appendChild(av);
+    var name = document.createElement('div');
+    name.className = 'userName';
+    name.innerText = u.username;
+    row.appendChild(name);
+    var check = document.createElement('div');
+    check.className = 'userCheck';
+    check.innerText = '✓';
+    row.appendChild(check);
+    return row;
+}
+
+function toggleGroupMember(userId, rowEl) {
     var idx = selectedGroupMemberIds.indexOf(userId);
     if (idx === -1) selectedGroupMemberIds.push(userId); else selectedGroupMemberIds.splice(idx, 1);
-    if (chipEl) chipEl.classList.toggle('selected', idx === -1);
+    if (rowEl) rowEl.classList.toggle('selected', idx === -1);
+    updateGroupFoot();
+}
+
+// Cập nhật ô tên nhóm + nút tạo + đếm số thành viên ở chân panel -- chỉ hiện ở tab Group.
+function updateGroupFoot() {
+    var n = selectedGroupMemberIds.length;
+    var count = document.getElementById('memberCount');
+    count.hidden = false;
+    count.innerText = n === 0 ? 'chưa chọn ai' : 'đã chọn ' + n + ' thành viên';
+    var btn = document.getElementById('createGroupBtn');
+    btn.disabled = n === 0;
+    btn.innerText = n === 0 ? 'Tạo group' : 'Tạo group (' + n + ')';
+}
+
+// Đóng panel tạo mới -- dùng cho nút ✕ trong header (Esc + bấm ra ngoài đã có sẵn, xem bên dưới).
+function closeNewConvPanel() {
+    document.getElementById('newConvPanel').open = false;
 }
 
 // PHẢI là UUID thật (không phải chuỗi tuỳ ý như trước) -- id của frame MESSAGE được colony dùng
@@ -2400,7 +2538,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<input type="file" class="fileInput" accept="image/*,video/*" multiple style="display:none">' +
         '<textarea class="composeInput" placeholder="Nhập tin nhắn..." rows="1"></textarea>' +
         '<button type="button" class="composeIconBtn composeEmojiBtn" title="Chèn emoji">' + ICON.emoji + '</button>' +
-        '<button type="button" class="composeSendBtn" title="Gửi" disabled>' + ICON.send + '</button>' +
+        '<button type="button" class="composeSendBtn" title="Gửi" disabled>' + ICON.send + '<span class="sendBtnLabel">Gửi</span></button>' +
         '</div>' +
         '</div></div>';
     card.querySelector('.renameBtn').onclick = function () { renameConversation(conversationId); };
@@ -2430,9 +2568,12 @@ function ensureConversationCard(conversationId, label, subtitle) {
     function ensureComposeLinkPreviewEl() {
         if (composeLinkPreviewEl) return composeLinkPreviewEl;
         composeLinkPreviewEl = document.createElement('div');
-        // Chèn NGAY TRƯỚC .composeRow nhưng vẫn trong .conv-send, ngay sau .composePreview file
-        // để MỌI khối trong conv-send đều được composeResizeObserver bù scrollTop như nhau.
-        convSendEl.insertBefore(composeLinkPreviewEl, card.querySelector('.composeRow'));
+        // Chèn NGAY TRƯỚC .composeRow nhưng phải chèn vào ĐÚNG cha của nó là .composeCard (không phải
+        // .conv-send -- .composeRow là con của .composeCard, insertBefore vào .conv-send sẽ ném
+        // NotFoundError và làm chết CẢ handler input, đây chính là bug "dán link không hiện gì").
+        // Vị trí này = ngay sau .composePreview file, và vẫn nằm trong .conv-send nên
+        // composeResizeObserver (observe .conv-send) vẫn bù scrollTop khi khối này hiện/ẩn.
+        card.querySelector('.composeCard').insertBefore(composeLinkPreviewEl, card.querySelector('.composeRow'));
         return composeLinkPreviewEl;
     }
     function renderComposeLinkPreview(url, meta, pending) {
@@ -2443,7 +2584,21 @@ function ensureConversationCard(conversationId, label, subtitle) {
         var cardEl = document.createElement('div');
         cardEl.className = pending ? 'composeLinkPreview pending' : 'composeLinkPreview';
         if (pending) {
-            cardEl.textContent = 'Dang xem truoc ' + hostnameOf(url) + '...';
+            var thumb = document.createElement('div');
+            thumb.className = 'composeLinkPreviewThumb skeleton';
+            cardEl.appendChild(thumb);
+            var bd = document.createElement('div');
+            bd.className = 'composeLinkPreviewBody';
+            var dom = document.createElement('div');
+            dom.className = 'composeLinkPreviewDomain';
+            dom.textContent = hostnameOf(url).toUpperCase();
+            bd.appendChild(dom);
+            ['b1', 'b2'].forEach(function (cls) {
+                var bar = document.createElement('div');
+                bar.className = 'composeLinkPreviewSkeletonBar ' + cls;
+                bd.appendChild(bar);
+            });
+            cardEl.appendChild(bd);
         } else {
             var thumb = document.createElement('div');
             thumb.className = 'composeLinkPreviewThumb';
@@ -3471,9 +3626,32 @@ function renderMessageText(el, text) {
 
 // Nhận dạng tin nhắn CHỈ chứa đúng 1 link (không kèm chữ nào khác) -- kiểu này thay vì hiện chữ
 // thô, vẽ 1 thẻ preview nhúng (ảnh + tiêu đề + mô tả + domain) như Messenger/Telegram/Zalo.
+//
+// CHẤP CẢ link viết tắt không có scheme ("youtube.com/x", "t.me/abc") -- người dùng dán link kiểu này
+// rất nhiều, bản cũ chỉ nhận https?:// nên dán "youtube.com" vào là KHÔNG có gì hiện cả (báo lỗi thật).
+// Trả về URL ĐÃ chuẩn hoá có https:// để dùng thẳng làm href + tham số ?url= cho hall.
+//
+// Điều kiện chặt để không biến chữ thường thành link: cả dòng phải là 1 chuỗi không khoảng trắng,
+// TLD chỉ gồm chữ cái 2-24 ký tự (loại "3.14", "1.2.3.4", "ok."), có scheme thì chỉ http(s).
+// Bản server (LinkPreviewService#soleUrl) GIỮNG ĐÚNG luật này -- 2 bên lệch nhau là colony không enrich.
+var SOLE_URL_RE = /^https?:\/\/\S+$/i;
+var BARE_DOMAIN_RE = /^(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:\/\S*)?$/i;
+
 function extractSoleUrl(text) {
     var trimmed = (text || '').trim();
-    return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : null;
+    if (!trimmed || trimmed.length > 2048) return null;
+    if (SOLE_URL_RE.test(trimmed)) return trimmed;
+    if (BARE_DOMAIN_RE.test(trimmed)) {
+        try {
+            var abs = new URL('https://' + trimmed);
+            // hostname() bắt mỗi nhãn hợp lệ + TLD có dấu chấm; thử cả URL() để chắc không phải chuỗi lạ.
+            if (abs.hostname.indexOf('.') > 0) return abs.href;
+        } catch (e) {
+            return null;
+        }
+        return null;
+    }
+    return null;
 }
 
 // Domain thuần từ URL (bỏ "www.") -- dùng làm nhãn nhỏ đầu thẻ preview.
