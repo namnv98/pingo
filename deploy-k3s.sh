@@ -361,15 +361,21 @@ ensure_firewalld_zones() {
 
   local ifaces_to_fix=()
 
-
-  for iface in cni0 flannel.1 docker0; do
+  # KHONG dua docker0 vao day: Docker (>=20.10 co tich hop firewalld) tu quan ly zone
+  # rieng "docker" cho docker0 -- ep no sang "trusted" gay ZONE_CONFLICT luc dockerd
+  # khoi dong lai ("'docker0' already bound to 'trusted'"), lam dockerd crash-loop.
+  # Chi can cni0/flannel.1 (interface CNI/VXLAN that su cua k3s) nam trong trusted.
+  for iface in cni0 flannel.1; do
 
     ip link show "$iface" >/dev/null 2>&1 || continue
 
     local zone
 
+    # --get-zone-of-interface la lenh DOC, khong can root (polkit cho user thuong query
+    # duoc) -- sudo o day thua, va trong shell khong co TTY thi sudo luon fail (khong
+    # hoi duoc password), khien zone luon rong -> tuong nham moi interface deu sai zone.
     zone="$(
-      sudo firewall-cmd \
+      firewall-cmd \
         --get-zone-of-interface="$iface" \
         2>/dev/null || true
     )"
