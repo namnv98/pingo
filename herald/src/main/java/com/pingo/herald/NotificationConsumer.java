@@ -87,6 +87,7 @@ public class NotificationConsumer {
     }
     var bodyPreview = body.getString("bodyPreview");
     var messageId = body.getString("messageId");
+    var messageUuid = UUIDUtils.parseOrDefault(messageId);
     var ts = body.getLong("ts", System.currentTimeMillis());
 
     for (var raw : candidateUserIds) {
@@ -95,7 +96,7 @@ public class NotificationConsumer {
         continue;
       }
       if (!presence.isOnline(userId)) {
-        persistNotification(userId, conversationId, fromUserId, bodyPreview, ts);
+        persistNotification(userId, conversationId, fromUserId, messageUuid, bodyPreview, ts);
         continue;
       }
       if (messageId == null) {
@@ -106,7 +107,7 @@ public class NotificationConsumer {
           GRACE_MS,
           tid -> {
             pendingGraceTimers.remove(key);
-            persistNotification(userId, conversationId, fromUserId, bodyPreview, ts);
+            persistNotification(userId, conversationId, fromUserId, messageUuid, bodyPreview, ts);
           });
       pendingGraceTimers.put(key, timerId);
     }
@@ -126,10 +127,12 @@ public class NotificationConsumer {
     }
   }
 
-  private void persistNotification(UUID userId, UUID conversationId, UUID fromUserId, String bodyPreview, long ts) {
+  private void persistNotification(UUID userId, UUID conversationId, UUID fromUserId, UUID messageId, String bodyPreview, long ts) {
     var notificationId = UUID.randomUUID();
+    // messageTs == ts: tin gốc CHÍNH LÀ tin vừa gửi (khác reaction bên colony, xem javadoc
+    // NotificationRegistry#create) -- không có độ lệch nào cần phân biệt riêng ở đây.
     notifications
-        .create(notificationId, userId, conversationId, fromUserId, bodyPreview, ts)
+        .create(notificationId, userId, conversationId, fromUserId, messageId, "message", bodyPreview, ts, ts)
         .thenRun(() -> queuePush(userId, bodyPreview, conversationId))
         .exceptionally(
             ex -> {

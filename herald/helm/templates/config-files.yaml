@@ -30,24 +30,17 @@ data:
         params:
           maxSize: 8
           maxWaitQueueSize: 256
-    # Credentials Firebase Admin SDK (push qua FCM, xem PushService) -- day la project dev dung
-    # chung (khong phai production), gia tri nay la private key THAT nen KHONG duoc log/paste ra
-    # ngoai repo nay. Production that phai override bang service account rieng, xem javadoc
-    # LegoConfig1.FirebaseConfig.
+    # Credentials Firebase Admin SDK (push qua FCM, xem PushService) -- CHUA co ha tang push that
+    # (chua dang ky Firebase project nao ca) nen de RONG o day CO CHU DICH -- PushService tu chuyen
+    # sang che do no-op khi gia tri nay rong/null (xem HeraldAppModule#pushService), notifications
+    # van luu DB/doc qua GET /notifications binh thuong, chi rieng buoc gui push that bi bo qua.
+    # BUG DA GAP THAT: ban truoc dien san 1 JSON placeholder SAI cu phap (thieu dau phay sau
+    # "private_key"/"client_x509_cert_url") thay vi de rong -- khien GoogleCredentials.fromStream
+    # nem MalformedJsonException lam CRASH ca herald ngay luc khoi dong (Guice provider loi -> toan
+    # bo service khong len duoc), vi chuoi khong rong/null nen khong lot qua duoc check o tren. Muon
+    # bat push that: dang ky Firebase project roi dan NGUYEN VAN noi dung file service-account JSON
+    # thay cho chuoi rong nay (JSON phai hop le that, khong phai template placeholder).
     firebase:
-      serviceAccountJson: |
-        {
-          "type": "service_account",
-          "project_id": "app-chat-5711a",
-          "private_key_id": "",
-          "private_key": ""
-          "client_email": "",
-          "client_id": "",
-          "auth_uri": "",
-          "token_uri": "",
-          "auth_provider_x509_cert_url": "",
-          "client_x509_cert_url": ""
-          "universe_domain": ""
-        }
+      serviceAccountJson: ""
   log4j2.xml: |
 {{ .Files.Get "config/log4j2.xml" | indent 4 }}

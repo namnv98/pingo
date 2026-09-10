@@ -28,21 +28,15 @@ database:
       maxSize: 8
       maxWaitQueueSize: 256
 
-# Credentials Firebase Admin SDK (push qua FCM, xem PushService) -- KHONG duoc dien private key
-# THAT vao day (file nay nam trong git). Dien gia tri that vao LOCAL sau khi pull, KHONG commit lai.
-# Production phai override bang service account rieng, xem javadoc LegoConfig1.FirebaseConfig.
+# Credentials Firebase Admin SDK (push qua FCM, xem PushService) -- CHUA co ha tang push that, de
+# RONG co chu dich: PushService tu chuyen sang che do no-op khi gia tri nay rong/null (xem
+# HeraldAppModule#pushService), notifications van luu DB/doc qua GET /notifications binh thuong,
+# chi rieng buoc gui push that bi bo qua. KHONG dien 1 JSON placeholder voi cac field rong nhu ban
+# truoc ("private_key": ""...) -- chuoi KHONG rong/null se lot qua duoc check no-op nhung parse PEM
+# key rong se nem loi khac (hoac MalformedJsonException neu con thieu dau phay), lam CRASH ca herald
+# ngay luc khoi dong (bug da gap that, xem chu thich chi tiet o ban helm/templates/config-files.yaml).
+# Muon bat push that: dang ky Firebase project roi dan NGUYEN VAN noi dung file service-account JSON
+# thay cho chuoi rong nay (JSON phai hop le that, khong phai template placeholder) -- KHONG commit
+# gia tri that vao file nay (nam trong git), chi dien tam o LOCAL sau khi pull.
 firebase:
-  serviceAccountJson: |
-    {
-      "type": "service_account",
-      "project_id": "app-chat-5711a",
-      "private_key_id": "",
-      "private_key": "",
-      "client_email": "",
-      "client_id": "",
-      "auth_uri": "",
-      "token_uri": "",
-      "auth_provider_x509_cert_url": "",
-      "client_x509_cert_url": "",
-      "universe_domain": ""
-    }
+  serviceAccountJson: ""

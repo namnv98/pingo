@@ -14,6 +14,7 @@
 #   colony
 #   hall
 #   harbor
+#   herald
 #
 # Nginx:
 #   file-server/fileserver
@@ -23,8 +24,8 @@
 #   postgres
 #
 # Total:
-#   4 Java services + 1 Nginx + Hazelcast + PostgreSQL
-#   = 7 Helm releases
+#   5 Java services + 1 Nginx + Hazelcast + PostgreSQL
+#   = 8 Helm releases
 #
 # Local images:
 #   localhost:5000/<IMAGE_NAME>:<IMAGE_TAG>
@@ -116,6 +117,7 @@ MAVEN_MODULES=(
   "colony"
   "hall"
   "harbor"
+  "herald"
 )
 
 DEPLOY_MODULES=(
@@ -123,6 +125,7 @@ DEPLOY_MODULES=(
   "colony"
   "hall"
   "harbor"
+  "herald"
   "file-server/fileserver"
 )
 
@@ -147,6 +150,10 @@ module_path() {
 
     harbor)
       echo "harbor"
+      ;;
+
+    herald)
+      echo "herald"
       ;;
 
     file-server)
@@ -192,6 +199,10 @@ image_name() {
       echo "harbor"
       ;;
 
+    herald)
+      echo "herald"
+      ;;
+
     file-server)
       echo "file-server"
       ;;
@@ -231,6 +242,10 @@ release_name() {
       echo "harbor"
       ;;
 
+    herald)
+      echo "herald"
+      ;;
+
     file-server)
       echo "file-server"
       ;;
@@ -241,6 +256,54 @@ release_name() {
 
     *)
       die "Unknown module for Helm release: $1"
+      ;;
+  esac
+}
+
+
+# ============================================================================
+# K8S WORKLOAD (deployment/xxx hoac statefulset/xxx)
+#
+# "helm upgrade -i" VOI IMAGE_TAG co dinh (mac dinh "local") KHONG tu restart pod dang chay
+# neu rendered manifest khong doi (image, imagePullPolicy... giu nguyen chuoi) -- dung image MOI
+# vua build/push van nam im trong local registry, pod cu (voi lop image CU da pull) cu the chay
+# tiep. Phai ep "kubectl rollout restart" sau moi lan helm upgrade -i thi imagePullPolicy=Always
+# moi co co hoi keo lai image moi. file-server dung StatefulSet ten "static01" (ten chart con
+# static01, KHONG phai release "file-server") -- xem file-server/fileserver/helm/charts/static01.
+# ============================================================================
+
+workload_ref() {
+  case "$1" in
+    beacon)
+      echo "deployment/beacon"
+      ;;
+
+    colony)
+      echo "deployment/colony"
+      ;;
+
+    hall)
+      echo "deployment/hall"
+      ;;
+
+    harbor)
+      echo "deployment/harbor"
+      ;;
+
+    herald)
+      echo "deployment/herald"
+      ;;
+
+    file-server)
+      echo "statefulset/static01"
+      ;;
+
+    file-server/fileserver)
+      echo "statefulset/static01"
+      ;;
+
+    *)
+      die "Unknown module for k8s workload: $1"
       ;;
   esac
 }
@@ -793,10 +856,12 @@ deploy_helm() {
     local release
     local chart
     local image
+    local workload
 
     release="$(release_name "$module")"
     chart="$(chart_path "$module")"
     image="$(image_ref "$module")"
+    workload="$(workload_ref "$module")"
 
     log \
       "helm upgrade -i ${release} " \
@@ -809,6 +874,13 @@ deploy_helm() {
       --set-string imagePullPolicy=Always \
       --wait \
       --timeout 3m
+
+    # Rendered manifest thuong KHONG doi giua 2 lan chay (image_ref van la ...:local nhu cu) --
+    # "helm upgrade -i" o tren se KHONG tu restart pod dang chay, nen image MOI vua build/push van
+    # bi bo qua. Ep restart thu cong o day thi imagePullPolicy=Always moi thuc su keo lai image moi.
+    log "kubectl rollout restart ${workload} (namespace=${NAMESPACE})"
+    kubectl rollout restart "$workload" -n "$NAMESPACE"
+    kubectl rollout status "$workload" -n "$NAMESPACE" --timeout=3m
 
   done
 }

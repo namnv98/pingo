@@ -33,10 +33,9 @@ spec:
         - name: {{ .Chart.Name }}
           # nnv98/legofile:1.1.1 (Docker Hub) doi thanh image build local (localhost:5000, khong
           # dung Docker Hub o buoc deploy local -- cung quy uoc voi deploy-k3s.sh cho cac module
-          # Java). Rebuild/push lai bang: docker build -t localhost:5000/file-server:local
-          # file-server/fileserver && docker push localhost:5000/file-server:local, roi
-          # "kubectl rollout restart statefulset/static01" (tag mutable, helm upgrade KHONG tu
-          # restart pod khi tag khong doi -- da gap that su, xem lich su sua doi).
+          # Java). Tag mutable (":local") nen "helm upgrade -i" khong tu restart pod khi tag khong
+          # doi -- deploy-k3s.sh (deploy_helm/workload_ref) da tu dong "kubectl rollout restart
+          # statefulset/static01" sau moi lan upgrade, khong can lam tay nua.
           image: localhost:5000/file-server:local
           volumeMounts:
             - name: file-server-uploads

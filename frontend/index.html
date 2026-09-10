@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pingo chat demo</title>
+    <script>
+        // Set data-theme SỚM NHẤT có thể (trước khi CSS/body kịp vẽ) -- tránh nháy sáng->tối 1 khung
+        // hình lúc tải trang nếu người dùng đã chọn "Tối" từ trước (main <script> nằm cuối <body>, đợi
+        // tới đó mới set thì đã vẽ xong 1 lần theo mặc định sáng rồi). "Theo hệ thống" (mặc định,
+        // không có key hoặc key = 'system') thì KHÔNG set gì -- để CSS @media (prefers-color-scheme) tự
+        // quyết ngay từ đầu, không cần đoán ở đây.
+        (function () {
+            try {
+                var mode = localStorage.getItem('pingoTheme_v1');
+                if (mode === 'light' || mode === 'dark') document.documentElement.setAttribute('data-theme', mode);
+            } catch (e) { /* localStorage chặn (chế độ riêng tư nghiêm ngặt...) -- rơi về theo hệ thống */ }
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome Free (CDN) -- dùng cho 5 icon reply/pin/lock/link/trash trong .msg-actions/tab
+         Pins/Links (class fa-solid fa-reply/fa-thumbtack/fa-lock/fa-link/fa-trash), thay vì tự vẽ/tự
+         build font riêng. Ghim đúng version (6.5.2), không dùng "latest". -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="assets/css/style.css">
+    <!-- emoji-picker-element (open-source, MIT) -- dùng cho popup CHÈN EMOJI vào ô nhập tin (đầy đủ bộ
+    Unicode + tìm kiếm/phân loại/skin-tone), KHÔNG dùng cho picker THẢ CẢM XÚC lên tin (vẫn giữ đúng 6
+    icon kiểu Facebook cố định, xem REACTIONS/openReactionPicker trong <script> chính) -- 2 khái niệm
+    khác nhau: reaction là 1 bộ nhỏ có ý nghĩa xã hội cố định, còn chèn emoji vào chữ thì cần đầy đủ như
+    bàn phím thật. Tự đăng ký custom element <emoji-picker>, tự tải data emoji (JSON) qua CDN khi cần,
+    xem openComposeEmojiPicker/ensureComposeEmojiPicker. type="module" -- không xung đột với <script>
+    thường (non-module) phía dưới, customElements là registry toàn cục dùng chung được. -->
+    <script type="module">
+        import 'https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js';
+    </script>
+</head>
+<body>
+
+<div id="authScreen">
+    <div id="authCard">
+        <div id="authLogo">💬</div>
+        <h1>Pingo chat demo</h1>
+        <div class="sub">Tài khoản thật — password hash (bcrypt) ở server, token JWT dùng để xác thực WebSocket.</div>
+        <div class="field">
+            <label>Username</label>
+            <input type="text" id="authUsername" placeholder="vd: nam" autocomplete="username">
+        </div>
+        <div class="field">
+            <label>Password</label>
+            <input type="password" id="authPassword" placeholder="tối thiểu 8 ký tự" autocomplete="current-password">
+        </div>
+        <div class="actions">
+            <button class="primary" onclick="login()">Đăng nhập</button>
+            <button onclick="register()">Đăng ký mới</button>
+        </div>
+        <div id="authError"></div>
+    </div>
+</div>
+
+<div id="mainApp">
+    <div id="topbar">
+        <div id="topbarLeft">
+            <span id="status" class="pill pending">đang kết nối...</span>
+            <span id="podBadge"></span>
+        </div>
+        <div id="topbarRight">
+            <span id="counters">Gửi/ACK: <b id="countSent">0</b> · Nhận: <b id="countReceived">0</b></span>
+            <span id="whoami"></span>
+            <div id="notifMenuWrap">
+                <button type="button" class="icon" id="notifBtn" title="Thông báo"></button>
+                <span id="notifBadge" style="display:none"></span>
+                <div id="notifMenu">
+                    <div id="notifMenuHead">Thông báo</div>
+                    <div id="notifMenuList"></div>
+                    <div id="notifMenuEmpty">Bạn sẽ thấy các lượt nhắc tên (@mention), cảm xúc và các thông báo khác ở đây.</div>
+                </div>
+            </div>
+            <div id="themeMenuWrap">
+                <button type="button" class="icon" id="themeBtn" title="Giao diện sáng/tối"></button>
+                <div id="themeMenu"></div>
+            </div>
+            <button onclick="logout()">Đăng xuất</button>
+        </div>
+    </div>
+
+    <div id="layout">
+        <aside id="sidebar">
+            <div id="sidebarHead">
+                <span class="brand">Đoạn chat</span>
+            </div>
+            <div id="sidebarSearchWrap">
+                <span id="sidebarSearchIcon"></span>
+                <input type="text" id="conversationSearchInput" placeholder="Tìm cuộc trò chuyện...">
+            </div>
+            <details id="newConvPanel">
+                <summary>
+                    <span class="navIcon">＋</span>
+                    <span class="navLabel">Cuộc trò chuyện mới</span>
+                    <span class="navChevron">›</span>
+                </summary>
+                <div id="newConvBody">
+                    <div id="newConvHead">
+                        <div id="newConvHeadText">
+                            <span id="newConvTitle">Cuộc trò chuyện mới</span>
+                            <span id="newConvSub">Tìm người rồi bấm để bắt đầu</span>
+                        </div>
+                        <button type="button" id="newConvCloseBtn" onclick="closeNewConvPanel()" title="Đóng (Esc)"></button>
+                    </div>
+
+                    <div id="newConvSearchWrap">
+                        <span id="newConvSearchIcon"></span>
+                        <input type="text" id="userSearch" placeholder="Tìm người theo tên..." oninput="renderUserPickers()">
+                        <button type="button" class="icon" id="userListRefreshBtn" onclick="refreshUserList()" title="Làm mới danh sách user"></button>
+                    </div>
+
+                    <div class="tab-row">
+                        <button type="button" class="tab-btn active" id="tabDmBtn" onclick="switchNewConvTab('dm')">Nhắn 1-1</button>
+                        <button type="button" class="tab-btn" id="tabGroupBtn" onclick="switchNewConvTab('group')">Tạo group</button>
+                    </div>
+
+                    <div class="tab-pane active" id="dmTab">
+                        <div class="userList" id="dmPicker"></div>
+                    </div>
+
+                    <div class="tab-pane" id="groupTab">
+                        <div class="userList" id="memberPicker"></div>
+                    </div>
+
+                    <div id="newConvFoot">
+                        <label class="testAccToggle">
+                            <input type="checkbox" id="showTestAccounts" onchange="renderUserPickers()">
+                            <span>hiện cả tài khoản test</span>
+                        </label>
+                        <input type="text" id="groupNameInput" placeholder="Tên nhóm (để trống tự đặt)" hidden>
+                        <button class="primary" id="createGroupBtn" onclick="startGroup()" hidden>Tạo group</button>
+                        <span id="memberCount" hidden></span>
+                    </div>
+
+                </div>
+            </details>
+
+            <div id="sidebarListHead">
+                <span>Hội thoại của bạn</span>
+                <button class="icon" id="convListRefreshBtn" onclick="refreshConversationList()" title="Làm mới"></button>
+            </div>
+            <div id="conversationList"></div>
+            <div class="hint" id="noConversationsHint">Chưa có cuộc hội thoại nào — tạo mới ở trên, hoặc chờ ai đó nhắn cho bạn.</div>
+        </aside>
+
+        <main id="chatMain">
+            <div id="chatEmpty">Chọn 1 cuộc trò chuyện bên trái, hoặc bấm "Cuộc trò chuyện mới" để bắt đầu.</div>
+            <!-- các .conv card được chèn vào đây, ẩn hết trừ card .active (xem selectConversation) -->
+        </main>
+
+        <aside id="infoPanel">
+            <div id="infoPanelHead">
+                <div id="infoTabRow">
+                    <button type="button" id="infoTabInfoBtn" class="infoTabBtn active" onclick="switchInfoTab('info')">Info</button>
+                    <button type="button" id="infoTabPinsBtn" class="infoTabBtn" onclick="switchInfoTab('pins')">Pins</button>
+                    <button type="button" id="infoTabFilesBtn" class="infoTabBtn" onclick="switchInfoTab('files')">Files</button>
+                    <button type="button" id="infoTabLinksBtn" class="infoTabBtn" onclick="switchInfoTab('links')">Links</button>
+                </div>
+                <button class="icon" onclick="toggleInfoPanel()" title="Đóng">✕</button>
+            </div>
+            <div id="infoEmpty">Chọn 1 cuộc trò chuyện để xem thông tin.</div>
+            <div id="infoPanelBody">
+                <div id="infoPanelTop">
+                    <div id="infoPanelAvatarWrap"><span id="infoPanelAvatar"></span><span id="infoPanelStatusDot"></span></div>
+                    <div id="infoPanelName"></div>
+                    <div id="infoPanelSubtitle"></div>
+                </div>
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Thông tin chính</div>
+                    <div class="infoCard">
+                        <div class="infoRow"><span class="infoRowIcon" id="infoStatusIcon"></span><span class="infoRowLabel">Trạng thái</span><span class="infoRowValue" id="infoStatusValue"></span></div>
+                        <div class="infoRow"><span class="infoRowIcon" id="infoTypeIcon"></span><span class="infoRowLabel">Loại</span><span class="infoRowValue" id="infoTypeValue"></span></div>
+                        <div class="infoRow"><span class="infoRowIcon" id="infoMemberIcon"></span><span class="infoRowLabel">Thành viên</span><span class="infoRowValue" id="infoMemberCountRow"></span></div>
+                        <div class="infoRow"><span class="infoRowIcon" id="infoActivityIcon"></span><span class="infoRowLabel">Hoạt động gần nhất</span><span class="infoRowValue" id="infoActivityValue"></span></div>
+                        <div class="infoRow"><span class="infoRowIcon" id="infoConvIdIcon"></span><span class="infoRowLabel">Mã hội thoại</span><span class="infoRowValue badge" id="infoConvIdValue"></span></div>
+                    </div>
+                </div>
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Thành viên · <span id="infoMemberCount"></span></div>
+                    <div id="infoMemberList"></div>
+                </div>
+            </div>
+            <div id="infoFilesBody" style="display:none">
+                <div class="infoSection">
+                    <div class="infoSectionTitle">File đã chia sẻ · <span id="infoFilesCount"></span></div>
+                    <div id="infoFilesList" class="mediaGrid"></div>
+                    <div id="infoFilesEmpty" class="sharedEmptyState" style="display:none"><i class="fa-solid fa-images"></i>Chưa có ảnh/video nào được chia sẻ trong cuộc trò chuyện này.</div>
+                </div>
+            </div>
+            <div id="infoPinsBody" style="display:none">
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Tin đã ghim · <span id="infoPinsCount"></span></div>
+                    <div id="infoPinsList"></div>
+                    <div id="infoPinsEmpty" class="sharedEmptyState" style="display:none"><i class="fa-solid fa-thumbtack"></i>Chưa có tin nhắn nào được ghim trong cuộc trò chuyện này.</div>
+                </div>
+            </div>
+            <div id="infoLinksBody" style="display:none">
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Link đã chia sẻ · <span id="infoLinksCount"></span></div>
+                    <div id="infoLinksList"></div>
+                    <div id="infoLinksEmpty" class="sharedEmptyState" style="display:none"><i class="fa-solid fa-link"></i>Chưa có link nào được chia sẻ trong cuộc trò chuyện này.</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+</div>
+
+<script src="assets/js/state.js"></script>
+<script src="assets/js/theme-accent.js"></script>
+<script src="assets/js/sidebar-conversations.js"></script>
+<script src="assets/js/auth.js"></script>
+<script src="assets/js/messaging-core.js"></script>
+<script src="assets/js/compose-reactions-pins.js"></script>
+<script src="assets/js/messages-render.js"></script>
+<script src="assets/js/history-ws.js"></script>
+</body>
+</html>

@@ -154,6 +154,37 @@ public class MessageHistoryRegistry {
   }
 
   /**
+   * {@code from_user_id} của 1 tin -- dùng để biết "tin vừa được react/trả lời là CỦA AI" (xem
+   * {@code ChatSessionManager#handleReaction}, tạo noti kiểu "reaction" cho đúng chủ tin). Optional
+   * rỗng nếu id không tồn tại (tin đã bị xoá cứng -- không xảy ra trong app này, hoặc id sai).
+   */
+  /**
+   * {@code fromUserId} CÙNG {@code createdAt} (epoch millis) của 1 tin -- {@code createdAt} LÀ tin
+   * đó thật sự được gửi lúc nào, KHÁC hẳn "bây giờ" (lúc gọi hàm này, vd lúc ai đó vừa react). Bug
+   * thật đã gặp: dùng nhầm "bây giờ" làm {@code ts} cho noti kiểu "reaction" (xem
+   * {@code ChatSessionManager#handleReaction}) -- client dùng {@code ts} đó làm mốc tìm quanh
+   * (seek, xem {@code jumpToMessage}) khi tin CHƯA có sẵn trong khung chat, tìm sai hẳn quanh "bây
+   * giờ" thay vì quanh lúc tin gốc (có thể rất cũ) thật sự được gửi -- luôn báo "Không tìm thấy tin
+   * gốc" dù tin vẫn còn nguyên, chỉ đơn giản là tìm sai chỗ.
+   */
+  public record MessageOwner(UUID fromUserId, long createdAtEpochMillis) {}
+
+  public CompletionStage<java.util.Optional<MessageOwner>> getOwner(UUID messageId) {
+    return supplier.executeReadOnly(conn -> conn.preparedQuery(
+            "SELECT from_user_id, (extract(epoch from created_at) * 1000)::bigint AS ts FROM messages WHERE id = ?")
+        .execute(Tuple.of(messageId))
+        .toCompletionStage()
+        .thenApply(rows -> {
+          var it = rows.iterator();
+          if (!it.hasNext()) {
+            return java.util.Optional.<MessageOwner>empty();
+          }
+          var row = it.next();
+          return java.util.Optional.of(new MessageOwner(row.getUUID("from_user_id"), row.getLong("ts")));
+        }));
+  }
+
+  /**
    * Xoá MỀM (không xoá dòng, chỉ đánh dấu {@code deleted_at}) -- CHỈ khi đúng {@code from_user_id}
    * gốc VÀ chưa xoá trước đó (WHERE lọc cả 2), trả về true nếu THỰC SỰ vừa xoá (rowCount &gt; 0) để
    * caller biết có nên fan-out DELETE hay không (xem {@code ChatSessionManager#handleDelete}) --

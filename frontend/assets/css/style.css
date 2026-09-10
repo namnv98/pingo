@@ -1,0 +1,1114 @@
+        :root {
+            --accent: #6d5bf5;
+            --accent-dark: #5a48e0;
+            --accent-soft: #efecff;
+            --accent-rgb: 109, 91, 245;
+            --canvas: #f5f5f8;
+            --surface: #ffffff;
+            --ink: #1b1d29;
+            --ink-soft: #7a7e91;
+            --ink-faint: #a3a6b8;
+            --line: #e8e8ee;
+            --shadow-sm: 0 1px 2px rgba(28,25,60,.05);
+            --shadow-md: 0 8px 24px rgba(28,25,60,.08);
+            --shadow-lg: 0 20px 48px rgba(28,25,60,.14);
+            --radius-lg: 18px;
+            --radius-md: 12px;
+            --radius-sm: 9px;
+            /* Token phụ -- TRƯỚC ĐÂY hardcode thẳng mã màu ngay tại chỗ dùng, giờ tách ra đây để có
+               chỗ ĐỔI RIÊNG cho theme tối (xem khối [data-theme="dark"] + @media prefers-color-scheme
+               bên dưới) mà không phải sửa lại từng nơi. --primary-btn-*: nút "chính" màu trung tính
+               (đăng nhập, tạo group...) CỐ Ý tách khỏi --ink -- --ink tự đảo (đen ↔ trắng gần như) theo
+               theme để làm màu CHỮ, nhưng nút này cần luôn là 2 MÀU TƯƠNG PHẢN NHAU (nền đậm/chữ nhạt ở
+               theme sáng, nền nhạt/chữ đậm ở theme tối), không thể suy ra thẳng từ mỗi --ink được. */
+            --primary-btn-bg: #1b1d29;
+            --primary-btn-fg: #ffffff;
+            --primary-btn-hover-bg: #34364a;
+            --theirs-bubble-bg: #f0f0f5;
+            --btn-hover-bg: #f7f6fd;
+            --btn-hover-border: #d9d5f2;
+            --scrollbar-thumb: #dcdaee;
+            --scrollbar-thumb-hover: #c7c3e8;
+            --reaction-hover-bg: #f0f2f5;
+        }
+        /* ===== Theme sáng/tối cho TOÀN BỘ app (khác nền/màu bong bóng RIÊNG TỪNG cuộc trò chuyện ở
+           trên, xem BG_STORAGE_KEY) -- áp dụng data-theme="dark"/"light" lên <html> (xem
+           applyThemeMode/themeMenu), "Theo hệ thống" (không set thuộc tính) thì để nguyên
+           prefers-color-scheme của hệ điều hành tự quyết, sống bằng CSS thuần không cần JS can thiệp
+           mỗi lần OS đổi theme. :root:not([data-theme="light"]) đảm bảo lựa chọn "Sáng" tường minh LUÔN
+           thắng dù OS đang ở dark mode. */
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --accent: #7c6cf7;
+                --accent-dark: #6a5aeb;
+                --accent-soft: #251f3d;
+                --accent-rgb: 124, 108, 247;
+                --canvas: #131318;
+                --surface: #1c1c24;
+                --ink: #eef0f7;
+                --ink-soft: #b6b9cc;
+                --ink-faint: #767b91;
+                --line: #2e2e3a;
+                --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+                --shadow-md: 0 8px 24px rgba(0,0,0,.35);
+                --shadow-lg: 0 20px 48px rgba(0,0,0,.45);
+                --primary-btn-bg: #eef0f7;
+                --primary-btn-fg: #15151b;
+                --primary-btn-hover-bg: #d5d8e6;
+                --theirs-bubble-bg: #2a2a35;
+                --btn-hover-bg: #26263a;
+                --btn-hover-border: #3c3560;
+                --scrollbar-thumb: #37374a;
+                --scrollbar-thumb-hover: #48485f;
+                --reaction-hover-bg: #2a2a38;
+            }
+        }
+        :root[data-theme="dark"] {
+            --accent: #7c6cf7;
+            --accent-dark: #6a5aeb;
+            --accent-soft: #251f3d;
+            --accent-rgb: 124, 108, 247;
+            --canvas: #131318;
+            --surface: #1c1c24;
+            --ink: #eef0f7;
+            --ink-soft: #b6b9cc;
+            --ink-faint: #767b91;
+            --line: #2e2e3a;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+            --shadow-md: 0 8px 24px rgba(0,0,0,.35);
+            --shadow-lg: 0 20px 48px rgba(0,0,0,.45);
+            --primary-btn-bg: #eef0f7;
+            --primary-btn-fg: #15151b;
+            --primary-btn-hover-bg: #d5d8e6;
+            --theirs-bubble-bg: #2a2a35;
+            --btn-hover-bg: #26263a;
+            --btn-hover-border: #3c3560;
+            --scrollbar-thumb: #37374a;
+            --scrollbar-thumb-hover: #48485f;
+            --reaction-hover-bg: #2a2a38;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body { font-family: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink); font-size: 13px; background: var(--canvas); -webkit-font-smoothing: antialiased; transition: background-color .15s, color .15s; }
+        button { padding: 7px 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); cursor: pointer; font-size: 13px; font-family: inherit; font-weight: 500; transition: background .12s, border-color .12s, transform .08s, box-shadow .12s; }
+        button:hover { background: var(--btn-hover-bg); border-color: var(--btn-hover-border); }
+        button:active { transform: scale(.97); }
+        /* Nút chính màu trung tính (đen/mực đậm ở theme sáng, gần trắng ở theme tối -- xem
+           --primary-btn-bg), KHÔNG phải tím -- đúng tinh thần ảnh tham khảo: màu sắc gần như trung
+           tính hoàn toàn (đen/trắng/xám), tím chỉ dùng làm điểm nhấn nhỏ (icon, badge, trạng thái được
+           chọn), KHÔNG dùng làm màu nút hành động chính hay đổ bóng phát sáng màu mè. */
+        button.primary { background: var(--primary-btn-bg); color: var(--primary-btn-fg); border-color: var(--primary-btn-bg); font-weight: 600; }
+        button.primary:hover { background: var(--primary-btn-hover-bg); border-color: var(--primary-btn-hover-bg); }
+        button.icon { padding: 6px 9px; }
+        /* 6 icon reply/pin/lock/link/trash/react (mặt cười) dùng Font Awesome Free (CDN, xem <link>
+           trong <head>) -- font-family/font-weight thật sự đến từ class .fa-solid của chính thư viện
+           đó, ở đây chỉ set font-size cho khớp cỡ 14px các icon SVG khác trong app đang dùng (mặc định
+           FA ăn theo font-size chữ thường 13px của body, hơi nhỏ hơn 1 chút so với phần còn lại). Nút
+           react trước dùng emoji 🙂 (màu vàng cố định, lạc tông với cụm nút xám/đen còn lại) -- đổi
+           sang icon đồng màu như các icon khác. Bản Free chỉ có style "solid" (khối đặc) cho các icon
+           này -- style "regular" (nét mảnh, khớp tông ICON object hơn) cần Font Awesome Pro, không
+           dùng được.
+           Class: fa-solid fa-reply / fa-thumbtack / fa-lock / fa-link / fa-trash. */
+        .fa-reply, .fa-thumbtack, .fa-lock, .fa-link, .fa-trash, .fa-face-smile { font-size: 14px; }
+        input[type=text], input[type=password], select { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; font-family: inherit; background: var(--surface); color: var(--ink); }
+        input[type=text]:focus, input[type=password]:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        label { font-size: 12px; color: var(--ink-soft); font-weight: 500; }
+        code { background: var(--accent-soft); color: var(--accent-dark); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+        .hint { font-size: 11.5px; color: var(--ink-faint); line-height: 1.55; }
+
+        /* thanh cuộn mảnh, tinh tế hơn mặc định trình duyệt -- áp cho mọi vùng cuộn (sidebar, log chat, chips) */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: padding-box; }
+
+        /* ---------- màn hình đăng nhập ---------- */
+        /* Bỏ hẳn 2 khối gradient/blur trang trí trước đây -- nền phẳng tuyệt đối 1 màu là "sạch" nhất,
+           không có gì để mắt phải xử lý ngoài chính cái card đăng nhập. */
+        #authScreen { height: 100%; display: flex; align-items: center; justify-content: center; background: var(--canvas); }
+        #authCard { width: 372px; border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 32px; background: var(--surface); box-shadow: var(--shadow-md); }
+        #authLogo { width: 46px; height: 46px; border-radius: 14px; background: var(--primary-btn-bg); display: flex; align-items: center; justify-content: center; font-size: 21px; margin-bottom: 16px; box-shadow: var(--shadow-md); }
+        #authCard h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.02em; font-weight: 800; }
+        #authCard .sub { color: var(--ink-soft); font-size: 12.5px; margin-bottom: 22px; line-height: 1.55; }
+        #authCard .field { margin-bottom: 13px; display: flex; flex-direction: column; gap: 6px; }
+        #authCard input { width: 100%; padding: 10px 13px; }
+        #authCard .actions { display: flex; gap: 8px; margin-top: 8px; }
+        #authCard .actions button { flex: 1; padding: 9px 12px; }
+        #authError { margin-top: 14px; color: #dc2626; font-weight: 600; font-size: 12px; display: none; background: #fef2f2; padding: 8px 11px; border-radius: var(--radius-sm); }
+
+        /* ---------- khung app chính (2 cột toàn màn hình) ---------- */
+        #mainApp { height: 100%; display: none; flex-direction: column; }
+        #topbar { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 11px 20px; border-bottom: 1px solid var(--line); background: var(--surface); gap: 12px; z-index: 1; }
+        .pill { padding: 4px 11px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+        .pill.ok { background: #dcfce7; color: #15803d; }
+        .pill.bad { background: #fee2e2; color: #b91c1c; }
+        .pill.pending { background: #fef3c7; color: #b45309; }
+        #topbarLeft, #topbarRight { display: flex; align-items: center; gap: 10px; }
+
+        /* Quả chuông thông báo kiểu Teams -- cùng cơ chế neo popup với #themeMenuWrap bên dưới. */
+        #notifMenuWrap { position: relative; }
+        #notifBadge { position: absolute; top: -3px; right: -3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: #e5484d; color: white; font-size: 9.5px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--surface); pointer-events: none; }
+        #notifMenu { position: absolute; top: calc(100% + 8px); right: 0; width: 320px; max-width: 88vw; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); display: none; flex-direction: column; z-index: 250; }
+        #notifMenu.show { display: flex; }
+        #notifMenuHead { flex: none; padding: 12px 14px; font-size: 13px; font-weight: 700; border-bottom: 1px solid var(--line); }
+        #notifMenuList { max-height: 360px; overflow-y: auto; }
+        #notifMenuEmpty { display: none; padding: 40px 24px; text-align: center; font-size: 12px; line-height: 1.6; color: var(--ink-faint); }
+        .notifItem { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; cursor: pointer; transition: background .1s; }
+        .notifItem:hover { background: var(--canvas); }
+        .notifItem.unread { background: var(--accent-soft); }
+        .notifItem.unread:hover { background: var(--accent-soft); filter: brightness(.97); }
+        .notifItemIcon { flex: none; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; margin-top: 1px; }
+        .notifItemIcon.mention, .notifItemIcon.message { background: var(--accent); }
+        .notifItemIcon.reaction { background: #f5a623; }
+        .notifItemIcon.reply { background: #22b8a0; }
+        .notifItemBody { flex: 1; min-width: 0; }
+        .notifItemText { font-size: 12.5px; line-height: 1.4; color: var(--ink); }
+        .notifItemTime { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+
+        /* Popup chọn theme sáng/tối/theo hệ thống -- neo dưới nút themeBtn (wrap có position:relative
+           để absolute con định vị theo ĐÚNG nút đó, không theo cả #topbarRight). */
+        #themeMenuWrap { position: relative; }
+        #themeMenu { position: absolute; top: calc(100% + 8px); right: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; display: none; flex-direction: column; gap: 1px; min-width: 176px; z-index: 250; }
+        #themeMenu.show { display: flex; }
+        .themeMenuItem { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); border: none; background: none; color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; font-family: inherit; }
+        .themeMenuItem:hover { background: var(--canvas); }
+        .themeMenuItem svg { flex: none; opacity: .8; }
+        .themeMenuItem .themeCheck { margin-left: auto; opacity: 0; color: var(--accent-dark); font-weight: 800; }
+        .themeMenuItem.active { color: var(--accent-dark); background: var(--accent-soft); }
+        .themeMenuItem.active .themeCheck { opacity: 1; }
+        .themeMenuDivider { height: 1px; background: var(--line); margin: 5px 4px; }
+        .accentSwatchLabel { padding: 2px 10px 4px; font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; }
+        .accentSwatchRow { display: flex; gap: 8px; padding: 0 8px 4px; }
+        .accentSwatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; flex: none; cursor: pointer; box-shadow: 0 0 0 1px var(--line) inset; position: relative; }
+        .accentSwatch.active { border-color: var(--ink); }
+        .accentSwatch.active::after { content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 800; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+        #podBadge { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--ink-soft); background: var(--canvas); padding: 3px 8px; border-radius: 6px; }
+        #counters { color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
+        #counters b { color: var(--ink); }
+        #whoami { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 4px; }
+        #whoami .avatar { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
+        /* Avatar NHÓM (icon "users" outline, xem conversationAvatar()) -- co giãn theo % kích thước
+           avatar thay vì cỡ px cố định của icon gốc, dùng chung được cho mọi nơi (sidebar 38px, đầu
+           khung chat 36px, panel Info 64px...) mà không cần viết riêng từng cỡ. */
+        .avatar svg, #infoPanelAvatar svg { width: 52%; height: 52%; display: block; }
+
+        #layout { flex: 1; display: flex; min-height: 0; }
+
+        /* ---------- sidebar ---------- */
+        /* Nền sidebar tối hơn 1 chút so với card bên trong (canvas thay vì gần-trắng như trước) --
+           để các "thẻ" hội thoại (.conv-list-item, xem bên dưới) thật sự NỔI lên khỏi nền, đúng kiểu
+           thẻ có đổ bóng trong ảnh tham khảo, thay vì chìm lẫn vào nền vì cả 2 gần như cùng 1 màu. */
+        /* position: relative -- làm điểm neo cho nút "+" nổi (FAB, xem #newConvPanel), luôn dính cố
+           định góc dưới-phải CỦA SIDEBAR bất kể danh sách hội thoại bên dưới cuộn tới đâu, đúng kiểu
+           nút soạn tin nổi của Telegram (không nằm trong dòng chảy nội dung, không cuộn theo list). */
+        #sidebar { width: 392px; flex: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--canvas); min-height: 0; position: relative; }
+        #sidebarHead { flex: none; padding: 20px 18px 4px; }
+        #sidebarHead .brand { font-weight: 800; letter-spacing: -.01em; font-size: 21px; }
+        /* Ô tìm kiếm hội thoại luôn hiện sẵn (không phải ẩn sau 1 icon bấm-vào-không-làm-gì như
+           trước) -- bo góc vừa (radius-md) ĐỒNG NHẤT với ô tìm user trong panel tạo mới, KHÔNG còn
+           pill tròn 999px (nhìn lệch với phần còn lại). KHÔNG đổi viền/glow tím lúc focus -- giữ
+           nguyên 1 kiểu cho cả lúc rỗng lẫn lúc đang gõ. */
+        #sidebarSearchWrap { flex: none; margin: 14px 18px 6px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; align-items: center; gap: 9px; }
+        #sidebarSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
+        #conversationSearchInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        #conversationSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        /* Nút "Cuộc trò chuyện mới" giờ là NÚT TRÒN NỔI (FAB) neo cố định góc dưới-phải sidebar, đúng
+           kiểu nút soạn tin của Telegram -- không còn nằm trong dòng chảy nội dung phía trên danh
+           sách hội thoại nữa (position: absolute, xem position:relative ở #sidebar). Đây là nút DUY
+           NHẤT trong app cố tình giữ lại box-shadow (elevation) -- "nổi" đúng nghĩa đen cần có bóng đổ
+           để trông tách khỏi mặt phẳng nội dung bên dưới, khác các chỗ khác đã bỏ hẳn shadow/glow. */
+        /* Đặt position:absolute NGAY TRÊN nút summary (không phải trên #newConvPanel/<details> bao
+           ngoài) -- để #newConvBody bên dưới lấy được ĐÚNG #sidebar làm điểm neo (thay vì lấy chính
+           #newConvPanel, vốn chỉ rộng bằng đúng nút tròn), nhờ đó mới canh panel theo ĐÚNG lề của
+           #conversationList được (xem #newConvPanel[open] #newConvBody), không phải lề tự chế riêng. */
+        /* z-index đặt trực tiếp trên summary/#newConvBody (KHÔNG phải trên #newConvPanel/<details> bao
+           ngoài, giờ đã là position:static -- z-index vô tác dụng trên phần tử không positioned). */
+        #newConvPanel summary { position: absolute; right: 12px; bottom: 20px; z-index: 20; width: 56px; height: 56px; padding: 0; border-radius: 50%; cursor: pointer; color: white; background: var(--accent); list-style: none; user-select: none; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.15); transition: background .12s, transform .1s, box-shadow .12s; }
+        #newConvPanel summary:hover { background: var(--accent-dark); transform: scale(1.06); box-shadow: 0 8px 20px rgba(0,0,0,.26), 0 3px 8px rgba(0,0,0,.18); }
+        #newConvPanel summary:active { transform: scale(.94); }
+        #newConvPanel summary::-webkit-details-marker { display: none; }
+        /* Icon-only (bỏ chữ "Cuộc trò chuyện mới") -- nút tròn nhỏ không đủ chỗ cho text, đúng kiểu
+           FAB chỉ có 1 icon duy nhất. Dấu "+" tự xoay 45° thành "×" lúc mở panel -- gợi ý rõ bấm lần
+           nữa để ĐÓNG, không cần thêm chữ/icon phụ nào khác. */
+        #newConvPanel .navIcon { font-size: 26px; font-weight: 400; line-height: 1; display: inline-block; transition: transform .18s; }
+        #newConvPanel[open] .navIcon { transform: rotate(45deg); }
+        #newConvPanel .navLabel, #newConvPanel .navChevron { display: none; }
+        /* Panel tạo mới giờ hiện như 1 THẺ NỔI RIÊNG ngay phía TRÊN nút tròn (giống popover), không
+           còn đẩy danh sách hội thoại xuống dưới như kiểu "dropdown gắn liền nút" trước đây. */
+        /* left: 12px; right: 12px -- khớp ĐÚNG lề trong của .sidebarSection/.conv-list-item (chính là
+           padding 12px 2 bên của #conversationList, xem CSS đó), KHÔNG phải left:0;right:0 sát tuyệt
+           đối mép #sidebar như thử trước (nhìn "khít lề quá", thiếu khoảng thở, lệch với lề mà mọi nội
+           dung khác trong sidebar đang dùng). Panel giờ có cùng lề trái/phải với chính danh sách hội
+           thoại bên dưới, chỉ khác là rộng hơn 1 chút do #conversationList còn cộng thêm border/box
+           riêng của từng thẻ .conv-list-item.
+           bottom: 88px = 20px lề dưới nút + 56px cao nút + 12px khoảng cách -- panel bắt đầu ngay phía
+           trên nút tròn, không đè lên chính nút.
+           top: 118px + BỎ max-height -- neo CẢ cạnh trên lẫn dưới nên panel TỰ GIÃN CHE KÍN toàn bộ
+           vùng danh sách hội thoại (#sidebarListHead + #conversationList, bắt đầu ngay dưới ô tìm
+           kiếm), đúng kiểu overlay phủlist chứ không phải 1 thẻ nhỏ nổi lên giữa. Nội dung dài thì
+           chính panel cuộn trong nó (overflow-y: auto), không lộ hội thoại ra sau nữa. */
+        #newConvPanel[open] #newConvBody { display: flex; position: absolute; left: 12px; right: 12px; top: 118px; bottom: 88px; z-index: 20; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-lg); }
+        #newConvBody { padding: 14px; flex-direction: column; gap: 12px; overflow: hidden; }
+        /* Header panel: tiêu đề + nút đóng, đồng nhất với header auth/topbar (chữ đậm, chữ mờ bên dưới). */
+        #newConvHead { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        #newConvHeadText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        #newConvTitle { font-size: 14px; font-weight: 800; color: var(--ink); letter-spacing: -.015em; }
+        #newConvSub { font-size: 11.5px; color: var(--ink-faint); line-height: 1.4; }
+        #newConvCloseBtn { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft); display: flex; align-items: center; justify-content: center; padding: 0; }
+        #newConvCloseBtn:hover { background: var(--canvas); color: var(--ink); }
+        /* Thanh tìm kiếm trong panel -- ô bo góc vừa (radius-md), nền canvas chìm nhẹ trên mặt surface
+           của panel, không viền để đỡ nặng; icon search mờ bên trái, nút refresh dạng ghost sát phải.
+           cao cố định 42px + focus chỉ đổi màu icon, không viền/glow -- gọn mà vẫn rõ là ô nhập. */
+        #newConvSearchWrap { flex: none; display: flex; align-items: center; gap: 9px; height: 42px; background: var(--canvas); border: 1px solid transparent; border-radius: var(--radius-md); padding: 0 6px 0 12px; }
+        #newConvSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
+        /* input:focus ở đây PHẢI đè rule chung input[type=text]:focus (viền tím + glow 3px) -- người
+           dùng không muốn ô tìm kiếm đổi viền lúc bấm vào. !important vì rule chung dùng selector
+           thuộc tính, specificity ngang, ghi đè bằng !important cho chắc. */
+        #newConvSearchWrap input { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        #newConvSearchWrap input:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        #newConvSearchWrap input::placeholder { color: var(--ink-faint); }
+        #newConvSearchWrap button { flex: none; width: 30px; height: 30px; padding: 0; border: none; background: none; color: var(--ink-faint); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+        #newConvSearchWrap button:hover { background: var(--surface); color: var(--ink); border: none; }
+        /* Tab DM/Group -- giữ đúng kiểu segmented cũ (nền canvas, bo radius-sm, tab active nổi lên bằng
+           nền surface + shadow + chữ accent), KHÔNG dùng pill tròn 999px vì nhìn không hợp với phần còn
+           lại của panel. */
+        .tab-row { flex: none; display: flex; gap: 3px; background: var(--canvas); border-radius: var(--radius-sm); padding: 3px; }
+        .tab-btn { flex: 1; background: none; border: none; border-radius: 7px; padding: 9px 6px; color: var(--ink-soft); font-weight: 600; }
+        .tab-btn:hover { background: rgba(var(--accent-rgb),.08); }
+        .tab-btn.active { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-sm); }
+        /* Danh sách user cuộn -- MỖI hàng là 1 userRow (avatar + tên + tick), KHÔNG còn cụm chips bọc. */
+        .tab-pane { display: none; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+        .tab-pane.active { display: flex; }
+        .userList { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; padding: 2px 2px 4px 0; flex: 1; min-height: 0; }
+        .userList:empty::before { content: 'Không tìm thấy ai khớp'; font-size: 12px; color: var(--ink-faint); font-style: italic; padding: 18px 10px; text-align: center; }
+        .userRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; cursor: pointer; transition: background .12s, border-color .12s; border: 1px solid transparent; }
+        .userRow:hover { background: var(--canvas); border-color: var(--line); }
+        .userRow.selected { background: var(--accent-soft); border-color: var(--accent); }
+        .userRow .userRowAvatar { width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 800; }
+        .userRow .userName { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .userRow .userCheck { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: transparent; flex: none; background: var(--surface); transition: background .12s, border-color .12s, color .12s; }
+        .userRow:hover .userCheck { border-color: var(--ink-faint); }
+        .userRow.selected .userCheck { background: var(--accent); border-color: var(--accent); color: white; }
+        .userRow:not(.canSelect) .userCheck { display: none; }
+        /* Chân panel: toggle test + ô tên nhóm + nút tạo. Ẩn/hiện bằng [hidden] -- không render layout thừa. */
+        #newConvFoot { flex: none; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+        #newConvFoot[hidden] { display: none; }
+        .testAccToggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-faint); cursor: pointer; user-select: none; }
+        .testAccToggle input { accent-color: var(--accent); }
+        #groupNameInput, #createGroupBtn { width: 100%; }
+        #memberCount { font-size: 11.5px; color: var(--ink-faint); font-weight: 600; }
+        /* Giữ tương thích nếu chỗ khác còn dùng .chips/.chip (không xoá ngay để tránh vỡ layout lạ). */
+        .field-row { display: flex; flex-direction: column; gap: 7px; }
+        .field-row .inline { display: flex; gap: 6px; }
+        .field-row .inline select, .field-row .inline input { flex: 1; min-width: 0; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; max-height: 220px; overflow-y: auto; padding: 2px; }
+        .chip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; font-size: 12.5px; font-weight: 500; cursor: pointer; transition: all .12s; }
+        .chip:hover { border-color: var(--accent); color: var(--accent); }
+        .chip.selected { background: var(--accent); color: white; border-color: var(--accent); }
+        .chips:empty::before { content: '(không có user nào khớp bộ lọc)'; font-size: 11.5px; color: var(--ink-faint); font-style: italic; }
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+        .toggle-row label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+
+        #sidebarListHead { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 18px 18px 4px; }
+        #sidebarListHead span { font-weight: 800; font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .07em; }
+        /* Khối "Nhắn tin trực tiếp"/"Nhóm" -- đúng kiểu Slack tách Favorites/Channels thành từng
+           khối riêng có tiêu đề hoa nhỏ, thay vì gộp chung 1 danh sách phẳng như trước. */
+        .sidebarSection { margin-bottom: 4px; }
+        .sidebarSectionHead { padding: 12px 12px 6px; display: flex; align-items: center; gap: 7px; }
+        .sidebarSectionHead span { font-weight: 700; font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .07em; }
+        .sidebarSectionHead .sectionIcon { font-size: 11px; }
+        /* padding-bottom rộng hơn hẳn mức bình thường -- chừa chỗ cho nút "+" nổi (FAB, xem
+           #newConvPanel) đè lên, không thì thẻ hội thoại CUỐI CÙNG lúc cuộn hết xuống sẽ bị nút tròn
+           che mất 1 phần, không bấm được. */
+        #conversationList { flex: 1; overflow-y: auto; padding: 0 12px 92px; }
+        /* Mỗi hội thoại = 1 HÀNG phẳng tối giản trên nền sidebar xám (kiểu iMessage): trong suốt, bo góc,
+           KHÔNG thẻ trắng/shadow dày đặc. Hover = 1 lớp_lift rất nhẹ (btn-hover-bg -- KHÁC tông nền
+           canvas của sidebar, dùng canvas sẽ vô hình). Active = accent-soft + thanh accent dọc trái mảnh.
+           Phẳng, không phóng to/di chuyển. */
+        /* Thiết kế lại (bản 2): bo góc mềm hơn (16px thay 12px), item cao thoáng hơn 1 chút, hover/active
+           giờ có CHIỀU SÂU thật (đổ bóng + nhấc nhẹ khi hover, giống hiệu ứng "vật lý" đã áp cho các nút
+           tròn khác trong app phiên này) thay vì chỉ đổi màu nền phẳng lì như bản trước. */
+        .conv-list-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 16px; cursor: pointer; margin-bottom: 3px; background: transparent; transition: background .12s, box-shadow .15s; }
+        .conv-list-item:hover { background: var(--btn-hover-bg); box-shadow: var(--shadow-sm); }
+        .conv-list-item.active { background: var(--accent-soft); box-shadow: 0 3px 10px rgba(var(--accent-rgb), .16); }
+        .conv-list-item.active:hover { background: var(--accent-soft); }
+        .conv-list-item.active .label { color: var(--accent-dark); }
+        .conv-list-item .avatar-wrap { position: relative; flex: none; }
+        /* Avatar to hơn (48px, trước 44px) + VIỀN HALO màu nền (box-shadow, không phải border thật --
+           không cộng thêm vào kích thước layout) tách avatar khỏi nền phía sau (đặc biệt rõ tác dụng
+           trên nền accent-soft của dòng active, avatar không còn "dính chặt" vào nền màu) + đổ bóng nhẹ
+           cho cảm giác nổi khối, giống avatar ring kiểu Discord/Slack. */
+        .conv-list-item .avatar { width: 48px; height: 48px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: 700; box-shadow: 0 0 0 2px var(--surface), 0 2px 5px rgba(0,0,0,.12); }
+        .status-dot { position: absolute; right: 0; bottom: 0; width: 13px; height: 13px; border-radius: 50%; background: #b0b4c2; border: 2.5px solid var(--surface); visibility: hidden; }
+        .status-dot.online { background: #22c55e; visibility: visible; }
+        /* Badge số CHƯA đọc ở góc phải cùng hàng tên; khi chưa đọc thì GIỜ bị ẩn để badge chiếm đúng
+           vị trí đó (1 điểm thông báo duy nhất, không cả giờ lẫn badge cùng chen). Pill gradient (thay
+           màu phẳng) + đổ bóng tím nhẹ cho nổi bật hơn, đúng vai "điểm cần chú ý nhất" trong cả dòng. */
+        .conv-list-item .unreadBadge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: linear-gradient(135deg, var(--accent), var(--accent-dark)); box-shadow: 0 2px 6px rgba(var(--accent-rgb), .4); color: white; font-size: 11px; font-weight: 800; flex: none; align-self: center; display: none; align-items: center; justify-content: center; }
+        .conv-list-item.unread .unreadBadge { display: flex; }
+        .conv-list-item .info { flex: 1; min-width: 0; }
+        .convTopRow { display: flex; align-items: baseline; gap: 8px; }
+        .convTopRow .label { flex: 1; min-width: 0; font-weight: 600; font-size: 14.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conv-list-item.unread .label { font-weight: 700; }
+        /* Giờ khi ĐÃ đọc: mờ góc phải; khi CHƯA đọc ẩn đi (badge chiếm chỗ). */
+        .convTopRow .time { flex: none; font-size: 11px; color: var(--ink-faint); font-weight: 500; white-space: nowrap; }
+        .conv-list-item.unread .convTopRow .time { display: none; }
+        /* Xem trước tin gần nhất -- 1 dòng gọn "..."; chưa đọc ĐẬM hơn nhẹ, đọc rồi xám thường. */
+        .conv-list-item .meta { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; margin-top: 3px; }
+        .conv-list-item.unread .meta { color: var(--ink-soft); font-weight: 600; }
+        .conv-list-item .metaPrefix, .conv-list-item .metaCaption, .conv-list-item .metaText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conv-list-item .metaPrefix { flex: none; }
+        .conv-list-item .metaCaption { min-width: 20px; }
+        .conv-list-item .metaText { flex: 1; min-width: 0; }
+        /* Pill màu cho tin có file (ảnh/video) -- kiểu "Photo"/"Video (x3)" trong ảnh tham khảo, thay
+           vì chỉ ghép 1 emoji vào ngay trong chuỗi chữ xám như trước (không nổi bật/không phân biệt
+           được loại file bằng màu sắc). */
+        .conv-list-item .metaPill { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; flex: none; }
+        .conv-list-item .metaPill.image { background: #fce7f3; color: #be185d; }
+        .conv-list-item .metaPill.video { background: #dcfce7; color: #15803d; }
+        #noConversationsHint { padding: 10px 16px; }
+
+        /* ---------- khung chat chính ---------- */
+        /* min-width: 0 -- mặc định 1 flex item KHÔNG BAO GIỜ tự co nhỏ hơn kích thước nội dung bên
+           trong nó (min-width: auto ngầm định của flexbox), dù chính nó đã khai flex:1. #sidebar bên
+           cạnh cố định 392px, nếu #chatMain "cứng đầu" giữ nguyên độ rộng tối thiểu theo nội dung
+           (vd hàng nút compose không bao giờ xuống dòng) thì tổng 2 cột sẽ TRÀN NGANG toàn trang ở
+           đúng dải rộng "vừa đủ hẹp" (tablet dọc ~768-820px, sidebar vẫn cố định vì chưa chạm
+           breakpoint 680px kiểu điện thoại) -- bug responsive thật đã gặp trên iPad Mini/tablet
+           Android dọc, xác nhận qua chụp màn hình thật (#chatMain rộng hơn phần còn lại của viewport). */
+        #chatMain { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; background: var(--canvas); }
+        #chatEmpty { flex: 1; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 13px; text-align: center; padding: 20px; max-width: 280px; margin: 0 auto; line-height: 1.5; }
+        #chatEmpty::before { content: '👋'; font-size: 30px; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; background: var(--canvas); border-radius: 50%; margin-bottom: 4px; }
+        .conv { display: none; flex-direction: column; height: 100%; min-height: 0; }
+        .conv.active { display: flex; }
+        /* min-height 59px (đã gồm border-bottom 1px, box-sizing border-box toàn cục) -- ÉP cho đầu
+           khung chat CAO BẰNG đúng đầu panel Info bên phải (cùng mốc dưới đây), không để 2 header lệch
+           nhau vài px chỉ vì padding/icon cỡ khác nhau. align-items:center tự canh giữa nội dung. */
+        .conv-head { flex: none; min-height: 59px; background: var(--surface); border-bottom: 1px solid var(--line); padding: 11px 20px; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 10px; z-index: 1; }
+        .conv-head .headLeft { display: flex; align-items: center; gap: 11px; min-width: 0; }
+        .conv-head .avatar { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; background: var(--ink-faint); }
+        /* Cụm icon bên phải conv-head (đổi tên/xoá/thông tin) -- giống dải icon "..., ⭐, ✨, ⓘ" ở
+           đầu khung chat trong ảnh tham khảo: icon phẳng, không viền, chỉ nổi khối khi hover. */
+        .conv-head .headRight { display: flex; align-items: center; gap: 2px; flex: none; }
+        .conv-head .headRight button.icon { border-color: transparent; background: none; padding: 6px 8px; font-size: 13px; }
+        .conv-head .headRight button.icon:hover { background: var(--canvas); border-color: var(--line); }
+        .conv-head .badge { font-weight: 400; color: var(--ink-faint); font-size: 11px; font-family: ui-monospace, monospace; white-space: nowrap; margin-right: 4px; }
+        .conv-head .titleBlock { min-width: 0; }
+        /* Group không đặt tên riêng -- convLabel = nối tên TẤT CẢ thành viên (conversationLabel()) --
+           với group nhiều người/tên dài chuỗi này có thể rất dài, PHẢI cắt bớt (ellipsis) thay vì để
+           tràn, không thì đẩy lệch/che mất cụm icon bên phải (headRight), vỡ cả hàng đầu khung chat. */
+        .conv-head .convLabel { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conv-head.group .convLabel::before { content: '# '; color: var(--ink-faint); font-weight: 400; }
+        .conv-head .subtitle { font-weight: 400; color: var(--ink-faint); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conv-head .subtitle:empty { display: none; }
+        .conv-head .online-status { font-weight: 500; color: #16a34a; font-size: 11.5px; margin-top: 2px; display: none; }
+        .conv-head .online-status.show { display: block; }
+        .typing-indicator { flex: none; padding: 4px 20px; font-size: 11.5px; color: var(--accent); font-style: italic; display: none; }
+        .typing-indicator.show { display: block; }
+
+        /* ---------- panel thông tin/thành viên bên phải -- kiểu Telegram "Bot Info" ---------- */
+        /* Nền panel XÁM (canvas), các khối nội dung là THẺ TRẮNG (surface) bo góc nổi lên -- đúng bố cục
+           Telegram: avatar+tên trên nền xám, bên dưới là 1 card trắng chứa các dòng thông tin. */
+        #infoPanel { width: 356px; flex: none; border-left: 1px solid var(--line); background: var(--canvas); display: flex; flex-direction: column; min-height: 0; }
+        #infoPanel.collapsed { display: none; }
+        #infoPanelHead { flex: none; min-height: 59px; display: flex; align-items: center; justify-content: center; padding: 10px 44px 10px 16px; background: var(--canvas); position: relative; }
+        #infoPanelHead > button.icon { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+        /* Dải tab đầu panel: pill trắng trên nền xám, tab active nổi bằng nền accent-soft + chữ accent
+           (kiểu "Media" đang chọn trong ảnh Telegram), không dùng segmented xám như trước. */
+        #infoTabRow { display: flex; align-items: center; gap: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+        .infoTabBtn { display: inline-flex; align-items: center; justify-content: center; height: 28px; line-height: 1; border: none; background: none; padding: 0 14px; font-size: 12px; font-weight: 600; color: var(--ink-faint); border-radius: 999px; cursor: pointer; }
+        .infoTabBtn.active { color: var(--accent-dark); background: var(--accent-soft); cursor: default; }
+        /* Pins/Files/Links: VẪN bấm được (không dùng disabled) -- bấm vào báo rõ "demo chưa hỗ trợ"
+           thay vì im lặng không phản ứng gì, đỡ gây cảm giác nút bị hỏng/chết. */
+        .infoTabBtn.soon { opacity: .5; }
+        .infoTabBtn:hover { color: var(--ink); }
+        .infoTabBtn.active:hover { color: var(--accent-dark); background: var(--accent-soft); }
+        #infoEmpty { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; color: var(--ink-faint); font-size: 12px; line-height: 1.5; }
+        #infoPanelBody { flex: 1; min-height: 0; overflow-y: auto; display: none; flex-direction: column; }
+        /* Files/Pins/Links dùng chung khung cuộn NGOÀI này -- trước đây chỉ #infoFilesBody có khai,
+           Pins/Links thiếu hẳn (bug: nội dung dài tràn ra ngoài cả panel thay vì tự cuộn riêng). */
+        #infoFilesBody, #infoPinsBody, #infoLinksBody { flex: 1; min-height: 0; overflow-y: auto; display: none; flex-direction: column; }
+
+        /* ---------- tab "Files": lưới ảnh/video kiểu thư viện (Messenger/Telegram "Media"), KHÔNG
+           còn là danh sách tên file -- app chỉ nhận upload image/video (xem accept="image/*,video/*"
+           ở compose), nên xem trước bằng lưới ảnh vuông hữu ích hơn nhiều 1 dòng tên+dung lượng. */
+        .mediaGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 0 16px; }
+        .mediaGridItem { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--line); }
+        .mediaGridItem img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .15s; }
+        .mediaGridItem:hover img { transform: scale(1.06); }
+        .mediaGridItem.isVideo::before { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-style: solid; border-width: 6px 0 6px 10px; border-color: transparent transparent transparent white; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); z-index: 1; pointer-events: none; }
+        /* Chú thích người gửi/giờ chỉ hiện khi hover -- giữ lưới sạch, không cần đọc hết mọi lúc. */
+        .mediaGridMeta { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 6px 5px; font-size: 10px; color: white; background: linear-gradient(to top, rgba(0,0,0,.65), transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .12s; pointer-events: none; }
+        .mediaGridItem:hover .mediaGridMeta { opacity: 1; }
+
+        /* ---------- tab "Pins"/"Links": vẫn là danh sách dòng, nâng thành card bo góc rời nhau thay vì
+           dòng kẻ liền có border-bottom (nhìn "phẳng" kiểu bảng cũ). */
+        .fileListItem { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin: 0 10px 4px; border-radius: 14px; cursor: pointer; transition: background .12s; }
+        .fileListItem:hover { background: var(--surface); box-shadow: var(--shadow-sm); }
+        .fileListThumb { width: 44px; height: 44px; border-radius: 10px; overflow: hidden; flex: none; background: var(--canvas); position: relative; }
+        .fileListThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        /* Badge TRÒN (khác hẳn khối ảnh/video vuông bên trên) -- báo ngay đây là icon tượng trưng
+           (ghim/link), không phải ảnh xem trước thật, cùng tông accent nhất quán với các điểm nhấn khác. */
+        .fileListThumb.iconThumb { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; background: var(--accent-soft); color: var(--accent-dark); }
+        .fileListInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .fileListName { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .fileListMeta { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pinListUnpinBtn { flex: none; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .1s, background .12s; color: var(--ink-faint); border-radius: 50%; }
+        .pinListUnpinBtn:hover { color: var(--ink); background: var(--canvas); }
+        .fileListItem:hover .pinListUnpinBtn { opacity: 1; }
+
+        /* Empty state riêng cho Files/Pins/Links -- icon mờ + chữ căn giữa, thay vì 1 dòng .hint trơn. */
+        .sharedEmptyState { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 56px 28px; color: var(--ink-faint); font-size: 12px; line-height: 1.5; }
+        .sharedEmptyState i { font-size: 24px; opacity: .4; }
+
+        /* ---------- khối đầu panel: avatar to + tên + phụ đề, căn giữa trên nền xám ---------- */
+        #infoPanelTop { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 34px 20px 28px; }
+        #infoPanelAvatarWrap { position: relative; margin-bottom: 16px; }
+        #infoPanelAvatar { width: 96px; height: 96px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 30px; font-weight: 700; box-shadow: var(--shadow-md); }
+        /* Chấm trạng thái tổng quan của hội thoại -- xanh nếu có ai khác online, xám nếu ngoại tuyến. */
+        #infoPanelStatusDot { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 50%; background: #c2c6d2; border: 3px solid var(--canvas); }
+        #infoPanelStatusDot.online { background: #22c55e; }
+        #infoPanelName { font-weight: 700; font-size: 17px; letter-spacing: -.01em; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #infoPanelSubtitle { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+
+        /* ---------- từng khối nội dung: 1 THẺ TRẮNG bo góc nổi trên nền xám ---------- */
+        .infoSection { padding: 0 16px 16px; }
+        /* Tab "Info": Telegram không có tiêu đề khối -- card tự nói lên nội dung, giữ ẩn như cũ.
+           Tab Files/Pins/Links (section nằm NGOÀI #infoPanelBody) thì NGƯỢC LẠI cần hiện số lượng --
+           đây là danh sách đếm được, người dùng cần biết "12 file/3 ghim/5 link" ngay không phải đếm tay. */
+        #infoPanelBody .infoSectionTitle { display: none; }
+        .infoSectionTitle { padding: 14px 16px 8px; font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; }
+        /* Files dùng .mediaGrid (đã tự có padding ngang riêng) nên section cha khỏi lặp lại padding đó. */
+        #infoFilesBody .infoSection { padding: 0 0 16px; }
+        .infoCard { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; box-shadow: var(--shadow-sm); overflow: hidden; }
+        /* Mỗi dòng: icon trái mờ + 2 dòng chữ (giá trị đậm trên, nhãn mờ dưới) -- đúng kiểu từng dòng
+           trong card Bot Info của Telegram (@username / Username, Bio / ...). */
+        /* MỖI DÒNG 1 HÀNG ngang: icon trái + nhãn mờ (chiếm giữa) + giá trị phải đậm. Bỏ layout 2
+           dòng chồng nhau (value/nhãn) -- yêu cầu gọn thành 1 hàng duy nhất mỗi thông tin. */
+        .infoRow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 13px; }
+        .infoRow + .infoRow { border-top: 1px solid var(--line); }
+        .infoRowIcon { width: 20px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--ink-faint); }
+        .infoRowLabel { color: var(--ink-soft); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoRowValue { font-weight: 600; color: var(--ink); text-align: right; flex: none; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoRowValue.badge { font-family: ui-monospace, monospace; font-weight: 500; font-size: 12px; }
+        /* Giá trị "Trạng thái" = 1 chấm + chữ, ĐỒNG BỘ ngôn ngữ với danh sách thành viên bên dưới. */
+        .infoStatusVal { display: inline-flex !important; align-items: center; gap: 7px; justify-content: flex-end; }
+        .infoStatusVal::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #c2c6d2; flex: none; }
+        .infoStatusVal.online { color: var(--ink); }
+        .infoStatusVal.online::before { background: #22c55e; }
+
+        /* ---------- danh sách thành viên: cũng là 1 thẻ trắng, cùng ngôn ngữ với card trên ---------- */
+        #infoMemberList { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; box-shadow: var(--shadow-sm); overflow: hidden; }
+        .infoMemberRow { display: flex; align-items: center; gap: 12px; padding: 10px 16px; transition: background .1s; }
+        .infoMemberRow + .infoMemberRow { border-top: 1px solid var(--line); }
+        .infoMemberRow:hover { background: var(--canvas); }
+        .infoMemberRow .avatar-wrap { position: relative; flex: none; }
+        .infoMemberRow .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; }
+        .infoMemberRow .name { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .infoMemberRow .name .you { color: var(--ink-faint); font-weight: 500; }
+        /* Trạng thái thành viên: chấm + chữ nhỏ bên phải, nhẹ và sạch. */
+        .infoMemberRow .roleBadge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; flex: none; }
+        .infoMemberRow .roleBadge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #c2c6d2; }
+        .infoMemberRow .roleBadge.online { color: var(--ink-soft); }
+        .infoMemberRow .roleBadge.online::before { background: #22c55e; }
+
+        /* ---------- log tin nhắn: bong bóng chat kiểu Facebook Messenger, DÙNG CHUNG cho cả DM (1-1)
+           và nhóm -- theo đúng yêu cầu: "bỏ giao diện chat nhóm khác chat riêng đi, làm giống chat
+           riêng ấy". Không còn kiểu phẳng (Slack) riêng cho nhóm nữa (buildGroupMessageRow đã bị xoá,
+           mọi conversation đều dựng row qua buildDmBubbleRow, xem appendMessageBubble). */
+        /* Bọc riêng .conv-log để .jumpToBottomBtn có 1 điểm neo position:relative -- nút luôn nổi Ở
+           GÓC khung chat (không cuộn theo nội dung), bất kể log đang cuộn tới đâu. */
+        .conv-log-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
+        /* overflow-anchor: none -- tắt hẳn "scroll anchoring" tự động của trình duyệt (Chrome tự bù
+           scrollTop khi nội dung phía trên khung nhìn đổi kích thước, y hệt việc prependOlderMessages/
+           onMediaReady đang tự làm bằng tay ở JS) -- để CẢ 2 CÙNG chạy sẽ bù kép (2 lần), khiến vị
+           trí đang xem lệch đi sai hướng thay vì đứng yên. Tắt hẳn phần trình duyệt, chỉ tin phần JS
+           tự tính (đã tính đúng cho mọi trường hợp chèn/tải ảnh chậm, xem prependOlderMessages). */
+        .conv-log { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 4px 20px 16px; display: flex; flex-direction: column; gap: 0; background: var(--surface); }
+        .conv-log .sys { align-self: center; color: var(--ink-faint); font-size: 11px; background: var(--canvas); padding: 5px 13px; border-radius: 999px; margin: 8px 0; max-width: 90%; text-align: center; }
+        /* Vạch "Tin nhắn mới" -- ranh giới giữa phần ĐÃ đọc (nạp phía trên, từ before=<con trỏ đã
+           đọc>) và phần CHƯA đọc (nạp phía dưới, từ after=<con trỏ đã đọc>) lúc mở lại 1 conversation
+           -- xem loadHistory(). Tô màu accent (khác .dateDivider trung tính) để nổi bật, đúng vai trò
+           "đây là chỗ bạn dừng lại lần trước". */
+        .unreadDivider { display: flex; align-items: center; gap: 14px; color: var(--accent-dark); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 14px; }
+        .unreadDivider::before, .unreadDivider::after { content: ''; flex: 1; height: 1px; background: var(--accent); opacity: .35; }
+        /* Nút "xuống cuối mới nhất" -- chỉ hiện khi ĐANG cuộn lên xem tin cũ (xem isNearBottom() +
+           scroll listener trong ensureConversationCard). Badge tròn góc trên-phải đếm số tin mới đã
+           tới TRONG LÚC đang cuộn lên (xem bumpJumpBadge) -- bấm vào mới thật sự cuộn xuống xem, KHÔNG
+           tự cuộn (đúng yêu cầu: có tin mới không tự nhảy xuống, chỉ báo rồi để người dùng tự bấm). */
+        .jumpToBottomBtn { position: absolute; right: 20px; bottom: 16px; width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-md); display: none; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; padding: 0; z-index: 5; transition: transform .1s; }
+        .jumpToBottomBtn:hover { transform: translateY(-2px); }
+        .jumpToBottomBtn.show { display: flex; }
+        .jumpBadge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: #dc2626; color: white; font-size: 10.5px; font-weight: 800; display: none; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--surface); }
+        .jumpBadge.show { display: flex; }
+        /* Vạch ngăn ngày ("─── Hôm nay ───") -- mốc thời gian rõ ràng để mắt bám vào, đỡ cảm giác cả
+           list tin là 1 khối chữ liên tục vô tận không phân đoạn gì cả. */
+        .dateDivider { display: flex; align-items: center; gap: 14px; color: var(--ink-faint); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; margin: 22px 0 10px; }
+        .dateDivider:first-child { margin-top: 4px; }
+        .dateDivider::before, .dateDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+        /* Hiệu ứng "nảy" nhẹ khi 1 tin THẬT SỰ MỚI (sống qua WS) xuất hiện -- to/rõ hơn hẳn bản cũ
+           (chỉ trồi 4px mờ nhạt, ease-out phẳng lì, thấy chưa đã mắt) -- trượt lên rõ hơn (14px) +
+           easing kiểu "back-out" (cubic-bezier có overshoot nhẹ, phần tử hơi vượt quá đích rồi mới ổn
+           định lại) tạo cảm giác "nảy vào" sống động, thay vì chỉ mờ dần vào như trước.
+           CHỈ dùng translateY (KHÔNG dùng thêm scale() như bản thử trước) -- scale() phóng to/nhỏ
+           NGUYÊN CẢ HÀNG .bubble-row, kéo theo ảnh/video placeholder bên trong cũng bị phóng to/nhỏ
+           theo suốt lúc animate, nhìn giống hệt "khung ảnh đang tự lớn dần" dù kích thước ảnh (đã chừa
+           sẵn đúng pixel, xem fitWithinBox) chưa từng đổi thật -- đây chính là nguyên nhân gây nhầm
+           tưởng "vẫn còn nẩy size khi ảnh/video tải xong" dù placeholder đã đúng 100% từ đầu. translateY
+           chỉ dịch VỊ TRÍ, không đổi kích thước render (getBoundingClientRect width/height không đổi).
+           CHỈ gắn class .liveIn cho tin sống thật sự mới tới (xem appendMessageBubble, JS check
+           entry.suppressAutoScroll) -- KHÔNG áp cho cả loạt tin nạp từ lịch sử lúc mở lại conversation
+           /cuộn lên xem cũ (bulk load hàng chục dòng cùng lúc mà tin nào cũng nảy sẽ rối mắt, phản tác
+           dụng "đã mắt", không phải mỗi tin chỉ có 1 dòng để mà chú ý riêng lẻ được). */
+        @keyframes messageIn { 0% { opacity: 0; transform: translateY(14px); } 60% { opacity: 1; transform: translateY(-2px); } 100% { opacity: 1; transform: translateY(0); } }
+        .bubble-row.liveIn { animation: messageIn .38s cubic-bezier(.34, 1.56, .64, 1); }
+        .seen-status { font-size: 11px; color: var(--ink-faint); }
+        .seen-status.seen { color: var(--accent-dark); font-weight: 600; }
+        /* white-space: pre-wrap -- GIỮ đúng dấu xuống dòng người dùng gõ (Shift+Enter, xem ô nhập
+           tin) khi hiển thị lại trong bong bóng -- mặc định HTML luôn gộp mọi khoảng trắng/xuống dòng
+           liên tiếp thành 1 khoảng trắng (kể cả trong .innerText/.innerHTML), gõ nhiều dòng xong gửi
+           đi lại hiện dính thành 1 dòng duy nhất nếu không khai rõ. Vẫn TỰ xuống dòng bình thường khi
+           1 dòng quá dài (khác "pre" -- không xuống dòng tự động, sẽ tràn ngang bong bóng). */
+        .bubble { font-size: 14.5px; line-height: 1.5; word-break: break-word; white-space: pre-wrap; color: var(--ink); }
+        /* Ảnh/video gửi trong chat -- co lại vừa khung, giữ tỷ lệ gốc, bo góc mềm giống bubble. Bấm
+           vào (ảnh HOẶC video) mở popup xem full-size riêng (xem #mediaLightbox) thay vì mở tab mới
+           trần trụi/nhúng player bé tí ngay trong bong bóng. Video trong bong bóng CHỈ hiện ảnh đại
+           diện (poster) + nút ▶ nổi giữa -- KHÔNG nhúng <video controls> thật ngay trong log tin (bé,
+           chật, dễ bấm nhầm giữa cuộn trang/mở popup) -- bấm vào mới thật sự dựng <video> to, có
+           controls, tự phát trong popup, đúng kiểu 1 "trình xem" riêng biệt. */
+        .msg-media-wrap { position: relative; display: inline-block; cursor: zoom-in; }
+        /* aspect-ratio (gán qua JS inline style KHI biết trước kích thước thật -- xem
+           getMediaDimensions/uploadOneFile) -- trình duyệt CHỪA SẴN đúng khung hình tỷ lệ đó NGAY LẬP
+           TỨC, không cần đợi ảnh/poster video tải xong mới biết cao rộng bao nhiêu. Trước đây <img>
+           chưa có src tải xong thì cao 0px, khiến cả khung bong bóng xẹp lại và nút ▶ (position:
+           absolute, canh giữa theo .msg-media-wrap) trồi ra ngoài lơ lửng xấu xí -- min-width/height
+           là lưới an toàn cho tin CŨ (chưa có width/height lưu kèm, gửi từ trước khi có fix này).
+           opacity 0->1 khi tải xong (.loaded, xem renderMessageContent) thay vì ảnh "bụp" hiện ra đột
+           ngột trong khung đã có sẵn. */
+        .msg-media { display: block; max-width: 280px; max-height: 320px; width: auto; height: auto; min-width: 120px; min-height: 90px; border-radius: 14px; object-fit: contain; background: var(--canvas); opacity: 0; transition: opacity .2s ease-out; }
+        .msg-media.loaded { opacity: 1; }
+        .playOverlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 52px; height: 52px; border-radius: 50%; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; color: white; pointer-events: none; box-shadow: 0 2px 10px rgba(0,0,0,.3); transition: background .12s, transform .12s; }
+        .msg-media-wrap:hover .playOverlay { background: rgba(0,0,0,.72); transform: translate(-50%, -50%) scale(1.08); }
+        /* Gửi NHIỀU ảnh/video CÙNG 1 TIN (không tách thành nhiều tin riêng, xem uploadAndSendFiles) --
+           hiển thị dạng LƯỚI trong CHÍNH bong bóng đó, đúng kiểu "album" Telegram/Messenger: 2 cột,
+           mỗi ô vuông đều nhau (object-fit:cover -- ảnh/video tỷ lệ khác nhau vẫn xếp lưới thẳng hàng,
+           khác kiểu 1 ảnh đơn giữ NGUYÊN tỷ lệ gốc ở trên). Tối đa hiện 4 ô, dư ra bao nhiêu gộp vào
+           chữ "+N" đè lên ô thứ 4 (không vẽ thêm ô nào nữa, tránh lưới phình vô hạn) -- bấm ô bất kỳ
+           đều mở popup xem, có thể bấm mũi tên/phím ← → để xem lần lượt các file CÒN LẠI trong tin đó
+           (kể cả những cái bị gộp vào "+N"), xem openMediaLightbox. */
+        .msg-media-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; width: 280px; border-radius: 14px; overflow: hidden; }
+        .msg-media-grid-item { position: relative; aspect-ratio: 1; cursor: zoom-in; background: var(--canvas); overflow: hidden; }
+        .msg-media-grid-item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        /* Lẻ số ô hiện (vd 3 file: 2 ô hàng đầu + 1 ô cuối) -- ô cuối cùng dãn hết hàng cho đỡ trống 1
+           nửa, không áp dụng khi ô đó đã có overlay "+N" (che chữ mất, không cần thêm hiệu ứng gì). */
+        .msg-media-grid-item.spanFull { grid-column: 1 / -1; aspect-ratio: 2 / 1; }
+        .msg-media-grid-item .playOverlay { width: 38px; height: 38px; }
+        .msg-media-grid-more { position: absolute; inset: 0; background: rgba(0,0,0,.55); color: white; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
+        /* Popup xem ảnh/video full-size -- nền tối gần kín màn hình, media căn giữa, tự co theo tỷ lệ
+           gốc (object-fit:contain), không bị crop/méo. Esc hoặc bấm ra ngoài media (nền tối) đều đóng
+           -- xem closeMediaLightbox/keydown listener. Nhiều file trong CÙNG 1 tin -- thêm mũi tên
+           trái/phải + số thứ tự (vd "2 / 5") để xem lần lượt, ẩn hết nếu tin chỉ có đúng 1 file. */
+        #mediaLightbox { position: fixed; inset: 0; background: rgba(10,10,16,.92); z-index: 200; display: none; align-items: center; justify-content: center; padding: 48px; opacity: 0; transition: opacity .15s; }
+        #mediaLightbox.show { display: flex; opacity: 1; }
+        .lightboxContent { display: flex; align-items: center; justify-content: center; }
+        @keyframes lightboxIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+        /* min-width/height -- lưới an toàn cho tin CŨ không có width/height lưu kèm (gửi từ trước khi
+           có getMediaDimensions, xem renderLightboxCurrent) -- không có gì để chừa đúng tỷ lệ thì vẫn
+           còn 1 khung tối thiểu thay vì co về gần 0 rồi mới bung. */
+        .lightboxMedia { max-width: 92vw; max-height: 88vh; width: auto; height: auto; min-width: 200px; min-height: 140px; border-radius: 10px; box-shadow: 0 24px 64px rgba(0,0,0,.5); object-fit: contain; animation: lightboxIn .18s ease-out; }
+        .lightboxClose { position: fixed; top: 20px; right: 24px; width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.12); color: white; font-size: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s, transform .08s; }
+        .lightboxClose:hover { background: rgba(255,255,255,.25); }
+        .lightboxClose:active { transform: scale(.92); }
+        .lightboxNav { position: fixed; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; border: none; background: rgba(255,255,255,.12); color: white; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s, transform .08s; }
+        .lightboxNav:hover { background: rgba(255,255,255,.25); }
+        .lightboxNav:active { transform: translateY(-50%) scale(.92); }
+        .lightboxNav:disabled { opacity: .3; cursor: default; }
+        .lightboxNav:disabled:hover { background: rgba(255,255,255,.12); }
+        .lightboxPrev { left: 20px; }
+        .lightboxNext { right: 20px; }
+        /* !important -- thắng luôn chính CSS "display:flex/block" ở trên khi tin CHỈ CÓ 1 file (ẩn
+           nút prev/next + số thứ tự, xem renderLightboxCurrent), không thì [hidden] mặc định của
+           trình duyệt (đến từ UA stylesheet, ưu tiên THẤP hơn author CSS dù cùng specificity) bị chính
+           class selector .lightboxNav/.lightboxCounter đè mất. */
+        .lightboxNav[hidden], .lightboxCounter[hidden] { display: none !important; }
+        .lightboxCounter { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,.85); font-size: 12.5px; font-weight: 700; background: rgba(255,255,255,.12); padding: 5px 14px; border-radius: 999px; }
+        /* Popup chọn hình nền riêng cho TỪNG cuộc trò chuyện -- màu phẳng/gradient dựng sẵn hoặc tự
+           tải ảnh lên, lưu client-side (localStorage, xem BG_STORAGE_KEY) vì đây thuần là tuỳ biến
+           hiển thị cá nhân, không cần đồng bộ qua server/những người khác trong hội thoại (giống
+           Messenger/Zalo: mỗi người có thể chọn 1 nền khác nhau cho cùng 1 đoạn chat). Tạo 1 LẦN, tái
+           dùng cho mọi lần bấm -- cùng khuôn với #mediaLightbox/#reactionPicker.  */
+        #bgPickerOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #bgPickerOverlay.show { display: flex; }
+        /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
+        #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #appModalOverlay.show { display: flex; }
+        .appModal { background: var(--surface); border-radius: 16px; width: 400px; max-width: 100%; box-shadow: 0 24px 64px rgba(0,0,0,.35); overflow: hidden; animation: lightboxIn .15s ease-out; }
+        .appModalHead { padding: 18px 20px 0; font-weight: 800; font-size: 15px; color: var(--ink); }
+        .appModalBody { padding: 10px 20px 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; }
+        .appModalInput { display: none; width: calc(100% - 40px); margin: 14px 20px 0; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; font-size: 13.5px; font-family: inherit; background: var(--surface); color: var(--ink); }
+        .appModalInput.show { display: block; }
+        .appModalInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        .appModalInput.invalid { border-color: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.15); }
+        .appModalFoot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px 18px; }
+        .appModalBtn { padding: 8px 16px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+        .appModalBtn:hover { background: var(--canvas); }
+        .appModalBtn.primary { background: var(--primary-btn-bg); color: var(--primary-btn-fg); border-color: var(--primary-btn-bg); }
+        .appModalBtn.primary:hover { background: var(--primary-btn-hover-bg); border-color: var(--primary-btn-hover-bg); }
+        .appModalBtn.danger { background: #ef4444; color: #fff; border-color: #ef4444; }
+        .appModalBtn.danger:hover { background: #dc2626; border-color: #dc2626; }
+        .appModalHint { font-size: 11.5px; color: var(--ink-faint); padding: 6px 20px 0; }
+        .appModalHint.error { color: #ef4444; }
+        .bgPickerModal { background: var(--surface); border-radius: 16px; width: 380px; max-width: 100%; max-height: 84vh; overflow-y: auto; box-shadow: 0 24px 64px rgba(0,0,0,.35); animation: lightboxIn .15s ease-out; }
+        .bgPickerHead { position: sticky; top: 0; background: var(--surface); display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 14px; }
+        .bgPickerHead button { border: none; background: none; cursor: pointer; color: var(--ink-faint); width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
+        .bgPickerHead button:hover { background: var(--canvas); color: var(--ink); }
+        .bgPickerBody { padding: 6px 18px 20px; }
+        .bgPickerSectionTitle { font-size: 11px; font-weight: 800; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 10px; }
+        .bgPickerSectionTitle:first-child { margin-top: 12px; }
+        .bgSwatchGrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+        .bgSwatch { aspect-ratio: 1; border-radius: 12px; cursor: pointer; border: 2px solid transparent; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); background-size: cover; background-position: center; transition: transform .1s, border-color .12s; }
+        .bgSwatch:hover { transform: scale(1.07); }
+        .bgSwatch.selected { border-color: var(--accent); }
+        .bgSwatch.selected::after { content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--accent-dark); font-weight: 800; font-size: 15px; text-shadow: 0 0 4px rgba(255,255,255,.9); }
+        .bgSwatch.defaultSwatch { background-image: linear-gradient(45deg, #d8d8de 25%, transparent 25%), linear-gradient(-45deg, #d8d8de 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d8d8de 75%), linear-gradient(-45deg, transparent 75%, #d8d8de 75%); background-size: 10px 10px; background-position: 0 0, 0 5px, 5px -5px, -5px 0; background-color: var(--canvas); }
+        /* Bo tròn hẳn (khác ô nền bo góc vuông) -- giúp phân biệt ngay bằng mắt "đây là bảng màu BONG
+           BÓNG" với bảng nền ở ngay dưới, không cần đọc tiêu đề mới biết đang chọn cái gì. Ô "Mặc
+           định" dùng chung hoạ tiết ca-rô với .defaultSwatch bên nền (cùng ý nghĩa: "không tuỳ biến"). */
+        .bgSwatch.bubbleSwatch { border-radius: 50%; }
+        .bgUploadBtn { width: 100%; margin-top: 6px; padding: 11px; border-radius: 10px; border: 1.5px dashed var(--line); background: none; color: var(--ink-faint); font-size: 12.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .bgUploadBtn:hover { border-color: var(--accent); color: var(--accent-dark); }
+        .msg-caption { margin-top: 6px; }
+        .bubble .mention { color: var(--accent-dark); font-weight: 600; }
+        /* Link trong tin nhắn chữ -- xanh + gạch chân (mine: nền màu đậm nên chỉ cần chữ đậm, không
+           gạch chân rối mắt trên nền xanh). */
+        .bubble .msgLink { color: var(--accent-dark); text-decoration: underline; word-break: break-all; }
+        .bubble-row.mine .bubble .msgLink { color: var(--my-bubble-fg, white); font-weight: 700; text-decoration: underline; }
+        /* Link-preview card -- tin nhắn CHỈ chứa 1 link: thay chữ thô bằng thẻ nhúng kiểu
+           Messenger/Telegram (ảnh + tiêu đề + mô tả + domain). media-only bỏ nền bubble, card tự lo. */
+        .linkPreviewCard { display: block; width: 100%; max-width: 320px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; text-decoration: none; color: inherit; cursor: pointer; box-shadow: var(--shadow-sm); }
+
+        .linkPreviewImage { display: block; width: 100%; height: 150px; object-fit: cover; border-bottom: 1px solid var(--line); }
+        .linkPreviewInfo { padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+        .linkPreviewDomain { font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .3px; }
+        .linkPreviewTitle { font-size: 13.5px; font-weight: 700; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .linkPreviewDesc { font-size: 12.5px; color: var(--ink-faint); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        /* Skeleton CHỈ còn dùng cho tin CŨ (gửi trước khi server lưu body.preview) -- mọi tin mới đều
+           có preview ngay trong body nên vẽ ĐỒNG BỘ đúng kích thước, không có giai đoạn nở ra.
+           min-height khớp cỡ card thật (ảnh 150 + domain + title 2 dòng + desc 3 dòng) để phần co/dãn
+           còn lại là rất nhỏ, và được bù scrollTop triệt để bằng withScrollAnchored() bên dưới. */
+        .linkPreviewCard.skeleton { min-height: 264px; }
+        .linkPreviewSkeletonImage { width: 100%; height: 150px; border-bottom: 1px solid var(--line); }
+        .linkPreviewSkeletonLines { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+        .linkPreviewSkeletonBar { height: 11px; border-radius: 6px; }
+        .linkPreviewSkeletonBar.b1 { width: 34%; }
+        .linkPreviewSkeletonBar.b2 { width: 92%; height: 13px; }
+        .linkPreviewSkeletonBar.b3 { width: 74%; }
+        /* Shimmer chỉ là nền chuyển sắc chạy ngang -- dùng hoạ tiết riêng, không đụng biến màu nào. */
+        .linkPreviewCard.skeleton .linkPreviewSkeletonImage,
+        .linkPreviewCard.skeleton .linkPreviewSkeletonBar {
+            background: linear-gradient(90deg, var(--canvas) 0%, var(--line) 50%, var(--canvas) 100%);
+            background-size: 300% 100%;
+            animation: previewShimmer 1.3s ease-in-out infinite;
+        }
+        @keyframes previewShimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+        /* Ảnh preview tải lỗi (og:image hết hạn/403/chặn hotlink -- rất hay xảy ra với cdn mạng xã hội):
+           giữ NGUYÊN chỗ 150px bằng khối chữ domain, KHÔNG remove() -- xoá đi sẽ làm card co lại 150px
+           và đẩy mọi tin bên dưới trôi theo, đúng cái bug đang sửa ở đây. */
+        .linkPreviewImageFallback { display: flex; align-items: center; justify-content: center; width: 100%; height: 150px; border-bottom: 1px solid var(--line); background: var(--canvas); color: var(--ink-faint); font-size: 13px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; overflow: hidden; }
+        /* ----- card xem TRƯỚC NGAY TRONG Ô NHẬP (pha compose, giống Slack chat.unfurlLink: dán link
+           vào là hiện card nhỏ + nút ✕ để từ chối, RỒI mới bấm gửi) -----
+           Chiều cao CỐ ĐỊNH 76px -- cao hơn là sao? Vì khối này nằm trong .conv-send, mỗi lần nó
+           hiện/ẩn làm khung .conv-log hẹp đi; composeResizeObserver đã tự bù scrollTop cho mọi lý do
+           đổi chiều cao khối soạn tin, nên chỉ cần kích thước ở đây ỔN ĐỊNH là đủ, không lo đẩy lịch sử. */
+        /* KHÔNG dùng overflow:hidden ở đây -- nút ✕ (.composePreviewRemove) neo top:-6px;right:-6px
+           ĐÈ LÊN góc thẻ, overflow:hidden sẽ CẮT mất nửa nút (đã gặp thật). Ảnh thumb tự bo góc bằng
+           chính border-radius + overflow:hidden của nó nên không cần card cắt hộ. */
+        .composeLinkPreview { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; max-width: 320px; height: 76px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
+        .composeLinkPreviewThumb { width: 56px; height: 56px; flex: none; border-radius: 8px; overflow: hidden; background: var(--canvas); display: flex; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 15px; font-weight: 800; }
+        .composeLinkPreviewThumb img { width: 100%; height: 100%; object-fit: cover; }
+        .composeLinkPreviewBody { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .composeLinkPreviewDomain { font-size: 10px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .composeLinkPreviewTitle { font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .composeLinkPreviewDesc { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* Đang fetch (chưa có metadata) -- vẽ skeleton GIỮ ĐÚNG hình dạng card thật (thumb 56px + domain
+           + 2 thanh title/desc) chứ không phải 1 dòng chữ, để lúc có kết quả chỉ thay nội dung từng phần,
+           chiều cao 76px CỐ ĐỊNH không đổi lần nào và mắt không bị nhảy hình. */
+        .composeLinkPreview.pending { align-items: center; }
+        /* Shimmer dùng chung hoạ tiết với skeleton card trong log (.linkPreviewCard.skeleton) -- cùng 1
+           keyframes previewShimmer, chỉ khác kích thước khối. */
+        .composeLinkPreviewThumb.skeleton { border-radius: 8px; }
+        .composeLinkPreview.pending .composeLinkPreviewThumb.skeleton,
+        .composeLinkPreview.pending .composeLinkPreviewSkeletonBar {
+            background: linear-gradient(90deg, var(--canvas) 0%, var(--line) 50%, var(--canvas) 100%);
+            background-size: 300% 100%;
+            animation: previewShimmer 1.3s ease-in-out infinite;
+        }
+        .composeLinkPreviewSkeletonBar { height: 9px; border-radius: 5px; }
+        .composeLinkPreviewSkeletonBar.b1 { width: 72%; height: 11px; }
+        .composeLinkPreviewSkeletonBar.b2 { width: 46%; }
+        .composeLinkPreview.pending .composeLinkPreviewBody { gap: 5px; justify-content: center; }
+        /* Domain biết được ngay từ URL (không cần fetch) -- hiện CHỮ THẬT giữa đống skeleton, vừa có tín
+           hiệu "đang xem trước link nào" vừa không phải chờ metadata. */
+        .composeLinkPreview.pending .composeLinkPreviewDomain { animation: none; }
+        /* Placeholder tin đã xoá (mềm) -- ghi đè cả nền màu của bong bóng (mine/theirs) để không còn
+           trông như 1 tin bình thường nữa. */
+        .bubble.deletedPlaceholder { font-style: italic; color: var(--ink-faint); background: none; padding: 0; }
+        .bubble-row .bubble.deletedPlaceholder { background: var(--canvas); color: var(--ink-faint); padding: 9px 14px; }
+
+        /* ---------- reply quote ---------- */
+        .reply-quote { border-left: 3px solid var(--accent); background: rgba(109,91,245,.08); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; cursor: pointer; max-width: 100%; }
+        .reply-quote { display: flex; gap: 8px; align-items: center; }
+        .reply-quote:hover { background: rgba(109,91,245,.14); }
+        .reply-quote-body { flex: 1; min-width: 0; overflow: hidden; }
+        .reply-quote-thumb { flex: none; width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--canvas); display: block; }
+        .reply-quote-thumb.video-thumb { position: relative; }
+        .replyBarThumb { flex: none; width: 32px; height: 32px; border-radius: 6px; object-fit: cover; background: var(--canvas); display: none; }
+        .replyBarThumb.show { display: block; }
+        .reply-quote-name { font-size: 11.5px; font-weight: 700; color: var(--accent-dark); line-height: 1.3; }
+        .reply-quote-snippet { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+        .reply-quote.reply-not-found { opacity: .6; font-style: italic; }
+        .bubble-row.mine .reply-quote { border-left-color: rgba(255,255,255,.6); background: rgba(255,255,255,.16); }
+        .bubble-row.mine .reply-quote-name { color: rgba(255,255,255,.95); }
+        .bubble-row.mine .reply-quote-snippet { color: rgba(255,255,255,.78); }
+        .bubble-row.jump-highlight .bubble { animation: replyFlash 1.2s ease; }
+        @keyframes replyFlash { 0%{box-shadow:0 0 0 3px var(--accent-soft);} 100%{box-shadow:none;} }
+        /* reply bar in composer */
+        .replyBar { display: none; align-items: center; gap: 8px; background: var(--canvas); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+        .replyBar.show { display: flex; }
+        .replyBarBody { flex: 1; min-width: 0; }
+        .replyBarName { font-size: 11.5px; font-weight: 700; color: var(--accent-dark); }
+        .replyBarSnippet { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .replyBarClose { flex: none; width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+
+        /* Popup gợi ý @mention -- gõ "@" trong ô nhập (xem updateMentionSuggest trong messaging-core.js).
+           Cùng vị trí/kiểu chèn với .replyBar/.composeLinkPreview (1 khối NGAY TRÊN .composeRow). */
+        .mentionSuggest { display: none; flex-direction: column; gap: 1px; max-height: 168px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 8px; box-shadow: var(--shadow-sm); }
+        .mentionSuggest.show { display: flex; }
+        .mentionSuggestItem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+        .mentionSuggestItem.active, .mentionSuggestItem:hover { background: var(--accent-soft); }
+        .mentionSuggestAvatar { flex: none; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
+        .mentionSuggestAvatar svg { width: 13px; height: 13px; }
+        .mentionSuggestName { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* ---------- cụm nút hành động (thả cảm xúc + xoá) hiện khi hover ---------- */
+        /* Cụm nổi (không phải react-btn riêng lẻ nữa -- giờ có thể có thêm nút xoá bên cạnh, xem
+           .msgDeleteBtn) -- CẢ CỤM 1 khối được canh vị trí + ẩn/hiện cùng lúc, không phải từng nút. */
+        .msg-actions { position: absolute; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none; transition: opacity .12s; }
+        /* JS (positionMsgActions) tính top = TOẠ ĐỘ TÂM bubble -- phải có translateY(-50%) ở đây để
+           dịch cụm lên đúng nửa chiều cao CỦA CHÍNH NÓ thì mới thực sự nằm giữa, thiếu dòng này sẽ bị
+           lệch xuống dưới tâm khoảng nửa chiều cao (đã xảy ra thật với react-btn trước đây). */
+        .bubble-row .msg-actions { transform: translateY(-50%); }
+        .bubble-row:hover .msg-actions { opacity: 1; pointer-events: auto; }
+        /* Popup chọn emoji nằm ngoài .bubble-row (gắn vào body) -- rê chuột ra khỏi hàng tin để bấm
+           chọn emoji sẽ mất :hover, cả cụm phải giữ hiện CƯỠNG BỨC bằng class này (gắn/gỡ lúc mở/đóng
+           popup, xem openReactionPicker/closeReactionPicker) tới khi popup thật sự đóng. */
+        .msg-actions.picker-open { opacity: 1; pointer-events: auto; }
+        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
+        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover { background: var(--canvas); }
+        /* Xoá luôn tô đỏ (không đợi hover) -- hành động phá huỷ, quy ước iOS/Telegram đánh dấu sẵn
+           bằng màu ngay cả lúc chưa tương tác, không phải chỉ đổi màu lúc hover như các nút khác. Đỏ
+           nhạt (#ef4444, không phải #dc2626 đậm) -- vẫn đủ nhận ra "nguy hiểm" nhưng đỡ gắt hơn giữa
+           cụm icon xám còn lại. */
+        .msgDeleteBtn { color: #ef4444; }
+        .msgDeleteBtn:hover { background: #fef2f2; border-color: #fecaca; }
+
+        /* Badge reaction nằm THEO DÒNG ngay dưới nội dung tin (không đè góc bubble nữa -- không còn
+           bubble để đè lên), giống đúng cách Slack/Conceptzilla xếp reaction dưới mỗi tin. */
+        .reactions-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+        /* Mặc định TRUNG TÍNH (trắng/viền xám/chữ đen) -- đúng màu badge reaction trong ảnh tham khảo;
+           chỉ tô tím khi ĐÂY LÀ reaction của chính mình (.mine bên dưới), không tô tím tất cả. */
+        .reaction-pill { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 3px 8px; font-size: 12.5px; font-weight: 700; color: var(--ink); cursor: pointer; box-shadow: var(--shadow-sm); transition: border-color .1s, transform .1s; }
+        .reaction-pill .emoji { font-size: 13px; }
+        .reaction-pill .emoji img { display: block; }
+        .reaction-pill:hover { border-color: var(--accent); transform: translateY(-1px); }
+        .reaction-pill.mine { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-dark); }
+
+        /* ---------- bong bóng kiểu Facebook Messenger -- DÙNG CHUNG cho DM và nhóm. Tên người gửi
+           ("theirs") được tô màu theo avatarColor() của họ (kiểu Discord) -- hữu ích nhất trong nhóm
+           đông người (phân biệt ai nói gì), vô hại với DM (chỉ có đúng 1 người "theirs" nên luôn cùng
+           1 màu cố định). */
+        .bubble-row { position: relative; display: flex; align-items: flex-end; gap: 6px; margin: 8px 0 0; box-sizing: content-box; }
+        .bubble-row.grouped { margin-top: 2px; }
+        /* KHÔNG còn align-self:flex-end/flex-start (co hẹp theo bubble) -- row giờ full-width (thừa
+           hưởng stretch mặc định từ .conv-log) để .bubble-row:hover (bên dưới) kích hoạt được trên CẢ
+           DẢI TRỐNG 2 bên bubble, không chỉ đúng khung bubble/avatar -- rê chuột bất kỳ đâu trên "dòng"
+           chứa tin (kiểu Messenger/Slack) đều hiện nút react/xoá, không cần rê trúng bubble. justify-
+           content thay align-self để đẩy bubble về đúng phía trong dải full-width đó; max-width chuyển
+           xuống .bubble-col (bên dưới) để bubble không bị kéo giãn hết cả dải rộng này. */
+        .bubble-row.mine { justify-content: flex-start; flex-direction: row-reverse; padding-left: 38px; }
+        .bubble-row.theirs { padding-right: 38px; }
+        .bubble-row .avatar { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
+        .bubble-col { display: flex; flex-direction: column; min-width: 0; max-width: 68%; }
+        .bubble-row.mine .bubble-col { align-items: flex-end; }
+        .bubble-row.theirs .bubble-col { align-items: flex-start; }
+        .bubble-row .sender-name { font-size: 11.5px; color: var(--ink-faint); font-weight: 600; margin: 0 12px 3px; }
+        /* Messenger: bo tròn đều tất cả góc (pill), không viền, không đổ bóng -- phẳng hoàn toàn. */
+        .bubble-row .bubble { padding: 9px 14px; border-radius: 18px; font-size: 14.5px; line-height: 1.4; }
+        /* --my-bubble-bg/--my-bubble-fg: gán ở CHÍNH .conv (thẻ card), xem applyConversationBubbleColor
+           -- cascade xuống mọi .bubble-row.mine trong card đó, KHÔNG ảnh hưởng conversation khác. Chưa
+           tuỳ biến thì rơi về giá trị mặc định (fallback của var()) giống hệt màu cũ. */
+        .bubble-row.mine .bubble { background: var(--my-bubble-bg, #0084ff); color: var(--my-bubble-fg, white); }
+        .bubble-row.theirs .bubble { background: var(--theirs-bubble-bg); color: var(--ink); }
+        /* Ảnh/video KHÔNG kèm chữ -- bỏ hẳn nền màu + đệm của bubble, để ảnh tự nó là "bong bóng"
+           (đúng kiểu Messenger thật) thay vì có 1 khối nền màu thừa bao quanh ảnh. */
+        .bubble-row.mine .bubble.media-only, .bubble-row.theirs .bubble.media-only { background: none; padding: 0; }
+        .bubble-row.mine .bubble .mention { color: var(--my-bubble-fg, white); font-weight: 800; text-decoration: underline; }
+        /* 2 bubble liền nhau CÙNG người gửi (grouped): làm phẳng bớt góc nối giữa chúng. .grouped = có
+           tin NGAY TRƯỚC cùng nhóm -- bo phẳng góc TRÊN. .has-next = có tin NGAY SAU -- bo phẳng góc
+           DƯỚI. Tin đơn lẻ: không cái nào, tròn đều 4 góc. Đúng cách Facebook Messenger làm. */
+        .bubble-row.mine.grouped .bubble { border-top-right-radius: 4px; }
+        .bubble-row.mine.has-next .bubble { border-bottom-right-radius: 4px; }
+        .bubble-row.theirs.grouped .bubble { border-top-left-radius: 4px; }
+        .bubble-row.theirs.has-next .bubble { border-bottom-left-radius: 4px; }
+        .bubble-time { font-size: 10px; color: var(--ink-faint); margin: 3px 12px 0; }
+        .bubble-row.mine .bubble-time { text-align: right; }
+        .bubble-row .seen-status { margin-left: 4px; }
+        .bubble-row .seen-status.seen { color: var(--accent-dark); font-weight: 700; }
+        /* bubble-wrap: bọc riêng .bubble để .reactions-row có 1 điểm neo position:relative chính xác
+           bằng kích thước bubble -- shrink-wrap tự nhiên vì reactions-row là absolute. */
+        .bubble-wrap { position: relative; }
+        .bubble-wrap.has-reactions { margin-bottom: 12px; }
+        /* Pill reaction cao ~25px (padding 3px + border 2px mỗi bên + icon 14px), neo bottom:-8px --
+           nghĩa là mép TRÊN của nó ăn vào ~17px kể từ mép dưới bubble. .bubble-row .bubble vốn chỉ có
+           9px padding-bottom (< 17px) nên PHẦN CHỮ DÒNG CUỐI bị pill đè lên (đã tính lại, đúng như
+           report "che mất nội dung tin nhắn") -- không phải mỗi phần bo góc trong veo như ý đồ ban
+           đầu. Nới riêng padding-bottom của bubble CÓ reaction (chỉ 20px, đủ chỗ + dư ~3px) để chữ
+           được đẩy lên nhường khoảng trống sạch cho pill, vẫn giữ đúng kiểu "đè lên góc" (Messenger/
+           Telegram) chứ không đổi cách neo vị trí bên dưới. */
+        .bubble-wrap.has-reactions .bubble { padding-bottom: 20px; }
+        /* Huy hiệu reaction ĐÈ LÊN góc bubble (kiểu Facebook thật) thay vì xếp hàng riêng bên dưới. */
+        .bubble-row .reactions-row { position: absolute; bottom: -8px; margin-top: 0; flex-wrap: nowrap; gap: 2px; }
+        .bubble-row.theirs .reactions-row { right: -4px; }
+        .bubble-row.mine .reactions-row { left: -4px; }
+        .bubble-row .reaction-pill { border: 2px solid var(--surface); border-radius: 999px; box-shadow: 0 1px 4px rgba(31,36,48,.25); }
+        .bubble-row .reaction-pill:hover { transform: translateY(-2px) scale(1.08); border-color: var(--surface); }
+        .bubble-row .reaction-pill.mine { border-color: var(--accent-soft); }
+
+        /* Tooltip riêng cho reaction ("Alice, Bob đã bày tỏ cảm xúc 👍") -- thay cho title mặc định
+           của trình duyệt (chậm, xấu, không style được) -- xem showReactionTooltip/hideReactionTooltip. */
+        #reactionTooltip { position: fixed; background: rgba(24,24,27,.94); color: white; font-size: 12px; line-height: 1.4; padding: 6px 11px; border-radius: 8px; max-width: 220px; text-align: center; z-index: 101; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .12s, transform .12s; }
+        #reactionTooltip.show { opacity: 1; transform: translateY(0); }
+        #reactionTooltip::after { content: ''; position: absolute; left: var(--arrow-left, 50%); bottom: -4px; width: 8px; height: 8px; background: inherit; transform: translateX(-50%) rotate(45deg); border-radius: 1px; }
+
+        /* Popup chọn emoji: THẺ bo góc (radius-md) nổi trên nền, viền mảnh + bóng đổ sâu có lớp viền
+           trong -- đồng bộ ngôn ngữ với mọi popup trong app (theme menu, lightbox). Mũi tên nhỏ trỏ
+           xuống nút kích hoạt. Hiệu ứng bung nhẹ (scale bật lên) + từng emoji lần lượt "nảy vào"
+           (stagger) cho cảm giác sống động kiểu Messenger. */
+        #reactionPicker { position: fixed; display: flex; gap: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 6px 8px; box-shadow: 0 12px 32px rgba(28,25,60,.22), 0 0 0 1px rgba(28,25,60,.04); z-index: 100; transform-origin: bottom center; transform: scale(.7) translateY(8px); opacity: 0; pointer-events: none; transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .12s; }
+        #reactionPicker.show { transform: scale(1) translateY(0); opacity: 1; pointer-events: auto; }
+        /* left: biến CSS --arrow-left (đặt qua JS mỗi lần mở, xem openReactionPicker) -- KHÔNG cố định
+           50% nữa: khi popup bị kẹp/đẩy sang một bên cho đủ chỗ (gần lề trái/phải màn hình), tâm popup
+           không còn thẳng hàng với nút kích hoạt nữa, mũi tên phải tự tính lại theo đúng vị trí nút. */
+        #reactionPicker::after { content: ''; position: absolute; left: var(--arrow-left, 50%); bottom: -6px; width: 11px; height: 11px; background: var(--surface); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: translateX(-50%) rotate(45deg); border-radius: 0 0 3px 0; z-index: -1; }
+        /* Mỗi emoji là 1 nút tròn; hover NỔI lên + phóng to + nền accent-soft, active ép xuống. Emoji
+           lần lượt nảy vào (stagger qua --i đặt ở JS) cho cảm giác "bung" vui mắt lúc mở. */
+        #reactionPicker button { border: none; background: none; font-size: 23px; width: 40px; height: 40px; padding: 0; cursor: pointer; border-radius: 50%; line-height: 1; display: flex; align-items: center; justify-content: center; transition: transform .13s cubic-bezier(.34,1.56,.64,1), background .12s; animation: emojiPop .3s cubic-bezier(.34,1.56,.64,1) both; animation-delay: calc(var(--i, 0) * 28ms); }
+        #reactionPicker button:hover { background: var(--accent-soft); transform: translateY(-7px) scale(1.32); }
+        #reactionPicker button:active { transform: translateY(-2px) scale(1.1); }
+        #reactionPicker button img { display: block; pointer-events: none; }
+        @keyframes emojiPop { from { opacity: 0; transform: scale(.4) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+        /* Menu ghim (.pinBtn trong .msg-actions) -- danh sách nút chữ dọc, cùng cơ chế định vị/kẹp
+           viewport với #reactionPicker (xem openPinMenu) nhưng khác hẳn cấu trúc (không phải lưới icon). */
+        #pinMenu { position: fixed; display: none; flex-direction: column; min-width: 180px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 4px; box-shadow: 0 12px 32px rgba(28,25,60,.22), 0 0 0 1px rgba(28,25,60,.04); z-index: 100; }
+        #pinMenu.show { display: flex; }
+        #pinMenu button { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none; text-align: left; font-size: 13px; color: var(--ink); padding: 8px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+        #pinMenu button:hover { background: var(--canvas); }
+        #pinMenu button::before { flex: none; color: var(--ink-faint); }
+
+        /* Popup CHÈN EMOJI vào ô nhập (emoji-picker-element, xem <script type="module"> ở <head>) --
+           khác hẳn #reactionPicker (chỉ 6 icon cố định cho thả cảm xúc). display:none mặc định, JS chỉ
+           thêm/gỡ class .show để bật/tắt (không animate scale như reactionPicker -- widget này khá nặng
+           (search box, lưới cả nghìn emoji), animate lúc bật dễ giật). Các biến --... là CSS custom
+           property riêng của emoji-picker-element, xuyên qua được Shadow DOM để tự đổi theo theme sáng/
+           tối hiện tại của app (ăn theo đúng token màu :root đang dùng, không cần tự viết CSS riêng cho
+           2 theme lần nữa). */
+        emoji-picker#composeEmojiPicker {
+            position: fixed; z-index: 100; display: none;
+            border-radius: var(--radius-md); overflow: hidden;
+            box-shadow: 0 12px 32px rgba(28, 25, 60, .22), 0 0 0 1px rgba(28, 25, 60, .04);
+            --background: var(--surface);
+            --border-color: var(--line);
+            --indicator-color: var(--accent);
+            --input-border-color: var(--line);
+            --input-font-color: var(--ink);
+            --input-placeholder-color: var(--ink-faint);
+            --category-font-color: var(--ink-faint);
+            --outline-color: var(--accent);
+        }
+        emoji-picker#composeEmojiPicker.show { display: block; }
+
+        /* Popup GIF/STICKER (Giphy, xem openGifPicker/openStickerPicker/GIPHY_API_KEY) -- Giphy có 2
+           catalog TÁCH RIÊNG (/gifs/... và /stickers/...., is_sticker:1 -- ảnh minh hoạ nhân vật/biểu
+           cảm nền trong suốt, KHÁC hẳn GIF thường) nên dùng đúng key này cho cả 2 luôn, không cần thêm
+           dịch vụ khác. Tự vẽ tay (không có 1 web component mã nguồn mở tương đương emoji-picker-element
+           cho GIF/sticker) nhưng rất đơn giản: ô tìm kiếm + lưới ảnh thumbnail cuộn dọc -- DÙNG CHUNG 1
+           bộ class .mediaPicker... cho cả #gifPicker lẫn #stickerPicker (chỉ khác id để mở/đóng đúng
+           cái, xem ensureMediaPicker), cùng khuôn kích thước/vị trí với #composeEmojiPicker cho đồng bộ. */
+        .mediaPicker {
+            position: fixed; z-index: 100; display: none; flex-direction: column;
+            width: 352px; height: 420px; background: var(--surface); border: 1px solid var(--line);
+            border-radius: var(--radius-md); overflow: hidden;
+            box-shadow: 0 12px 32px rgba(28, 25, 60, .22), 0 0 0 1px rgba(28, 25, 60, .04);
+        }
+        .mediaPicker.show { display: flex; }
+        .mediaPickerSearch { flex: none; margin: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font-family: inherit; font-size: 13.5px; }
+        .mediaPickerSearch:focus { outline: none; border-color: var(--accent); }
+        .mediaPickerGrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 8px 8px; align-content: start; }
+        .mediaPickerGrid img { width: 100%; height: 90px; object-fit: cover; border-radius: 8px; cursor: pointer; background: var(--canvas); display: block; transition: transform .1s; }
+        .mediaPickerGrid img:hover { transform: scale(1.03); }
+        .mediaPickerStatus { flex: none; padding: 20px; text-align: center; color: var(--ink-faint); font-size: 12.5px; }
+
+        /* Khung soạn tin kiểu ảnh tham khảo: PHẲNG hoàn toàn, không viền/không pill bo tròn quanh cả
+           khối -- chỉ 1 gạch mảnh phân cách với khung tin nhắn phía trên, nút tròn màu ĐẶC (không
+           phải icon xám nhạt) cho đính kèm/emoji, y hệt các nút tròn xanh trong ảnh. Nút gửi vẫn giữ
+           trạng thái "xám khi rỗng -> tím khi có nội dung" (cải tiến so với ảnh tham khảo tĩnh, đúng
+           hành vi app chat thật) thay vì tô màu cứng bất kể có gõ gì chưa. */
+        .conv-send { flex: none; padding: 10px 20px 10px; background: var(--surface); border-top: 1px solid var(--line); }
+        .composeCard { background: none; }
+        /* Dải xem trước NHIỀU file cùng lúc (gửi multi-file) -- mỗi file 1 thẻ vuông nhỏ trong 1 hàng
+           cuộn ngang (không phải 1 thẻ to full-width kèm tên file như bản chỉ-1-file trước đây, không
+           đủ chỗ cho nhiều thẻ). Tên file bỏ khỏi hiển thị (không đủ chỗ với nhiều thẻ cạnh nhau) --
+           xem qua title (tooltip hover) thay vì chữ luôn hiện. */
+        /* Thẻ file: overflow-x:visible để nút ✕ góc trên-phải không bị cắt (KHÔNG để overflow:hidden
+           trên chính item). thumb tự bo góc riêng. */
+        .composePreview { padding-bottom: 10px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+        .composePreviewList { display: flex; gap: 10px; overflow-x: auto; overflow-y: visible; padding: 6px 6px 2px 0; }
+        .composePreviewItem { position: relative; flex: none; overflow: visible; }
+        .composePreviewThumb { width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--canvas); display: flex; }
+        .composePreviewThumb img, .composePreviewThumb video { width: 100%; height: 100%; object-fit: cover; }
+        /* Nút ✕ ĐÈ LÊN góc thẻ (không nằm cùng hàng như trước) -- đúng kiểu WhatsApp/Telegram gỡ bớt
+           1 file trong dải nhiều file đã chọn, viền trắng để tách khỏi ảnh nền phía sau thẻ. */
+        .composePreviewRemove { position: absolute; top: -6px; right: -6px; border: 2px solid var(--surface); background: var(--ink); width: 20px; height: 20px; border-radius: 50%; padding: 0; font-size: 10px; line-height: 1; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .composePreviewRemove:hover { background: #dc2626; }
+        /* align-items: flex-end CỐ ĐỊNH (không đổi theo số dòng) -- nút Gửi (44px, xem .composeSendBtn)
+           luôn là phần tử cao nhất hàng, các phần tử thấp hơn (đính kèm/emoji/ô nhập lúc 1 dòng) tự bù
+           margin-bottom RIÊNG (xem từng CSS) sao cho TÂM của chúng trùng đúng tâm nút Gửi -- margin đó
+           là hằng số (chênh lệch chiều cao / 2), KHÔNG phụ thuộc chiều cao hàng hiện tại, nên vị trí các
+           icon LUÔN CỐ ĐỊNH dù ô nhập cao bao nhiêu dòng, không bao giờ nhảy vị trí lúc chuyển 1 dòng
+           sang nhiều dòng (bug thật đã gặp khi trước đây dùng align-items:center rồi đổi sang flex-end
+           qua JS -- 2 công thức tính khác nhau cho các phần tử cao khác nhau nên bị giật lúc chuyển).
+           Ô nhập CAO HƠN nút Gửi (đã gõ nhiều dòng) thì margin-bottom của nó không còn ý nghĩa "canh
+           giữa" nữa (bình thường, không cần xử lý gì thêm) -- flex-end vẫn ghim đúng mép dưới như cũ. */
+        .composeRow { display: flex; align-items: flex-end; gap: 10px; }
+        /* <textarea> (không phải <input>) để hỗ trợ NHIỀU DÒNG (Shift+Enter xuống dòng, Enter gửi,
+           xem inputEl.addEventListener('keydown',...)) -- khác input[type=text] chỉ 1 dòng, không
+           wrap, cuộn ngang khi dài. resize:none (không cho kéo tay chỉnh cỡ -- tự cao dần đã đủ, kéo
+           tay sẽ phá layout hàng ngang với các nút). max-height + overflow-y: auto -- cao tối đa ~6
+           dòng rồi tự cuộn BÊN TRONG ô nhập, không phình vô hạn chiếm hết khung chat. Nền xám bo góc
+           vừa phải (KHÔNG bo tròn hết cỡ) -- CHỈ RIÊNG ô nhập có nền này, đính kèm/emoji/gửi vẫn đứng
+           ngoài như cũ. KHÔNG VIỀN, kể cả lúc focus (bấm vào gõ chữ) cũng KHÔNG hiện viền/glow gì thêm
+           -- chủ động không có :focus khác biệt nào cả, giữ y hệt lúc chưa bấm. margin-bottom: 4px --
+           chiều cao tự nhiên 1 dòng (36px) kém nút Gửi (44px) đúng 8px, chia đều 4px trên/dưới để tâm
+           trùng nhau lúc chỉ 1 dòng (xem giải thích chung ở .composeRow). */
+        textarea.composeInput { flex: 1; min-width: 0; border: none; background: var(--canvas); border-radius: 12px; padding: 8px 12px; margin-bottom: 4px; font-family: inherit; font-size: 14.5px; line-height: 1.4; resize: none; max-height: 132px; overflow-y: auto; }
+        textarea.composeInput:focus { outline: none; border: none; box-shadow: none; }
+        /* Bản gương dùng đo chiều cao (xem autoGrowComposeInput) -- đứng HẲN NGOÀI luồng layout
+           (position:absolute + toạ độ âm xa màn hình) để không bao giờ ảnh hưởng tới .conv-log hay bất
+           kỳ phần tử nào khác, dù có đổi kích thước bao nhiêu lần. height:auto CỐ ĐỊNH (không bao giờ bị
+           gán lại như ô nhập thật) -- scrollHeight của nó luôn phản ánh đúng "cần cao bao nhiêu" ngay
+           tức thì mỗi lần đổi .value, không cần bước "reset về auto" nào cả. */
+        .composeInputMirror { position: absolute; top: -9999px; left: -9999px; height: auto; max-height: none; visibility: hidden; pointer-events: none; }
+        /* Emoji: NÚT ICON TINH GIẢN (ghost) -- trong, chỉ hiện nền xám nhạt lúc hover, không tranh giành
+           sự chú ý với nút Gửi (điểm nhấn chính, xem .composeSendBtn bên dưới). margin-bottom: 4px --
+           cùng lý do với textarea.composeInput (36px, kém nút Gửi 8px, chia đều 4px). */
+        .composeIconBtn { border: none; background: transparent; color: var(--ink-faint); width: 36px; height: 36px; margin-bottom: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; transition: background .12s, color .12s, transform .08s; }
+        .composeIconBtn:hover { background: var(--canvas); color: var(--ink); }
+        .composeIconBtn:active { transform: scale(.9); }
+        .composeIconBtn:disabled { background: transparent; color: var(--line); cursor: not-allowed; }
+        /* Nút "+" DUY NHẤT thay cho dải 3 icon luôn hiện (bug thật đã gặp: 3 icon màu + emoji + nút Gửi
+           chiếm quá nhiều chỗ ngang trên điện thoại, bóp nhỏ chính ô nhập -- ảnh chụp thật từ máy xác
+           nhận). Bấm vào mới hiện .attachMenu (popup nhỏ nổi lên, xem openAttachMenu) chứa 3 lựa chọn --
+           đúng kiểu Messenger/Zalo thật, không có gì luôn thường trực chiếm chỗ cả. margin-bottom: 4px --
+           cùng lý do/công thức với .composeIconBtn (36px, kém nút Gửi 8px, chia đều 4px). */
+        .attachMenuBtn { border: none; width: 36px; height: 36px; margin-bottom: 4px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: white; cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent-dark)); box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: filter .12s, transform .1s, box-shadow .12s; }
+        .attachMenuBtn:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,.22); }
+        .attachMenuBtn:active { transform: scale(.92); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+        /* Popup .attachMenu -- 3 nút màu (ảnh/video, sticker, GIF) tái dùng NGUYÊN class .attachTrayBtn
+           (giữ đúng màu/kích thước/hiệu ứng đã có), chỉ khác chỗ ở: trước đây nằm THẲNG trong .composeRow
+           (luôn hiện), giờ nằm trong popup nổi (chỉ hiện khi bấm .attachMenuBtn, xem openAttachMenu).
+           class (không phải id) -- MỖI card 1 cái RIÊNG (nested trong .composeRow của card đó, xem
+           ensureConversationCard), không phải 1 singleton dùng chung như #reactionPicker/#gifPicker --
+           đơn giản hơn (khỏi phải "chuyển chủ" giữa các conversation mỗi lần đổi tab), và giữ được
+           .attachBtn bên trong sống suốt vòng đời card để logic disable-khi-đầy (MAX_PENDING_FILES,
+           xem renderPendingFilePreviews) hoạt động y hệt như trước, không cần viết lại. */
+        /* flex-direction: column -- xếp DỌC (ảnh/video trên cùng, sticker giữa, GIF dưới cùng) thay vì
+           ngang, đúng ý muốn thay vì hàng ngang cũ. border-radius lớn nhưng KHÔNG dùng 999px (pill tròn
+           hết cỡ chỉ hợp dáng ngang dẹt) -- khối giờ cao/hẹp nên bo góc vừa phải trông tự nhiên hơn. */
+        .attachMenu { position: fixed; z-index: 100; display: none; flex-direction: column; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 8px 6px; box-shadow: 0 12px 32px rgba(28, 25, 60, .22), 0 0 0 1px rgba(28, 25, 60, .04); }
+        .attachMenu.show { display: flex; }
+        /* box-shadow + nhấc nhẹ lúc hover (translateY) -- cho cảm giác "nút vật lý" có chiều sâu thay vì
+           phẳng lì, giống các nút tròn nổi bật khác trong app (vd #newConvPanel summary). Màu riêng từng
+           nút lấy từ ĐÚNG bảng màu app đang dùng (AVATAR_PALETTE, xem avatarColor) thay vì tự chọn màu
+           tuỳ hứng -- nhất quán với phần còn lại của app (avatar, v.v). */
+        .attachTrayBtn { border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: white; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: filter .12s, transform .1s, box-shadow .12s; }
+        .attachTrayBtn:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,.22); }
+        .attachTrayBtn:active { transform: scale(.92); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+        .attachTrayBtn.attachBtn { background: linear-gradient(135deg, #4a97d6, #2f6fae); } /* xanh dương -- AVATAR_PALETTE #3b82c4 */
+        .attachTrayBtn.stickerTrayBtn { background: linear-gradient(135deg, #d9709a, #b0538f); } /* hồng -- AVATAR_PALETTE #b0538f, đúng tông "vui/sticker" hơn vàng cũ */
+        /* Màu CỐ ĐỊNH (không dùng var(--ink)) -- --ink đảo sáng/tối theo theme (gần trắng ở dark mode),
+           chữ trắng trên đó sẽ mất hẳn tương phản, xem cùng lý do với .attachBtn/.stickerTrayBtn ở trên
+           (badge màu thương hiệu cố định, không đổi theo theme). */
+        .attachTrayBtn.gifTrayBtn { background: linear-gradient(135deg, #6b7488, #545d70); border-radius: 9px; font-size: 10px; font-weight: 800; letter-spacing: .3px; } /* xám xanh -- AVATAR_PALETTE #5f6b85 */
+        /* Nút GỬI: HÌNH TRÒN ĐẶC nổi bật -- là hành động CHÍNH duy nhất giữa 2 nút phụ ghost. To hơn
+           hẳn (44px) + nền GRADIENT tím (accent -> accent-dark) tạo chiều sâu + bóng đổ có GLOW tím lan
+           ra, nên "đập vào mắt" ngay khi có nội dung. 2 trạng thái:
+           - rỗng (disabled): nền canvas, icon mờ, không bóng, bấm vô hại;
+           - có nội dung (.active): gradient + glow + tự "thở" nhẹ (pulse) để mời bấm, hover nổi lên,
+             active ép xuống. */
+        .composeSendBtn { border: none; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; background: var(--canvas); color: var(--ink-faint); cursor: default; transition: background .12s, color .12s, transform .1s, box-shadow .15s; }
+        .composeSendBtn svg { flex: none; width: 17px; height: 17px; }
+        .composeSendBtn.active { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%); color: white; box-shadow: 0 4px 14px rgba(var(--accent-rgb),.5), 0 0 0 4px rgba(var(--accent-rgb),.12); cursor: pointer; animation: sendPulse 2.2s ease-in-out infinite; }
+        .composeSendBtn.active:hover { transform: translateY(-2px) scale(1.04); box-shadow: 0 7px 20px rgba(var(--accent-rgb),.55), 0 0 0 5px rgba(var(--accent-rgb),.16); animation: none; }
+        .composeSendBtn.active:active { transform: scale(.9); box-shadow: 0 2px 8px rgba(var(--accent-rgb),.5); animation: none; }
+        /* "Thở" nhẹ: glow co giãn quanh nút mời bấm -- chỉ chạy lúc active, tắt ngay khi hover/active
+           để không cạnh tranh với phản hồi tương tác thật. */
+        @keyframes sendPulse { 0%, 100% { box-shadow: 0 4px 14px rgba(var(--accent-rgb),.5), 0 0 0 4px rgba(var(--accent-rgb),.12); } 50% { box-shadow: 0 4px 14px rgba(var(--accent-rgb),.5), 0 0 0 8px rgba(var(--accent-rgb),.04); } }
+        .composeSendBtn .sendBtnLabel { display: none; } /* chỉ dùng icon, không chữ -- đúng kiểu Telegram */
+
+        /* ---------- responsive: máy tính bảng/điện thoại ---------- */
+        .backBtn { display: none; border: none; background: none; padding: 6px; margin-right: 2px; }
+        .backBtn:hover { background: var(--canvas); }
+
+        /* Tablet trở xuống: panel thông tin không còn chiếm hẳn 1 cột -- nổi đè lên như drawer trượt
+           từ phải vào, bật/tắt vẫn bằng đúng nút ⓘ (toggleInfoPanel), chỉ khác cách hiển thị so với
+           desktop (đẩy layout) -- đủ rộng cho 3 cột thì không cần kiểu drawer này làm gì. */
+        @media (max-width: 1000px) {
+            #infoPanel {
+                position: fixed; top: 0; right: 0; bottom: 0; z-index: 40;
+                width: min(360px, 88vw); flex: none; display: flex;
+                transform: translateX(100%); transition: transform .2s ease-out;
+                box-shadow: var(--shadow-lg);
+            }
+            #infoPanel.collapsed { transform: translateX(100%); }
+            #infoPanel:not(.collapsed) { transform: translateX(0); }
+        }
+
+        /* Điện thoại: sidebar và khung chat không đủ chỗ hiện đồng thời -- chỉ hiện 1 trong 2 tại 1
+           thời điểm, chuyển qua lại bằng cách bấm vào 1 hội thoại (mở chat) / nút mũi tên quay lại
+           (về danh sách), xem goBackToSidebar() và class "mobileChatOpen" gắn trên #layout. */
+        @media (max-width: 680px) {
+            #layout { position: relative; }
+            #sidebar, #chatMain { width: 100%; flex: 1 1 100%; }
+            #layout:not(.mobileChatOpen) #chatMain { display: none; }
+            #layout.mobileChatOpen #sidebar { display: none; }
+            .backBtn { display: inline-flex; align-items: center; justify-content: center; }
+            /* Bớt phần "debug" (đếm gói tin, tên pod) trên màn hình hẹp -- vốn chỉ để dev soi, chiếm
+               chỗ quý giá trên điện thoại mà người dùng thường không cần thấy. */
+            #counters, #podBadge { display: none; }
+            #topbar { padding: 8px 12px; gap: 8px; }
+            #whoami .name { display: none; } /* còn avatar là đủ nhận ra "đây là mình", tên dài dễ vỡ hàng hẹp */
+            .conv-head { padding: 9px 12px; }
+            .conv-log { padding: 4px 12px 12px; }
+            .conv-send { padding: 10px 8px 14px; }
+            /* Bớt khoảng cách thừa giữa các cụm trong khu soạn tin -- nhường thêm chỗ cho ô nhập. Không
+               còn cần thu nhỏ icon nữa (như bản trước đây từng làm) -- gộp 3 icon đính kèm/sticker/GIF
+               vào ĐÚNG 1 nút "+" (.attachMenuBtn, mở popup .attachMenu khi bấm, xem CSS/JS phần đó) đã
+               tự giải quyết gọn vấn đề chật chỗ trên điện thoại, không cần đánh đổi icon nhỏ đi nữa. */
+            .composeRow { gap: 6px; }
+            #infoPanel { width: 100vw; }
+            /* iOS Safari tự động phóng to trang khi focus input có font-size < 16px -- đặt đúng 16px
+               để tránh hành vi khó chịu này (vấn đề mobile-web kinh điển, không phải suy đoán). */
+            input[type=text], input[type=password] { font-size: 16px; }
+            #authCard { width: 92vw; padding: 26px 20px; }
+        }

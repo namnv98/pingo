@@ -41,6 +41,18 @@ data:
         first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- 4 tai khoan test co san -- mat khau THAT ca 4 deu la "123456aA@" (hash bcrypt ben duoi, tao
+    -- bang chinh org.mindrot.jbcrypt ma UserRegistry dung, KHONG phai gia lap) -- khoi phai
+    -- POST /register lai tu dau moi lan xoa PVC/deploy lai cum local. ON CONFLICT DO NOTHING: file
+    -- nay van co the chay lai tren 1 DB da co san (xem cac khoi ALTER TABLE IF NOT EXISTS khac trong
+    -- file nay), khong duoc lam vo UNIQUE(username) hay ghi de mat khau nguoi dung da tung doi.
+    INSERT INTO users (id, username, password_hash) VALUES
+        ('7b9ed680-5084-472d-8877-4708bdfdb9fa', 'namnv98', '$2a$10$Jad6FtCkbhmDQI6KDBo/dOS0wM/EDQ.8IH95MG1T2XwzeHQEcguQm'),
+        ('42c4e5c3-dfa5-4cda-be97-17b492c1adbf', 'namnv99', '$2a$10$Jad6FtCkbhmDQI6KDBo/dOS0wM/EDQ.8IH95MG1T2XwzeHQEcguQm'),
+        ('c4f9b475-08cc-4453-a85f-eb2d3cf9056a', 'namnv97', '$2a$10$Jad6FtCkbhmDQI6KDBo/dOS0wM/EDQ.8IH95MG1T2XwzeHQEcguQm'),
+        ('78926d64-7774-46b1-a763-e41c9d9e940a', 'namnv96', '$2a$10$Jad6FtCkbhmDQI6KDBo/dOS0wM/EDQ.8IH95MG1T2XwzeHQEcguQm')
+    ON CONFLICT (username) DO NOTHING;
+
     -- Lich su tin nhan -- xem MessageHistoryRegistry (colony). Khong co FK toi conversation_members
     -- hay users, giu dung quy uoc loose-schema da co san cua conversation_members (khong co bang
     -- conversations rieng de FK toi).
@@ -124,19 +136,43 @@ data:
     );
     CREATE INDEX IF NOT EXISTS idx_message_links_conversation_created ON message_links (conversation_id, created_at DESC);
 
-    -- Noti "ban co tin nhan moi" cho user OFFLINE HOAN TOAN luc tin toi (khong session WS nao song
-    -- o bat ky pod harbor nao -- xem PresenceRegistry, chat-domain). Chua co ha tang push that
-    -- (FCM/APNs/email), day la noi LUU LAI de nguoi dung thay khi quay lai (GET /notifications ben
-    -- herald) -- xem NotificationRegistry.
+    -- "type" phan biet nguon goc 1 dong noti (xem NotificationRegistry):
+    --   'message' -- ban co tin nhan moi luc OFFLINE HOAN TOAN (khong session WS nao song o bat ky
+    --               pod harbor nao -- xem PresenceRegistry, chat-domain) -- ghi qua herald
+    --               NotificationConsumer, CO dieu kien (chi luu neu that su offline/khong ACK kip).
+    --   'mention'/'reply'/'reaction' -- ai do @nhac ten/tra loi/tha cam xuc vao tin CUA MINH -- ghi
+    --               THANG tu colony ChatSessionManager luc persist tin/reaction, LUON luu (khong
+    --               dieu kien online/offline, giong feed hoat dong cua Teams/Slack: van hien trong
+    --               chuong dai du ban da thay tin do truc tiep trong khung chat).
+    -- message_id: tin nhan lien quan (tin duoc nhac/duoc tra loi/duoc tha cam xuc) -- dung de "nhay
+    -- toi dung tin" tu client (xem jumpToMessage trong history-ws.js). NULL cho du lieu cu truoc khi
+    -- co cot nay (khong the truy hoi lai duoc, chap nhan duoc vi chi anh huong noti rat cu).
+    -- created_at: luc SU KIEN xay ra (tin toi/react/tra loi/nhac ten) -- quyet dinh thu tu "moi nhat
+    -- truoc". message_ts: gio tin GOC that su duoc gui -- voi "reaction" co the LECH XA created_at
+    -- (react vao 1 tin rat cu); voi "mention"/"reply"/"message" thi luon bang nhau. Client dung
+    -- rieng message_ts lam moc "seek" khi tin chua co san trong khung chat -- LAN 2 gia tri nay la
+    -- bug that da gap: dung nham created_at (luc react) lam moc seek se tim sai han quanh "bay gio"
+    -- thay vi quanh luc tin goc that su duoc gui, luon bao "khong tim thay tin goc" du tin con nguyen
+    -- (xem javadoc ChatSessionManager#createNotification).
     CREATE TABLE IF NOT EXISTS notifications (
         id UUID NOT NULL PRIMARY KEY,
         user_id UUID NOT NULL,
         conversation_id UUID NOT NULL,
         from_user_id UUID NOT NULL,
+        message_id UUID,
+        type TEXT NOT NULL DEFAULT 'message',
         body_preview TEXT,
         created_at TIMESTAMPTZ NOT NULL,
+        message_ts TIMESTAMPTZ,
         read_at TIMESTAMPTZ
     );
+    -- ALTER ... IF NOT EXISTS -- cum da deploy tu truoc (PVC con giu qua --uninstall, xem
+    -- deploy-k3s.sh) co bang notifications CHUA co cac cot nay -- CREATE TABLE IF NOT EXISTS o tren
+    -- se khong tu them cot vao bang da ton tai, phai ALTER rieng de nang cap tai cho, khong mat du
+    -- lieu cu.
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message_id UUID;
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'message';
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message_ts TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;
 
     -- Token push (FCM) cua tung thiet bi/trinh duyet -- xem PushTokenRegistry, herald PushService.

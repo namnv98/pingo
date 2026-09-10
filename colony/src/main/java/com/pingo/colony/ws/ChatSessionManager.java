@@ -9,6 +9,7 @@ import com.pingo.colony.ws.delivery.MessageDelivery;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.notification.NotificationRegistry;
 import com.pingo.chat.domain.pin.MessagePinRegistry;
 import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.colony.ws.routing.RoutingVersionSync;
@@ -61,6 +62,7 @@ public class ChatSessionManager {
   private final MessagePinRegistry pins;
   private final MessageLinkRegistry links;
   private final LinkPreviewService linkPreviewService;
+  private final NotificationRegistry notifications;
   private final Vertx vertx;
   private final RoutingVersionSync routingVersionSync;
   private final MessageDelivery messageDelivery;
@@ -82,7 +84,8 @@ public class ChatSessionManager {
       MessageHistoryRegistry history,
       MessagePinRegistry pins,
       MessageLinkRegistry links,
-      LinkPreviewService linkPreviewService) {
+      LinkPreviewService linkPreviewService,
+      NotificationRegistry notifications) {
     this.serverId = serverId;
     this.vertx = vertx;
     this.membership = membership;
@@ -90,6 +93,7 @@ public class ChatSessionManager {
     this.pins = pins;
     this.links = links;
     this.linkPreviewService = linkPreviewService;
+    this.notifications = notifications;
     this.routingVersionSync = new RoutingVersionSync(vertx, connector);
     this.messageDelivery = new MessageDelivery(registry, connector);
     vertx.eventBus().consumer(serverId, messageDelivery::onRoutedMessage);
@@ -370,6 +374,30 @@ public class ChatSessionManager {
           logDbPoolThrottled("failed to save reaction for message {}", messageId, ex);
           return null;
         });
+    // Chỉ noti lúc ĐẶT reaction (không phải huỷ) -- giống "gạch bỏ" 1 reaction thì không ai cần biết.
+    // conversationId ở đây CHỈ dùng để noti nhảy đúng chỗ, không phải khoá bảo mật gì -- sai định
+    // dạng (khó xảy ra, harbor luôn gửi đúng) thì bỏ qua noti, không cần fail cả frame.
+    var finalConversationId = UUIDUtils.parseOrDefault(frame.getConversationId());
+    if (finalEmoji != null && finalConversationId != null) {
+      history
+          .getOwner(messageId)
+          .thenAccept(
+              ownerOpt -> ownerOpt
+                  .filter(owner -> !owner.fromUserId().equals(fromUserId))
+                  // ts = LÚC REACT (now(), giữ nguyên -- quyết định thứ tự "mới nhất trước" trong
+                  // chuông, KHÔNG được đổi thành giờ tin gốc, không thì 1 reaction vừa xảy ra vào tin
+                  // 3 ngày trước sẽ bị xếp tuột xuống đáy danh sách). messageTs (tham số riêng, xem
+                  // createNotification) mới là giờ tin gốc THẬT SỰ được gửi -- client dùng riêng
+                  // trường này làm mốc "seek" khi tin chưa có sẵn trong khung chat (xem
+                  // jumpToMessage) -- lẫn 2 giá trị này bug thật đã gặp: seek sai hẳn quanh "bây giờ"
+                  // thay vì quanh lúc tin gốc, luôn báo "không tìm thấy tin gốc" dù tin còn nguyên.
+                  .ifPresent(owner -> createNotification(
+                      owner.fromUserId(), finalConversationId, fromUserId, messageId, "reaction", finalEmoji, now(), owner.createdAtEpochMillis())))
+          .exceptionally(ex -> {
+            logDbPoolThrottled("failed to look up owner for reaction notification on message {}", messageId, ex);
+            return null;
+          });
+    }
   }
 
   /**
@@ -573,6 +601,7 @@ public class ChatSessionManager {
               // hơn 1 write DB lúc pool đang bận).
               enrichLinkPreview(savedMessageId, body);
               extractMessageLinks(conversationId, savedMessageId, fromUserId, body);
+              notifyReplyAndMentions(conversationId, fromUserId, savedMessageId, body, outgoing.getTs());
             });
   }
 
@@ -586,6 +615,65 @@ public class ChatSessionManager {
     links.extractAndSave(conversationId, messageId, fromUserId, messageText)
         .exceptionally(ex -> {
           logDbPoolThrottled("failed to extract links for message {}", messageId, ex);
+          return null;
+        });
+  }
+
+  /**
+   * Tin VỪA gửi có phải trả lời tin của ai đó, hoặc @nhắc ai đó không -- tạo noti "reply"/"mention"
+   * cho đúng người liên quan (không phải người vừa gửi). LUÔN LƯU, không điều kiện online/offline
+   * (khác {@link #publishNotificationCandidates} -- xem javadoc {@code NotificationRegistry}).
+   *
+   * <p>{@code body.replyTo.fromUserId}: client tự đính kèm sẵn khi bấm nút Trả lời (xem
+   * {@code messaging-core.js} nút replyBtn/setPendingReply) -- không cần tự JOIN lại bảng messages
+   * để biết tin gốc của ai. {@code body.mentionedUserIds}: client tự tính SẴN lúc gửi (quét
+   * "@username" khớp đúng member của conversation, xem {@code sendMsg} trong messaging-core.js) --
+   * server KHÔNG tự parse lại text ở đây (tránh phải thêm 1 bảng tra username↔userId riêng vào
+   * đường xử lý tin nóng); chấp nhận client tự khai đúng vì đây chỉ ảnh hưởng tới VIỆC AI ĐÓ CÓ THẤY
+   * 1 THÔNG BÁO PHỤ hay không, không phải quyền truy cập/nội dung tin nhắn thật.
+   */
+  private void notifyReplyAndMentions(UUID conversationId, UUID fromUserId, UUID messageId, Object body, long ts) {
+    if (!(body instanceof JsonObject json)) {
+      return;
+    }
+    var messageText = json.getString("message");
+    var preview = messageText != null && messageText.length() > 140 ? messageText.substring(0, 140) : messageText;
+
+    var replyTo = json.getJsonObject("replyTo");
+    if (replyTo != null) {
+      var repliedOwner = UUIDUtils.parseOrDefault(replyTo.getString("fromUserId"));
+      if (repliedOwner != null && !repliedOwner.equals(fromUserId)) {
+        // ts == messageTs ở đây -- tin reply CHÍNH LÀ tin vừa gửi, không có độ lệch nào giữa
+        // "lúc xảy ra" và "giờ tin gốc" như trường hợp reaction (xem handleReaction).
+        createNotification(repliedOwner, conversationId, fromUserId, messageId, "reply", preview, ts, ts);
+      }
+    }
+
+    var mentioned = json.getJsonArray("mentionedUserIds");
+    if (mentioned != null) {
+      for (var raw : mentioned) {
+        var userId = UUIDUtils.parseOrDefault(String.valueOf(raw));
+        if (userId != null && !userId.equals(fromUserId)) {
+          createNotification(userId, conversationId, fromUserId, messageId, "mention", preview, ts, ts);
+        }
+      }
+    }
+  }
+
+  /**
+   * {@code ts}: lúc SỰ KIỆN xảy ra (react/trả lời/nhắc tên) -- quyết định thứ tự "mới nhất trước"
+   * trong chuông (xem {@code NotificationRegistry#listForUser}). {@code messageTs}: giờ tin GỐC
+   * (được nhắc/được react/được trả lời) THẬT SỰ được gửi -- {@code jumpToMessage} bên client dùng
+   * riêng giá trị này làm mốc "seek" khi tin chưa có sẵn trong khung chat. Với mention/reply, tin
+   * gốc CHÍNH LÀ tin vừa gửi nên 2 giá trị này luôn bằng nhau; với reaction thì có thể lệch xa
+   * (reaction vào 1 tin rất cũ) -- xem javadoc {@code MessageHistoryRegistry.MessageOwner}.
+   */
+  private void createNotification(
+      UUID userId, UUID conversationId, UUID fromUserId, UUID messageId, String type, String bodyPreview, long ts, long messageTs) {
+    notifications
+        .create(UUID.randomUUID(), userId, conversationId, fromUserId, messageId, type, bodyPreview, ts, messageTs)
+        .exceptionally(ex -> {
+          logDbPoolThrottled("failed to persist " + type + " notification for message {}", conversationId, ex);
           return null;
         });
   }
