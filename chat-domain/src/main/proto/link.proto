@@ -52,6 +52,13 @@ enum FrameType {
   // bang messages), giong SEEN/REACTION -- moi subscriber khac tu thay noi dung bang placeholder
   // "tin nhan da bi xoa" khi nhan duoc, hoac khi load lai lich su (GET /messages tra deleted=true).
   DELETE = 14;
+  // Ghim/bo ghim 1 tin nhan -- id = id tin nhan, body_json = {"scope": "shared"|"private", "pinned":
+  // true|false}. "shared" (ghim chung, moi thanh vien conversation deu thay): CO fan-out + persist
+  // (bang message_pins_shared), giong REACTION/DELETE -- ai cung ghim/bo ghim duoc, khong rieng
+  // admin/nguoi tao. "private" (ghim rieng, chi dung userId da ghim thay duoc): CHI persist (bang
+  // message_pins_private), KHONG fan-out -- tranh lo cho thanh vien khac trong cung conversation biet
+  // ai dang ghim rieng gi, xem ChatSessionManager#handlePin.
+  PIN = 15;
 }
 
 message Frame {

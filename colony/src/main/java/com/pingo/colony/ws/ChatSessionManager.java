@@ -7,7 +7,9 @@ import com.pingo.chat.grpc.Frame;
 import com.pingo.chat.grpc.FrameType;
 import com.pingo.colony.ws.delivery.MessageDelivery;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.link.MessageLinkRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.pin.MessagePinRegistry;
 import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.colony.ws.routing.RoutingVersionSync;
 import com.pingo.colony.ws.session.ChatSession;
@@ -56,6 +58,8 @@ public class ChatSessionManager {
   private final SessionRegistry registry = new SessionRegistry();
   private final ConversationMembershipRegistry membership;
   private final MessageHistoryRegistry history;
+  private final MessagePinRegistry pins;
+  private final MessageLinkRegistry links;
   private final LinkPreviewService linkPreviewService;
   private final Vertx vertx;
   private final RoutingVersionSync routingVersionSync;
@@ -71,11 +75,20 @@ public class ChatSessionManager {
   private final AtomicLong poolExhaustedSuppressedCount = new AtomicLong();
 
   public ChatSessionManager(
-      String serverId, Vertx vertx, PingoConnector connector, ConversationMembershipRegistry membership, MessageHistoryRegistry history, LinkPreviewService linkPreviewService) {
+      String serverId,
+      Vertx vertx,
+      PingoConnector connector,
+      ConversationMembershipRegistry membership,
+      MessageHistoryRegistry history,
+      MessagePinRegistry pins,
+      MessageLinkRegistry links,
+      LinkPreviewService linkPreviewService) {
     this.serverId = serverId;
     this.vertx = vertx;
     this.membership = membership;
     this.history = history;
+    this.pins = pins;
+    this.links = links;
     this.linkPreviewService = linkPreviewService;
     this.routingVersionSync = new RoutingVersionSync(vertx, connector);
     this.messageDelivery = new MessageDelivery(registry, connector);
@@ -149,6 +162,7 @@ public class ChatSessionManager {
       case SEEN -> handleSeen(session, frame);
       case REACTION -> handleReaction(session, frame);
       case DELETE -> handleDelete(session, frame);
+      case PIN -> handlePin(session, frame);
       case PONG -> {} // chi can cham lastSeenAt (da lam o tren), khong can xu ly gi them
       default -> log.debug("unsupported frame type {} from session {}", frame.getType(), session.getId());
     }
@@ -400,6 +414,71 @@ public class ChatSessionManager {
   }
 
   /**
+   * Ghim/bỏ ghim tin {@code frame.getId()} -- {@code frame.getBodyJson()} = {@code {"scope":
+   * "shared"|"private", "pinned": true|false}}. "shared": persist bảng {@code message_pins_shared}
+   * RỒI fan-out cho mọi subscriber khác (cùng pattern {@link #handleReaction}/{@link #handleDelete})
+   * -- ai trong conversation cũng ghim/bỏ ghim chung được, không riêng admin. "private": CHỈ persist
+   * bảng {@code message_pins_private}, KHÔNG fan-out gì cả -- tránh lộ cho thành viên khác biết ai
+   * đang ghim riêng gì; các tab/thiết bị khác của chính người đó tự đồng bộ lại qua
+   * {@code GET /pins} lần sau mở tab Pins.
+   */
+  private void handlePin(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    var messageId = UUIDUtils.parseOrDefault(frame.getId());
+    if (fromUserId == null || messageId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(frame.getConversationId());
+    } catch (IllegalArgumentException e) {
+      return;
+    }
+    if (frame.getBodyJson().isEmpty()) {
+      return;
+    }
+    var body = (JsonObject) Json.decodeValue(frame.getBodyJson());
+    var scope = body.getString("scope");
+    var pinned = body.getBoolean("pinned", Boolean.FALSE);
+    if (!"shared".equals(scope) && !"private".equals(scope)) {
+      return;
+    }
+    var finalConversationId = conversationId;
+    if ("private".equals(scope)) {
+      var persist = Boolean.TRUE.equals(pinned)
+          ? pins.pinPrivate(finalConversationId, messageId, fromUserId)
+          : pins.unpinPrivate(messageId, fromUserId);
+      persist.exceptionally(ex -> {
+        logDbPoolThrottled("failed to save private pin for message {}", messageId, ex);
+        return null;
+      });
+      return;
+    }
+    var persist = Boolean.TRUE.equals(pinned)
+        ? pins.pinShared(finalConversationId, messageId, fromUserId)
+        : pins.unpinShared(messageId);
+    persist
+        .thenAccept(unused -> {
+          var outgoing =
+              Frame.newBuilder()
+                  .setId(frame.getId())
+                  .setType(FrameType.PIN)
+                  .setFromUserId(fromUserId.toString())
+                  .setConversationId(frame.getConversationId())
+                  .setBodyJson(Json.encode(new JsonObject().put("scope", "shared").put("pinned", pinned)))
+                  .setTs(now())
+                  .build();
+          if (!messageDelivery.deliverLocally(outgoing)) {
+            messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+          }
+        })
+        .exceptionally(ex -> {
+          logDbPoolThrottled("failed to save shared pin for message {}", messageId, ex);
+          return null;
+        });
+  }
+
+  /**
    * Báo cho herald "tin nhắn vừa gửi tới conversationId X, đây là member (trừ người gửi)" — herald
    * tự lọc ai đang online (đã nhận real-time rồi, không cần noti) vs offline (lưu noti), xem
    * {@code NotificationConsumer}. Best-effort, không chặn ACK — cùng tinh thần {@link #persistMessage},
@@ -493,7 +572,22 @@ public class ChatSessionManager {
               // thì rowCount() = 0, preview mất luôn (race thật: fetch og: vài trăm ms có thể nhanh
               // hơn 1 write DB lúc pool đang bận).
               enrichLinkPreview(savedMessageId, body);
+              extractMessageLinks(conversationId, savedMessageId, fromUserId, body);
             });
+  }
+
+  /**
+   * Trích mọi URL trong {@code body.message} vào bảng {@code message_links} cho tab "Links" -- xem
+   * {@link MessageLinkRegistry#extractAndSave}. Best-effort, không chặn gì cả -- chạy sau khi tin đã
+   * lưu xong, cùng chỗ với {@link #enrichLinkPreview}.
+   */
+  private void extractMessageLinks(UUID conversationId, UUID messageId, UUID fromUserId, Object body) {
+    var messageText = body instanceof JsonObject j ? j.getString("message") : null;
+    links.extractAndSave(conversationId, messageId, fromUserId, messageText)
+        .exceptionally(ex -> {
+          logDbPoolThrottled("failed to extract links for message {}", messageId, ex);
+          return null;
+        });
   }
 
   /**

@@ -118,5 +118,14 @@ public enum MessageType {
      * xoá" (xem {@code ChatSessionManager#handleDelete} bên colony — fan-out + persist cột
      * {@code deleted_at}, sống qua reload, khác {@link #TYPING} thuần tạm thời).
      */
-    DELETE
+    DELETE,
+    /**
+     * Cả 2 chiều: ghim/bỏ ghim tin nhắn {@code id} — {@code conversationId} bắt buộc, {@code body} =
+     * {@code {"scope": "shared"|"private", "pinned": true|false}}. "shared" (ghim chung): CÓ fan-out
+     * cho MỌI subscriber khác, ai cũng ghim/bỏ ghim được — xem {@code ChatSessionManager#handlePin}
+     * bên colony (fan-out + persist bảng {@code message_pins_shared}, giống {@link #REACTION}).
+     * "private" (ghim riêng): CHỈ persist (bảng {@code message_pins_private}), KHÔNG fan-out — tránh
+     * lộ cho thành viên khác biết ai đang ghim riêng gì; đọc lại qua {@code GET /pins}.
+     */
+    PIN
 }

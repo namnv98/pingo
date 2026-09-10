@@ -9,7 +9,9 @@ import com.pingo.core.boot.start.LegoConfig1;
 import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.colony.ws.ChatSessionManager;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.link.MessageLinkRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.pin.MessagePinRegistry;
 import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.core.grpc.server.LegoGrpcServer;
@@ -71,6 +73,18 @@ public class ColonyAppModule extends AbstractModule {
     return new MessageHistoryRegistry(supplier);
   }
 
+  @Provides
+  @Singleton
+  private MessagePinRegistry messagePinRegistry(JdbcConnectionSupplier supplier) {
+    return new MessagePinRegistry(supplier);
+  }
+
+  @Provides
+  @Singleton
+  private MessageLinkRegistry messageLinkRegistry(JdbcConnectionSupplier supplier) {
+    return new MessageLinkRegistry(supplier);
+  }
+
   /**
    * Resolve og: cho những tin chỉ-chứa-1-link mà client KHÔNG gửi kèm {@code body.preview} (client
    * cũ, hoặc client resolve thất bại lúc đang gõ) -- cùng lớp dùng ở hall cho pha compose, xem
@@ -88,8 +102,10 @@ public class ColonyAppModule extends AbstractModule {
       PingoConnector pingoConnector,
       ConversationMembershipRegistry membership,
       MessageHistoryRegistry history,
+      MessagePinRegistry pins,
+      MessageLinkRegistry links,
       LinkPreviewService linkPreviewService) {
-    return new ChatSessionManager(resolveServerId(), vertx, pingoConnector, membership, history, linkPreviewService);
+    return new ChatSessionManager(resolveServerId(), vertx, pingoConnector, membership, history, pins, links, linkPreviewService);
   }
 
   @Provides

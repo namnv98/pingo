@@ -3,8 +3,10 @@ package com.pingo.hall.api;
 import com.google.inject.Inject;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.link.MessageLinkRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.chat.domain.notification.NotificationRegistry;
+import com.pingo.chat.domain.pin.MessagePinRegistry;
 import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.IRequest;
 import com.pingo.core.api.annotaion.ApiMethod;
@@ -69,6 +71,8 @@ public class HallApiHandlers {
   private final ConversationMembershipRegistry membership;
   private final NotificationRegistry notifications;
   private final FileRegistry files;
+  private final MessagePinRegistry pins;
+  private final MessageLinkRegistry links;
   private final AtomicBoolean ready;
   private final Vertx vertx;
 
@@ -134,6 +138,40 @@ public class HallApiHandlers {
     }
     var limit = parseLimit(request.getParam("limit"));
     return files.listForConversation(conversationId, limit).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
+   * {@code GET /pins?conversationId=<uuid>} -- tab "Pins" panel Info bên demo.html. Cần auth (khác
+   * {@code /files}) -- ghim riêng là dữ liệu RIÊNG của từng user, xem javadoc
+   * {@link MessagePinRegistry#listPins}.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "pins", type = Type.HTTP)})
+  public CompletionStage<byte[]> listPins(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    return pins.listPins(conversationId, userId).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
+   * {@code GET /links?conversationId=<uuid>&limit=} -- tab "Links" panel Info bên demo.html, danh
+   * sách link chung của cả conversation (không riêng user nào, giống {@code /files}), xem javadoc
+   * {@link MessageLinkRegistry#listForConversation}.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "links", type = Type.HTTP)})
+  public CompletionStage<byte[]> listLinks(IRequest request) {
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var limit = parseLimit(request.getParam("limit"));
+    return links.listForConversation(conversationId, limit).thenApply(HallApiHandlers::bytes);
   }
 
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "users", type = Type.HTTP)})

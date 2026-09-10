@@ -7,8 +7,10 @@ import com.google.inject.Provides;
 import com.google.inject.Singleton;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
+import com.pingo.chat.domain.link.MessageLinkRegistry;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
 import com.pingo.chat.domain.notification.NotificationRegistry;
+import com.pingo.chat.domain.pin.MessagePinRegistry;
 import com.pingo.chat.domain.preview.LinkPreviewService;
 import com.pingo.chat.domain.user.UserRegistry;
 import com.pingo.core.api.registry.IApiRegistry;
@@ -98,6 +100,20 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private FileRegistry fileRegistry(JdbcConnectionSupplier supplier) {
     return new FileRegistry(supplier);
+  }
+
+  /** Ghim tin nhắn (chung + riêng) -- xem javadoc {@link MessagePinRegistry}. */
+  @Provides
+  @Singleton
+  private MessagePinRegistry messagePinRegistry(JdbcConnectionSupplier supplier) {
+    return new MessagePinRegistry(supplier);
+  }
+
+  /** Danh sách link đã trích từ nội dung tin nhắn -- xem javadoc {@link MessageLinkRegistry}. */
+  @Provides
+  @Singleton
+  private MessageLinkRegistry messageLinkRegistry(JdbcConnectionSupplier supplier) {
+    return new MessageLinkRegistry(supplier);
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */

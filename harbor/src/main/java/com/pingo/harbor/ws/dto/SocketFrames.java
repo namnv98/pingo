@@ -43,6 +43,7 @@ public class SocketFrames {
             case SEEN -> MessageType.SEEN;
             case REACTION -> MessageType.REACTION;
             case DELETE -> MessageType.DELETE;
+            case PIN -> MessageType.PIN;
             default -> MessageType.ERROR;
         };
     }

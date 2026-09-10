@@ -129,6 +129,15 @@ public class BackendStreamGateway {
   }
 
   /**
+   * Gửi yêu cầu ghim/bỏ ghim tin {@code frame.getId()} -- xem {@link #sendEphemeral}.
+   * {@code frame.getBody()} = {@code {scope, pinned}}, colony tự đọc để quyết định persist bảng nào
+   * và có fan-out hay không (xem {@code ChatSessionManager#handlePin}).
+   */
+  public void sendPin(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.PIN, SocketFrames.encodeBackendBody(frame.getBody()));
+  }
+
+  /**
    * Gửi 1 tín hiệu UI tạm thời (TYPING/SEEN/REACTION) — dùng LẠI stream chung đã mở sẵn (session
    * PHẢI đã subscribe conversation này trước, luôn đúng trong thực tế vì client chỉ gõ/đọc/react
    * được ở 1 conversation đã mở/đã auto-subscribe lúc AUTH). KHÔNG auto-subscribe-rồi-gửi như
@@ -538,7 +547,7 @@ public class BackendStreamGateway {
       // -- giu dung hanh vi cu: nguoi gui thay lai tin cua minh qua kenh MESSAGE, tach biet voi ACK
       // rieng; voi TYPING/SEEN thi client tu loc fromUserId === minh de khong tu hien tin hieu cua
       // chinh minh, con REACTION thi client CAN nhan lai chinh minh de dong bo UI nhieu tab/thiet bi).
-      case MESSAGE, TYPING, SEEN, REACTION, DELETE -> {
+      case MESSAGE, TYPING, SEEN, REACTION, DELETE, PIN -> {
         var conversationId = UUIDUtils.parseOrDefault(frame.getConversationId());
         var localSubscribers = conversationId == null ? null : stream.getLocalSubscribersByConversation().get(conversationId);
         if (localSubscribers == null || localSubscribers.isEmpty()) {

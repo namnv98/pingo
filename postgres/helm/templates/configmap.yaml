@@ -86,6 +86,44 @@ data:
     );
     CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions (message_id);
 
+    -- Ghim CHUNG (moi thanh vien conversation deu thay) -- 1 message_id chi ghim duoc 1 lan (PRIMARY
+    -- KEY message_id), ai ghim truoc thi pinned_by la nguoi do, ghim lai (da ton tai) la no-op (xem
+    -- MessagePinRegistry#pinShared). Tach bang rieng voi message_pins_private (thay vi 1 bang + cot
+    -- scope/user_id nullable) de tranh NULL khong unique trong PRIMARY KEY cua Postgres, giu dung
+    -- quy uoc loose-schema/khong FK cua repo.
+    CREATE TABLE IF NOT EXISTS message_pins_shared (
+        message_id UUID NOT NULL PRIMARY KEY,
+        conversation_id UUID NOT NULL,
+        pinned_by UUID NOT NULL,
+        pinned_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_pins_shared_conversation ON message_pins_shared (conversation_id, pinned_at DESC);
+
+    -- Ghim RIENG -- chi userId da ghim thay duoc, khong fan-out qua WS (xem ChatSessionManager#handlePin),
+    -- chi mong tin qua GET /pins. PRIMARY KEY (message_id, user_id): 1 nguoi ghim 1 tin toi da 1 dong.
+    CREATE TABLE IF NOT EXISTS message_pins_private (
+        message_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        conversation_id UUID NOT NULL,
+        pinned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_pins_private_user ON message_pins_private (conversation_id, user_id, pinned_at DESC);
+
+    -- Link trich tu noi dung tin nhan (body.message), 1 dong/URL tim thay -- ghi ngay luc luu tin
+    -- (xem ChatSessionManager#persistMessage -> MessageLinkRegistry#extractAndSave), tranh phai quet
+    -- lai messages.body (TEXT chua JSON) moi lan mo tab Links. Khong xoa khi tin bi xoa mem -- GET
+    -- /links tu loc bang JOIN messages WHERE deleted_at IS NULL (xem MessageLinkRegistry#listForConversation).
+    CREATE TABLE IF NOT EXISTS message_links (
+        id UUID NOT NULL PRIMARY KEY,
+        message_id UUID NOT NULL,
+        conversation_id UUID NOT NULL,
+        from_user_id UUID NOT NULL,
+        url TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_links_conversation_created ON message_links (conversation_id, created_at DESC);
+
     -- Noti "ban co tin nhan moi" cho user OFFLINE HOAN TOAN luc tin toi (khong session WS nao song
     -- o bat ky pod harbor nao -- xem PresenceRegistry, chat-domain). Chua co ha tang push that
     -- (FCM/APNs/email), day la noi LUU LAI de nguoi dung thay khi quay lai (GET /notifications ben

@@ -186,6 +186,7 @@ public class HarborSessionManager {
             case TYPING -> handleTyping(session, frame);
             case REACTION -> handleReaction(session, frame);
             case DELETE -> handleDelete(session, frame);
+            case PIN -> handlePin(session, frame);
             case READ -> handleRead(session, frame);
             case PING -> sendToClient(session, SocketFrames.pong(frame.getId()));
             default -> log.debug("unsupported frame type {} from client session {}", frame.getType(), session.getId());
@@ -362,6 +363,25 @@ public class HarborSessionManager {
             return;
         }
         backendStreamGateway.sendDelete(session, frame, conversationId);
+    }
+
+    /**
+     * Ghim/bỏ ghim tin {@code frame.getId()} -- forward xuống colony, tự đọc {@code scope}/
+     * {@code pinned} từ body để quyết định persist bảng nào và có fan-out hay không (xem
+     * {@code ChatSessionManager#handlePin} bên colony). Harbor không tự kiểm tra quyền/scope ở đây,
+     * chỉ forward nguyên trạng, cùng cách làm với {@link #handleReaction}.
+     */
+    private void handlePin(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId()) || isBlank(frame.getId())) {
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        backendStreamGateway.sendPin(session, frame, conversationId);
     }
 
     /**

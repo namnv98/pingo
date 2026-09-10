@@ -20,6 +20,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome Free (CDN) -- dùng cho 5 icon reply/pin/lock/link/trash trong .msg-actions/tab
+         Pins/Links (class fa-solid fa-reply/fa-thumbtack/fa-lock/fa-link/fa-trash), thay vì tự vẽ/tự
+         build font riêng. Ghim đúng version (6.5.2), không dùng "latest". -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <style>
         :root {
             --accent: #6d5bf5;
@@ -123,6 +127,16 @@
         button.primary { background: var(--primary-btn-bg); color: var(--primary-btn-fg); border-color: var(--primary-btn-bg); font-weight: 600; }
         button.primary:hover { background: var(--primary-btn-hover-bg); border-color: var(--primary-btn-hover-bg); }
         button.icon { padding: 6px 9px; }
+        /* 6 icon reply/pin/lock/link/trash/react (mặt cười) dùng Font Awesome Free (CDN, xem <link>
+           trong <head>) -- font-family/font-weight thật sự đến từ class .fa-solid của chính thư viện
+           đó, ở đây chỉ set font-size cho khớp cỡ 14px các icon SVG khác trong app đang dùng (mặc định
+           FA ăn theo font-size chữ thường 13px của body, hơi nhỏ hơn 1 chút so với phần còn lại). Nút
+           react trước dùng emoji 🙂 (màu vàng cố định, lạc tông với cụm nút xám/đen còn lại) -- đổi
+           sang icon đồng màu như các icon khác. Bản Free chỉ có style "solid" (khối đặc) cho các icon
+           này -- style "regular" (nét mảnh, khớp tông ICON object hơn) cần Font Awesome Pro, không
+           dùng được.
+           Class: fa-solid fa-reply / fa-thumbtack / fa-lock / fa-link / fa-trash. */
+        .fa-reply, .fa-thumbtack, .fa-lock, .fa-link, .fa-trash, .fa-face-smile { font-size: 14px; }
         input[type=text], input[type=password], select { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; font-family: inherit; background: var(--surface); color: var(--ink); }
         input[type=text]:focus, input[type=password]:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
         label { font-size: 12px; color: var(--ink-soft); font-weight: 500; }
@@ -425,9 +439,16 @@
         .fileListThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
         /* Tam giác play nhỏ đè lên góc thumbnail video -- phân biệt nhanh với ảnh thường trong danh sách. */
         .fileListThumb.isVideo::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent white; filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); }
+        /* Dùng cho tab Pins/Links -- badge tròn màu accent thay cho thumbnail ảnh/video thật (không có
+           ảnh nào để hiện), cùng tông với các điểm nhấn accent khác trong app (tab active, reaction
+           của mình...) thay vì thả nổi 1 emoji đơn độc trên nền xám mặc định. */
+        .fileListThumb.iconThumb { display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-dark); }
         .fileListInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
         .fileListName { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .fileListMeta { font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pinListUnpinBtn { flex: none; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .1s, background .12s; color: var(--ink-faint); }
+        .pinListUnpinBtn:hover { color: var(--ink); background: var(--canvas); }
+        .fileListItem:hover .pinListUnpinBtn { opacity: 1; }
 
         /* ---------- khối đầu panel: avatar to + tên + phụ đề, căn giữa trên nền xám ---------- */
         #infoPanelTop { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 34px 20px 28px; }
@@ -755,9 +776,14 @@
            chọn emoji sẽ mất :hover, cả cụm phải giữ hiện CƯỠNG BỨC bằng class này (gắn/gỡ lúc mở/đóng
            popup, xem openReactionPicker/closeReactionPicker) tới khi popup thật sự đóng. */
         .msg-actions.picker-open { opacity: 1; pointer-events: auto; }
-        .react-btn, .msgDeleteBtn, .replyBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; }
-        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover { background: var(--canvas); }
-        .msgDeleteBtn:hover { color: #dc2626; border-color: #fecaca; }
+        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
+        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover { background: var(--canvas); }
+        /* Xoá luôn tô đỏ (không đợi hover) -- hành động phá huỷ, quy ước iOS/Telegram đánh dấu sẵn
+           bằng màu ngay cả lúc chưa tương tác, không phải chỉ đổi màu lúc hover như các nút khác. Đỏ
+           nhạt (#ef4444, không phải #dc2626 đậm) -- vẫn đủ nhận ra "nguy hiểm" nhưng đỡ gắt hơn giữa
+           cụm icon xám còn lại. */
+        .msgDeleteBtn { color: #ef4444; }
+        .msgDeleteBtn:hover { background: #fef2f2; border-color: #fecaca; }
 
         /* Badge reaction nằm THEO DÒNG ngay dưới nội dung tin (không đè góc bubble nữa -- không còn
            bubble để đè lên), giống đúng cách Slack/Conceptzilla xếp reaction dưới mỗi tin. */
@@ -815,6 +841,14 @@
            bằng kích thước bubble -- shrink-wrap tự nhiên vì reactions-row là absolute. */
         .bubble-wrap { position: relative; }
         .bubble-wrap.has-reactions { margin-bottom: 12px; }
+        /* Pill reaction cao ~25px (padding 3px + border 2px mỗi bên + icon 14px), neo bottom:-8px --
+           nghĩa là mép TRÊN của nó ăn vào ~17px kể từ mép dưới bubble. .bubble-row .bubble vốn chỉ có
+           9px padding-bottom (< 17px) nên PHẦN CHỮ DÒNG CUỐI bị pill đè lên (đã tính lại, đúng như
+           report "che mất nội dung tin nhắn") -- không phải mỗi phần bo góc trong veo như ý đồ ban
+           đầu. Nới riêng padding-bottom của bubble CÓ reaction (chỉ 20px, đủ chỗ + dư ~3px) để chữ
+           được đẩy lên nhường khoảng trống sạch cho pill, vẫn giữ đúng kiểu "đè lên góc" (Messenger/
+           Telegram) chứ không đổi cách neo vị trí bên dưới. */
+        .bubble-wrap.has-reactions .bubble { padding-bottom: 20px; }
         /* Huy hiệu reaction ĐÈ LÊN góc bubble (kiểu Facebook thật) thay vì xếp hàng riêng bên dưới. */
         .bubble-row .reactions-row { position: absolute; bottom: -8px; margin-top: 0; flex-wrap: nowrap; gap: 2px; }
         .bubble-row.theirs .reactions-row { right: -4px; }
@@ -846,6 +880,14 @@
         #reactionPicker button:active { transform: translateY(-2px) scale(1.1); }
         #reactionPicker button img { display: block; pointer-events: none; }
         @keyframes emojiPop { from { opacity: 0; transform: scale(.4) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+        /* Menu ghim (.pinBtn trong .msg-actions) -- danh sách nút chữ dọc, cùng cơ chế định vị/kẹp
+           viewport với #reactionPicker (xem openPinMenu) nhưng khác hẳn cấu trúc (không phải lưới icon). */
+        #pinMenu { position: fixed; display: none; flex-direction: column; min-width: 180px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 4px; box-shadow: 0 12px 32px rgba(28,25,60,.22), 0 0 0 1px rgba(28,25,60,.04); z-index: 100; }
+        #pinMenu.show { display: flex; }
+        #pinMenu button { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none; text-align: left; font-size: 13px; color: var(--ink); padding: 8px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+        #pinMenu button:hover { background: var(--canvas); }
+        #pinMenu button::before { flex: none; color: var(--ink-faint); }
 
         /* Popup CHÈN EMOJI vào ô nhập (emoji-picker-element, xem <script type="module"> ở <head>) --
            khác hẳn #reactionPicker (chỉ 6 icon cố định cho thả cảm xúc). display:none mặc định, JS chỉ
@@ -1168,9 +1210,9 @@
             <div id="infoPanelHead">
                 <div id="infoTabRow">
                     <button type="button" id="infoTabInfoBtn" class="infoTabBtn active" onclick="switchInfoTab('info')">Info</button>
-                    <button type="button" class="infoTabBtn soon" onclick="appAlert('Tính năng đang phát triển.', 'Pins')">Pins</button>
+                    <button type="button" id="infoTabPinsBtn" class="infoTabBtn" onclick="switchInfoTab('pins')">Pins</button>
                     <button type="button" id="infoTabFilesBtn" class="infoTabBtn" onclick="switchInfoTab('files')">Files</button>
-                    <button type="button" class="infoTabBtn soon" onclick="appAlert('Tính năng đang phát triển.', 'Links')">Links</button>
+                    <button type="button" id="infoTabLinksBtn" class="infoTabBtn" onclick="switchInfoTab('links')">Links</button>
                 </div>
                 <button class="icon" onclick="toggleInfoPanel()" title="Đóng">✕</button>
             </div>
@@ -1201,6 +1243,20 @@
                     <div class="infoSectionTitle">File đã chia sẻ · <span id="infoFilesCount"></span></div>
                     <div id="infoFilesList"></div>
                     <div id="infoFilesEmpty" class="hint" style="display:none">Chưa có ảnh/video nào được chia sẻ trong cuộc trò chuyện này.</div>
+                </div>
+            </div>
+            <div id="infoPinsBody" style="display:none">
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Tin đã ghim · <span id="infoPinsCount"></span></div>
+                    <div id="infoPinsList"></div>
+                    <div id="infoPinsEmpty" class="hint" style="display:none">Chưa có tin nhắn nào được ghim trong cuộc trò chuyện này.</div>
+                </div>
+            </div>
+            <div id="infoLinksBody" style="display:none">
+                <div class="infoSection">
+                    <div class="infoSectionTitle">Link đã chia sẻ · <span id="infoLinksCount"></span></div>
+                    <div id="infoLinksList"></div>
+                    <div id="infoLinksEmpty" class="hint" style="display:none">Chưa có link nào được chia sẻ trong cuộc trò chuyện này.</div>
                 </div>
             </div>
         </aside>
@@ -1309,7 +1365,8 @@ var ICON = {
     search: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
     star: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg>',
     edit: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
-    trash: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+    // trash/pin/reply/lock/link dùng Font Awesome Free (CDN, class "fa-solid fa-trash"/"fa-solid
+    // fa-thumbtack"/"fa-solid fa-reply"/"fa-solid fa-lock"/"fa-solid fa-link") -- không còn ở đây nữa.
     info: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
     paperclip: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
     plus: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
@@ -1612,14 +1669,16 @@ function toggleInfoPanel() {
 // Vẽ lại avatar/tên/danh sách thành viên cho ĐÚNG 1 conversationId (hoặc null -- chưa chọn gì) --
 // cần conv.memberUserIds thật từ lastConvList (GET /conversations), không suy được từ mỗi
 // conversationId suông. Sắp online lên trước, offline xuống dưới cho dễ nhìn (giống Slack/Discord).
-// Tab đang xem trong panel bên phải -- 'info' hoặc 'files' (Pins/Links vẫn chỉ là alert stub, chưa
-// có nội dung thật nên không cần state riêng). Giữ nguyên khi chuyển qua lại giữa các conversation
-// (đúng thói quen thật: đang xem tab Files thì mở conversation khác cũng muốn thấy Files của nó).
+// Tab đang xem trong panel bên phải -- 'info'/'files'/'pins'/'links'. Giữ nguyên khi chuyển qua lại
+// giữa các conversation (đúng thói quen thật: đang xem tab Files thì mở conversation khác cũng
+// muốn thấy Files của nó).
 var infoActiveTab = 'info';
 function switchInfoTab(tab) {
     infoActiveTab = tab;
     document.getElementById('infoTabInfoBtn').classList.toggle('active', tab === 'info');
     document.getElementById('infoTabFilesBtn').classList.toggle('active', tab === 'files');
+    document.getElementById('infoTabPinsBtn').classList.toggle('active', tab === 'pins');
+    document.getElementById('infoTabLinksBtn').classList.toggle('active', tab === 'links');
     renderInfoPanel(activeConversationId);
 }
 
@@ -1627,19 +1686,33 @@ function renderInfoPanel(conversationId) {
     var emptyEl = document.getElementById('infoEmpty');
     var bodyEl = document.getElementById('infoPanelBody');
     var filesEl = document.getElementById('infoFilesBody');
+    var pinsEl = document.getElementById('infoPinsBody');
+    var linksEl = document.getElementById('infoLinksBody');
     var conv = conversationId && lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
     if (!conv) {
         emptyEl.style.display = '';
         bodyEl.style.display = 'none';
         filesEl.style.display = 'none';
+        pinsEl.style.display = 'none';
+        linksEl.style.display = 'none';
         return;
     }
     emptyEl.style.display = 'none';
     bodyEl.style.display = infoActiveTab === 'info' ? 'flex' : 'none';
     filesEl.style.display = infoActiveTab === 'files' ? 'flex' : 'none';
+    pinsEl.style.display = infoActiveTab === 'pins' ? 'flex' : 'none';
+    linksEl.style.display = infoActiveTab === 'links' ? 'flex' : 'none';
     if (infoActiveTab === 'files') {
         loadConversationFiles(conversationId);
         return; // noi dung tab Info khong can tinh lai khi dang khong hien no
+    }
+    if (infoActiveTab === 'pins') {
+        loadConversationPins(conversationId);
+        return;
+    }
+    if (infoActiveTab === 'links') {
+        loadConversationLinks(conversationId);
+        return;
     }
 
     var avatar = conversationAvatar(conv);
@@ -1737,6 +1810,77 @@ function renderFilesList(list) {
         item.querySelector('.fileListMeta').innerText =
             displayName(f.fromUserId) + ' · ' + relativeTime(f.ts) + (f.size ? ' · ' + formatFileSize(f.size) : '');
         item.onclick = function () { window.open(downloadUrl, '_blank'); };
+        listEl.appendChild(item);
+    });
+}
+
+// --- tab "Pins" ---
+
+// Tin đã ghim (chung của cả conversation + riêng của CHÍNH MÌNH, server tự lọc -- xem GET /pins,
+// MessagePinRegistry#listPins) -- cần auth vì ghim riêng là dữ liệu riêng của từng user.
+function loadConversationPins(conversationId) {
+    fetchJson('/pins?conversationId=' + encodeURIComponent(conversationId), true)
+        .then(function (list) { renderPinsList(conversationId, list); })
+        .catch(function (err) {
+            console.warn('không load được danh sách ghim', err);
+        });
+}
+
+function renderPinsList(conversationId, list) {
+    var listEl = document.getElementById('infoPinsList');
+    var emptyEl = document.getElementById('infoPinsEmpty');
+    document.getElementById('infoPinsCount').innerText = list.length;
+    listEl.innerHTML = '';
+    emptyEl.style.display = list.length ? 'none' : '';
+    list.forEach(function (p) {
+        var item = document.createElement('div');
+        item.className = 'fileListItem';
+        item.innerHTML =
+            '<div class="fileListThumb iconThumb fa-solid ' + (p.scope === 'shared' ? 'fa-thumbtack' : 'fa-lock') + '"></div>' +
+            '<div class="fileListInfo"><span class="fileListName"></span><span class="fileListMeta"></span></div>' +
+            '<button type="button" class="icon pinListUnpinBtn" title="Bỏ ghim">' + ICON.closeSm + '</button>';
+        item.querySelector('.fileListName').innerText = displayName(p.fromUserId) + ': ' + snippetForBody(p.body);
+        item.querySelector('.fileListMeta').innerText =
+            (p.scope === 'shared' ? 'Ghim chung' : 'Ghim riêng') + ' · ' + relativeTime(p.pinnedAt);
+        item.onclick = function () { jumpToMessage(conversationId, p.messageId, p.ts); };
+        item.querySelector('.pinListUnpinBtn').onclick = function (e) {
+            e.stopPropagation();
+            sendPin(conversationId, p.messageId, p.scope, false);
+            // Optimistic -- ghim riêng không có frame PIN nào bay về xác nhận (xem handlePinReceived),
+            // ghim chung thì frame bay về sẽ tự refresh lại list nếu tab vẫn đang mở.
+            item.remove();
+        };
+        listEl.appendChild(item);
+    });
+}
+
+// --- tab "Links" ---
+
+// Link đã trích từ nội dung tin nhắn (chung cho cả conversation, không riêng user nào -- xem GET
+// /links, MessageLinkRegistry#listForConversation).
+function loadConversationLinks(conversationId) {
+    fetchJson('/links?conversationId=' + encodeURIComponent(conversationId) + '&limit=100', false)
+        .then(renderLinksList)
+        .catch(function (err) {
+            console.warn('không load được danh sách link', err);
+        });
+}
+
+function renderLinksList(list) {
+    var listEl = document.getElementById('infoLinksList');
+    var emptyEl = document.getElementById('infoLinksEmpty');
+    document.getElementById('infoLinksCount').innerText = list.length;
+    listEl.innerHTML = '';
+    emptyEl.style.display = list.length ? 'none' : '';
+    list.forEach(function (l) {
+        var item = document.createElement('div');
+        item.className = 'fileListItem';
+        item.innerHTML =
+            '<div class="fileListThumb iconThumb fa-solid fa-link"></div>' +
+            '<div class="fileListInfo"><span class="fileListName"></span><span class="fileListMeta"></span></div>';
+        item.querySelector('.fileListName').innerText = l.url;
+        item.querySelector('.fileListMeta').innerText = displayName(l.fromUserId) + ' · ' + relativeTime(l.ts);
+        item.onclick = function () { window.open(l.url, '_blank', 'noopener'); };
         listEl.appendChild(item);
     });
 }
@@ -2796,7 +2940,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<button class="icon" disabled title="Demo chưa hỗ trợ ghim">' + ICON.star + '</button>' +
         '<button class="icon renameBtn" title="Đổi tên riêng">' + ICON.edit + '</button>' +
         '<button class="icon bgBtn" title="Đổi hình nền &amp; màu chat">' + ICON.image + '</button>' +
-        '<button class="icon deleteBtn" title="Xoá hẳn cuộc trò chuyện này">' + ICON.trash + '</button>' +
+        '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
         '<button class="icon infoBtn" title="Ẩn/hiện panel thông tin" onclick="toggleInfoPanel()">' + ICON.info + '</button>' +
         '</div></div>' +
         '<div class="conv-log-wrap"><div class="conv-log"></div>' +
@@ -3468,6 +3612,11 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
             e.stopPropagation();
             openReactionPicker(e.currentTarget, conversationId, messageId);
         };
+        var pinBtn2 = row.querySelector('.pinBtn');
+        if (pinBtn2) pinBtn2.onclick = function (e) {
+            e.stopPropagation();
+            openPinMenu(e.currentTarget, conversationId, messageId);
+        };
         var replyBtn2 = row.querySelector('.replyBtn');
         if (replyBtn2) replyBtn2.onclick = function (e) {
             e.stopPropagation();
@@ -3591,8 +3740,9 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         '<div class="bubble-wrap"><div class="bubble"></div><div class="reactions-row"></div></div>' +
         '<div class="bubble-time"><span class="bubble-time-text"></span><span class="seen-status"></span></div>' +
         '</div>' +
-        '<div class="msg-actions"><button type="button" class="replyBtn" title="Trả lời">↩</button><button type="button" class="react-btn" title="Thả cảm xúc">🙂</button>' +
-        (mine ? '<button type="button" class="msgDeleteBtn" title="Xoá tin nhắn">' + ICON.trash + '</button>' : '') +
+        '<div class="msg-actions"><button type="button" class="replyBtn fa-solid fa-reply" title="Trả lời"></button><button type="button" class="react-btn fa-solid fa-face-smile" title="Thả cảm xúc"></button>' +
+        '<button type="button" class="pinBtn fa-solid fa-thumbtack" title="Ghim tin nhắn"></button>' +
+        (mine ? '<button type="button" class="msgDeleteBtn fa-solid fa-trash" title="Xoá tin nhắn"></button>' : '') +
         '</div>';
     if (!mine) {
         var avatarEl = row.querySelector('.avatar');
@@ -3744,6 +3894,7 @@ function openReactionPicker(triggerEl, conversationId, messageId) {
     closeGifPicker();
     closeStickerPicker();
     closeAttachMenu();
+    closePinMenu();
     reactionPickerTarget = {conversationId: conversationId, messageId: messageId};
     pickerOnSelect = function (emoji) { sendReaction(conversationId, messageId, emoji); };
     populatePicker(ensureReactionPicker());
@@ -3792,6 +3943,94 @@ function closeReactionPicker() {
     pickerOnSelect = null;
 }
 document.addEventListener('click', closeReactionPicker);
+
+// --- popup GHIM (pinBtn -- .msg-actions) -- menu nhỏ 2 lựa chọn (chung/riêng), dùng lại đúng cách
+// định vị/kẹp-trong-viewport của #reactionPicker (positionAndShowPicker) nhưng KHÔNG dùng chung 1
+// phần tử -- #reactionPicker là lưới emoji cố định 6 icon, #pinMenu là danh sách nút chữ dọc, khác
+// hẳn cấu trúc. "Bỏ ghim" KHÔNG có ở đây -- làm ở tab Pins (nút ✕ trên từng dòng, xem
+// renderPinsList) vì menu này không biết trước tin đang được ghim ở chế độ nào (không giữ state
+// ghim cho MỌI tin đang hiển thị, tránh phải gọi thêm API cho từng bubble).
+var pinMenuTarget = null;
+var pinMenuTriggerEl = null; // nút 📌 đã mở menu hiện tại -- giữ hiện cưỡng bức (class "picker-open") tới khi đóng, cùng cơ chế reactionPickerTriggerEl
+
+function ensurePinMenu() {
+    var menu = document.getElementById('pinMenu');
+    if (menu) return menu;
+    menu = document.createElement('div');
+    menu.id = 'pinMenu';
+    menu.innerHTML =
+        '<button type="button" class="fa-solid fa-thumbtack" data-scope="shared"><span>Ghim cho mọi người</span></button>' +
+        '<button type="button" class="fa-solid fa-lock" data-scope="private"><span>Chỉ ghim cho tôi</span></button>';
+    menu.addEventListener('click', function (e) { e.stopPropagation(); });
+    Array.prototype.forEach.call(menu.querySelectorAll('button'), function (btn) {
+        btn.onclick = function (e) {
+            e.stopPropagation();
+            if (pinMenuTarget) sendPin(pinMenuTarget.conversationId, pinMenuTarget.messageId, btn.dataset.scope, true);
+            closePinMenu();
+        };
+    });
+    document.body.appendChild(menu);
+    return menu;
+}
+
+function openPinMenu(triggerEl, conversationId, messageId) {
+    closeReactionPicker();
+    closeComposeEmojiPicker();
+    closeGifPicker();
+    closeStickerPicker();
+    closeAttachMenu();
+    closePinMenu();
+    pinMenuTarget = {conversationId: conversationId, messageId: messageId};
+    var menu = ensurePinMenu();
+    // Giữ CẢ CỤM .msg-actions hiện cưỡng bức trong lúc menu còn mở -- menu gắn vào document.body
+    // (ngoài .bubble-row), nên rê chuột từ nút 📌 sang menu sẽ mất :hover của hàng tin, cả cụm nút
+    // (react/reply/delete) sẽ tự ẩn theo CSS mặc định nếu không có class này ghi đè -- đúng bug đã
+    // gặp với #reactionPicker trước đây (xem positionAndShowPicker), quên áp dụng lại ở đây.
+    pinMenuTriggerEl = triggerEl;
+    var actionsEl = triggerEl.closest('.msg-actions');
+    if (actionsEl) actionsEl.classList.add('picker-open');
+    menu.classList.add('show');
+    var rect = triggerEl.getBoundingClientRect();
+    var margin = 8;
+    var menuWidth = menu.offsetWidth || 180;
+    var idealLeft = rect.left + rect.width / 2 - menuWidth / 2;
+    var clampedLeft = Math.max(margin, Math.min(window.innerWidth - menuWidth - margin, idealLeft));
+    menu.style.left = clampedLeft + 'px';
+    menu.style.top = Math.max(margin, rect.top - menu.offsetHeight - 10) + 'px';
+}
+
+function closePinMenu() {
+    var menu = document.getElementById('pinMenu');
+    if (menu) menu.classList.remove('show');
+    if (pinMenuTriggerEl) {
+        var actionsEl = pinMenuTriggerEl.closest('.msg-actions');
+        if (actionsEl) actionsEl.classList.remove('picker-open');
+    }
+    pinMenuTarget = null;
+    pinMenuTriggerEl = null;
+}
+document.addEventListener('click', closePinMenu);
+
+/**
+ * Ghim/bỏ ghim tin qua WS -- server tự persist (bảng message_pins_shared/message_pins_private tuỳ
+ * scope) rồi fan-out (CHỈ scope 'shared', xem ChatSessionManager#handlePin bên colony). Ghim riêng
+ * không có xác nhận nào bay về -- refresh lại tab Pins (nếu đang mở) để thấy ngay.
+ */
+function sendPin(conversationId, messageId, scope, pinned) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send({type: 'PIN', id: messageId, conversationId: conversationId, body: {scope: scope, pinned: pinned}});
+    if (scope === 'private' && infoActiveTab === 'pins' && activeConversationId === conversationId) {
+        loadConversationPins(conversationId);
+    }
+}
+
+// Nhận frame PIN (chỉ bay tới với scope 'shared', xem javadoc MessageType#PIN) -- cập nhật lại tab
+// Pins nếu đang mở đúng conversation đó.
+function handlePinReceived(conversationId, messageId, fromUserId, pinned) {
+    if (infoActiveTab === 'pins' && activeConversationId === conversationId) {
+        loadConversationPins(conversationId);
+    }
+}
 
 // --- popup CHÈN EMOJI vào ô nhập tin (composeEmojiBtn) -- dùng emoji-picker-element (open-source,
 // MIT, xem <script type="module"> ở <head>) thay vì tự vẽ tay: đầy đủ bộ Unicode + tìm kiếm + phân
@@ -4267,38 +4506,79 @@ function renderReactions(messageId, rowEl) {
     var container = row && row.querySelector('.reactions-row');
     if (!container) return;
     var wrapEl = row.querySelector('.bubble-wrap');
+    var conversationId = row.dataset.conversationId;
+    var entry = conversations[conversationId];
+    var logEl = entry && entry.logEl;
     var mapping = reactionsByMessageId[messageId] || {};
     var byEmoji = {};
     Object.keys(mapping).forEach(function (uid) {
         var emoji = mapping[uid];
         (byEmoji[emoji] = byEmoji[emoji] || []).push(uid);
     });
-    container.innerHTML = '';
-    var conversationId = row.dataset.conversationId;
-    Object.keys(byEmoji).forEach(function (emoji) {
-        var uids = byEmoji[emoji];
-        var pill = document.createElement('button');
-        pill.type = 'button';
-        pill.className = 'reaction-pill' + (uids.indexOf(myUserId) !== -1 ? ' mine' : '');
-        // Giống Facebook thật: chỉ hiện SỐ LƯỢNG khi >= 2 người -- 1 người thì chỉ cần mỗi emoji là đủ.
-        pill.innerHTML = '<span class="emoji"></span>' + (uids.length > 1 ? '<span class="count"></span>' : '');
-        var emojiEl = pill.querySelector('.emoji');
-        var iconSrc = REACTION_ICON_BY_EMOJI[emoji];
-        // Fallback về ký tự emoji thô cho reaction cũ không khớp bộ icon hiện tại (vd đổi bộ icon sau
-        // khi đã có dữ liệu reaction cũ trong DB) -- không để badge trống trơn.
-        if (iconSrc) emojiEl.innerHTML = '<img src="' + iconSrc + '" width="14" height="14" alt="' + emoji + '">';
-        else emojiEl.innerText = emoji;
-        if (uids.length > 1) pill.querySelector('.count').innerText = uids.length;
-        // Tooltip tự làm (đẹp/nhanh hơn title mặc định của trình duyệt) -- xem showReactionTooltip.
-        var tooltipText = uids.map(displayName).join(', ') + ' đã bày tỏ cảm xúc ' + emoji;
-        pill.onmouseenter = function () { showReactionTooltip(pill, tooltipText); };
-        pill.onmouseleave = hideReactionTooltip;
-        pill.onclick = function (e) { e.stopPropagation(); hideReactionTooltip(); sendReaction(conversationId, messageId, emoji); };
-        container.appendChild(pill);
-    });
-    // Chỉ có ý nghĩa cho bong bóng DM (.bubble-wrap không tồn tại ở tin nhóm phẳng) -- badge đè lên
-    // góc bubble cần chừa khoảng trống bên dưới để không đè lên giờ/seen-status, xem CSS .has-reactions.
-    if (wrapEl) wrapEl.classList.toggle('has-reactions', Object.keys(byEmoji).length > 0);
+    // Tách riêng phần ĐỔI DOM (sửa container + toggle has-reactions, cả 2 đều có thể đổi chiều cao
+    // bubble) khỏi phần render, để đo offsetHeight trước/sau + bù scrollTop bằng getBoundingClientRect
+    // (KHÔNG dùng offsetTop: .conv-log không có position:relative nên row.offsetTop không hề cùng hệ
+    // toạ độ với logEl.scrollTop, so sánh 2 cái đó với nhau là sai -- đã tự làm sai y hệt vậy ở 1 lần
+    // sửa trước).
+    function mutate() {
+        container.innerHTML = '';
+        Object.keys(byEmoji).forEach(function (emoji) {
+            var uids = byEmoji[emoji];
+            var pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'reaction-pill' + (uids.indexOf(myUserId) !== -1 ? ' mine' : '');
+            // Giống Facebook thật: chỉ hiện SỐ LƯỢNG khi >= 2 người -- 1 người thì chỉ cần mỗi emoji là đủ.
+            pill.innerHTML = '<span class="emoji"></span>' + (uids.length > 1 ? '<span class="count"></span>' : '');
+            var emojiEl = pill.querySelector('.emoji');
+            var iconSrc = REACTION_ICON_BY_EMOJI[emoji];
+            // Fallback về ký tự emoji thô cho reaction cũ không khớp bộ icon hiện tại (vd đổi bộ icon
+            // sau khi đã có dữ liệu reaction cũ trong DB) -- không để badge trống trơn.
+            if (iconSrc) emojiEl.innerHTML = '<img src="' + iconSrc + '" width="14" height="14" alt="' + emoji + '">';
+            else emojiEl.innerText = emoji;
+            if (uids.length > 1) pill.querySelector('.count').innerText = uids.length;
+            // Tooltip tự làm (đẹp/nhanh hơn title mặc định của trình duyệt) -- xem showReactionTooltip.
+            var tooltipText = uids.map(displayName).join(', ') + ' đã bày tỏ cảm xúc ' + emoji;
+            pill.onmouseenter = function () { showReactionTooltip(pill, tooltipText); };
+            pill.onmouseleave = hideReactionTooltip;
+            pill.onclick = function (e) { e.stopPropagation(); hideReactionTooltip(); sendReaction(conversationId, messageId, emoji); };
+            container.appendChild(pill);
+        });
+        // Chỉ có ý nghĩa cho bong bóng DM (.bubble-wrap không tồn tại ở tin nhóm phẳng) -- badge đè
+        // lên góc bubble cần chừa khoảng trống bên dưới để không đè lên giờ/seen-status, xem CSS
+        // .has-reactions -- bật cờ này cũng đổi padding-bottom của bubble (xem CSS), tức bubble có
+        // thể phình cao hơn, đúng lý do cần bọc withScrollAnchored/cuộn bù ở dưới.
+        if (wrapEl) wrapEl.classList.toggle('has-reactions', Object.keys(byEmoji).length > 0);
+    }
+    if (!logEl) {
+        mutate();
+        return;
+    }
+    // Đo TRƯỚC/SAU (row.offsetHeight) rồi bù scrollTop NGAY LẬP TỨC (gán tức thời, KHÔNG
+    // smoothScrollToBottom/behavior:'smooth') -- đây là BÙ LỆCH do bubble phình vài px vì reaction,
+    // không phải "tin mới thật sự tới" (chỗ ĐÓ mới nên animate, xem appendMessageBubble). Animate 1
+    // quãng ngắn thế này nhìn như giật/nháy chứ không mượt, đúng lý do applyScrollAnchor/
+    // composeResizeObserver cũng cố tình gán tức thời thay vì animate (xem comment 2 hàm đó).
+    var before = row.offsetHeight;
+    mutate();
+    var delta = row.offsetHeight - before;
+    if (delta === 0) return;
+    if (entry.stickToBottom) {
+        // Đang neo đáy -- GÁN THẲNG bằng scrollHeight (trình duyệt tự kẹp về max hợp lệ), KHÔNG cộng
+        // dồn += delta như nhánh dưới. Lý do: khi bubble CO LẠI (bỏ reaction, delta âm), trình duyệt
+        // tự kéo scrollTop về max MỚI ngay khi scrollHeight giảm -- xảy ra TRƯỚC dòng này, sớm hơn cả
+        // lúc code chạy tới đây. Cộng thêm delta (âm) lần nữa thành trừ KÉP, vọt lên quá đà, không
+        // còn thật sự ở đáy (đúng bug "bỏ reaction lúc đang ở cuối cùng bị lỗi"). Gán thẳng
+        // scrollHeight né hẳn vấn đề thứ tự này -- đằng nào cũng luôn muốn kết quả CUỐI CÙNG là đúng
+        // đáy, không cần quan tâm delta dương hay âm.
+        logEl.scrollTop = logEl.scrollHeight;
+    } else {
+        // Đang cuộn lên xem tin cũ hơn -- CHỈ bù khi row KHÔNG nằm hẳn dưới khung nhìn (đang hiện
+        // HOẶC đã cuộn qua rồi đều bù, xem chat trước); row nằm hẳn dưới khung nhìn (chưa cuộn tới)
+        // thì bỏ qua, bù lúc đó sẽ kéo người dùng lệch khỏi chỗ đang xem vô cớ.
+        var logRect = logEl.getBoundingClientRect();
+        var rowRect = row.getBoundingClientRect();
+        if (rowRect.top < logRect.bottom) logEl.scrollTop += delta;
+    }
 }
 
 function messageBodyText(body) {
@@ -5331,6 +5611,8 @@ function prependOlderMessages(conversationId, messagesDesc) {
                 e.stopPropagation();
                 openReactionPicker(e.currentTarget, conversationId, m.id);
             };
+            var pinBtn3 = row.querySelector('.pinBtn');
+            if (pinBtn3) (function(mid){ pinBtn3.onclick = function(e){ e.stopPropagation(); openPinMenu(e.currentTarget, conversationId, mid); }; })(m.id);
             var replyBtn3 = row.querySelector('.replyBtn');
             if (replyBtn3) (function(mid, fuid, bdy, ts){ replyBtn3.onclick = function(e){ e.stopPropagation(); var sn=snippetForBody(bdy); var th=replyThumbForBody(bdy); var ent=conversations[conversationId]; if(ent&&ent._setPendingReply){ var rt={messageId:mid, fromUserId:fuid, snippet:sn}; if(th&&th.url){ rt.thumbUrl=th.url; if(th.isVideo) rt.thumbIsVideo=true; } if(ts) rt.ts=ts; ent._setPendingReply(rt); var inp2=ent.el.querySelector('.composeInput'); if(inp2) inp2.focus(); } }; })(m.id, m.fromUserId, m.body, m.ts);
             var deleteBtn = row.querySelector('.msgDeleteBtn');
@@ -5531,6 +5813,10 @@ function connect() {
             case "DELETE":
                 // frame.id = id tin nhan vua bi xoa (server da tu kiem tra quyen truoc khi fan-out ra day).
                 handleMessageDeleted(frame.conversationId, frame.id);
+                break;
+            case "PIN":
+                // Chi bay toi day voi scope "shared" (ghim rieng khong fan-out, xem ChatSessionManager#handlePin).
+                handlePinReceived(frame.conversationId, frame.id, frame.fromUserId, frame.body && frame.body.pinned);
                 break;
             case "CONVERSATION_ADDED":
                 // Vừa được thêm vào 1 conversation (DM lần đầu hoặc group mới) — gateway đã tự
