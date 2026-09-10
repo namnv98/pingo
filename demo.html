@@ -601,6 +601,25 @@
            dùng cho mọi lần bấm -- cùng khuôn với #mediaLightbox/#reactionPicker.  */
         #bgPickerOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
         #bgPickerOverlay.show { display: flex; }
+        /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
+        #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #appModalOverlay.show { display: flex; }
+        .appModal { background: var(--surface); border-radius: 16px; width: 400px; max-width: 100%; box-shadow: 0 24px 64px rgba(0,0,0,.35); overflow: hidden; animation: lightboxIn .15s ease-out; }
+        .appModalHead { padding: 18px 20px 0; font-weight: 800; font-size: 15px; color: var(--ink); }
+        .appModalBody { padding: 10px 20px 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; }
+        .appModalInput { display: none; width: calc(100% - 40px); margin: 14px 20px 0; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; font-size: 13.5px; font-family: inherit; background: var(--surface); color: var(--ink); }
+        .appModalInput.show { display: block; }
+        .appModalInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        .appModalInput.invalid { border-color: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.15); }
+        .appModalFoot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px 18px; }
+        .appModalBtn { padding: 8px 16px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+        .appModalBtn:hover { background: var(--canvas); }
+        .appModalBtn.primary { background: var(--primary-btn-bg); color: var(--primary-btn-fg); border-color: var(--primary-btn-bg); }
+        .appModalBtn.primary:hover { background: var(--primary-btn-hover-bg); border-color: var(--primary-btn-hover-bg); }
+        .appModalBtn.danger { background: #ef4444; color: #fff; border-color: #ef4444; }
+        .appModalBtn.danger:hover { background: #dc2626; border-color: #dc2626; }
+        .appModalHint { font-size: 11.5px; color: var(--ink-faint); padding: 6px 20px 0; }
+        .appModalHint.error { color: #ef4444; }
         .bgPickerModal { background: var(--surface); border-radius: 16px; width: 380px; max-width: 100%; max-height: 84vh; overflow-y: auto; box-shadow: 0 24px 64px rgba(0,0,0,.35); animation: lightboxIn .15s ease-out; }
         .bgPickerHead { position: sticky; top: 0; background: var(--surface); display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 14px; }
         .bgPickerHead button { border: none; background: none; cursor: pointer; color: var(--ink-faint); width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
@@ -698,6 +717,31 @@
         .bubble.deletedPlaceholder { font-style: italic; color: var(--ink-faint); background: none; padding: 0; }
         .bubble-row .bubble.deletedPlaceholder { background: var(--canvas); color: var(--ink-faint); padding: 9px 14px; }
 
+        /* ---------- reply quote ---------- */
+        .reply-quote { border-left: 3px solid var(--accent); background: rgba(109,91,245,.08); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; cursor: pointer; max-width: 100%; }
+        .reply-quote { display: flex; gap: 8px; align-items: center; }
+        .reply-quote:hover { background: rgba(109,91,245,.14); }
+        .reply-quote-body { flex: 1; min-width: 0; overflow: hidden; }
+        .reply-quote-thumb { flex: none; width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--canvas); display: block; }
+        .reply-quote-thumb.video-thumb { position: relative; }
+        .replyBarThumb { flex: none; width: 32px; height: 32px; border-radius: 6px; object-fit: cover; background: var(--canvas); display: none; }
+        .replyBarThumb.show { display: block; }
+        .reply-quote-name { font-size: 11.5px; font-weight: 700; color: var(--accent-dark); line-height: 1.3; }
+        .reply-quote-snippet { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+        .reply-quote.reply-not-found { opacity: .6; font-style: italic; }
+        .bubble-row.mine .reply-quote { border-left-color: rgba(255,255,255,.6); background: rgba(255,255,255,.16); }
+        .bubble-row.mine .reply-quote-name { color: rgba(255,255,255,.95); }
+        .bubble-row.mine .reply-quote-snippet { color: rgba(255,255,255,.78); }
+        .bubble-row.jump-highlight .bubble { animation: replyFlash 1.2s ease; }
+        @keyframes replyFlash { 0%{box-shadow:0 0 0 3px var(--accent-soft);} 100%{box-shadow:none;} }
+        /* reply bar in composer */
+        .replyBar { display: none; align-items: center; gap: 8px; background: var(--canvas); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+        .replyBar.show { display: flex; }
+        .replyBarBody { flex: 1; min-width: 0; }
+        .replyBarName { font-size: 11.5px; font-weight: 700; color: var(--accent-dark); }
+        .replyBarSnippet { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .replyBarClose { flex: none; width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+
         /* ---------- cụm nút hành động (thả cảm xúc + xoá) hiện khi hover ---------- */
         /* Cụm nổi (không phải react-btn riêng lẻ nữa -- giờ có thể có thêm nút xoá bên cạnh, xem
            .msgDeleteBtn) -- CẢ CỤM 1 khối được canh vị trí + ẩn/hiện cùng lúc, không phải từng nút. */
@@ -711,8 +755,8 @@
            chọn emoji sẽ mất :hover, cả cụm phải giữ hiện CƯỠNG BỨC bằng class này (gắn/gỡ lúc mở/đóng
            popup, xem openReactionPicker/closeReactionPicker) tới khi popup thật sự đóng. */
         .msg-actions.picker-open { opacity: 1; pointer-events: auto; }
-        .react-btn, .msgDeleteBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; }
-        .react-btn:hover, .msgDeleteBtn:hover { background: var(--canvas); }
+        .react-btn, .msgDeleteBtn, .replyBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; }
+        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover { background: var(--canvas); }
         .msgDeleteBtn:hover { color: #dc2626; border-color: #fecaca; }
 
         /* Badge reaction nằm THEO DÒNG ngay dưới nội dung tin (không đè góc bubble nữa -- không còn
@@ -1124,9 +1168,9 @@
             <div id="infoPanelHead">
                 <div id="infoTabRow">
                     <button type="button" id="infoTabInfoBtn" class="infoTabBtn active" onclick="switchInfoTab('info')">Info</button>
-                    <button type="button" class="infoTabBtn soon" onclick="alert('Demo chưa hỗ trợ Pins.')">Pins</button>
+                    <button type="button" class="infoTabBtn soon" onclick="appAlert('Tính năng đang phát triển.', 'Pins')">Pins</button>
                     <button type="button" id="infoTabFilesBtn" class="infoTabBtn" onclick="switchInfoTab('files')">Files</button>
-                    <button type="button" class="infoTabBtn soon" onclick="alert('Demo chưa hỗ trợ Links.')">Links</button>
+                    <button type="button" class="infoTabBtn soon" onclick="appAlert('Tính năng đang phát triển.', 'Links')">Links</button>
                 </div>
                 <button class="icon" onclick="toggleInfoPanel()" title="Đóng">✕</button>
             </div>
@@ -1887,8 +1931,8 @@ function membersSubtitle(conv) {
 function renameConversation(conversationId) {
     var entry = conversations[conversationId];
     var current = entry ? entry.label : '';
-    var next = prompt('Đặt tên riêng cho cuộc trò chuyện này (mọi thành viên đều thấy, để trống để xoá):', current);
-    if (next === null) return; // bấm Cancel
+    appPrompt('Tên hiển thị cho cuộc trò chuyện này (mọi thành viên đều thấy, để trống để xoá):', current, {title: 'Đổi tên cuộc trò chuyện', confirmText: 'Lưu', cancelText: 'Huỷ', placeholder: 'Nhập tên...'}).then(function(next){
+    if (next === null) return;
     next = next.trim();
     fetch(HISTORY_API_BASE + '/conversations?conversationId=' + encodeURIComponent(conversationId), {
         method: 'PUT',
@@ -1908,8 +1952,9 @@ function renameConversation(conversationId) {
             refreshConversationList();
         })
         .catch(function (err) {
-            alert('đổi tên lỗi: ' + err.message);
+            appAlert('đổi tên lỗi: ' + err.message, 'Lỗi');
         });
+    });
 }
 
 // Xoá HẲN conversation cho MỌI thành viên (không phải chỉ "rời khỏi") -- gọi DELETE /conversations
@@ -1918,7 +1963,7 @@ function renameConversation(conversationId) {
 function deleteConversation(conversationId) {
     var entry = conversations[conversationId];
     var label = entry ? entry.label : conversationId.substring(0, 8) + '…';
-    if (!confirm('Xoá hẳn "' + label + '"? Xoá cho TẤT CẢ thành viên, gồm toàn bộ tin nhắn -- không hoàn tác được.')) return;
+    appConfirm('Xoá hẳn "' + label + '"? Xoá cho TẤT CẢ thành viên, gồm toàn bộ tin nhắn -- không hoàn tác được.', {title: 'Xoá cuộc trò chuyện', confirmText: 'Xoá', cancelText: 'Huỷ', danger: true}).then(function(ok){ if(!ok) return;
     fetch(HISTORY_API_BASE + '/conversations?conversationId=' + encodeURIComponent(conversationId), {
         method: 'DELETE',
         headers: {'Authorization': 'Bearer ' + authToken}
@@ -1928,8 +1973,9 @@ function deleteConversation(conversationId) {
             removeConversationLocally(conversationId);
         })
         .catch(function (err) {
-            alert('xoá lỗi: ' + err.message);
+            appAlert('xoá lỗi: ' + err.message, 'Lỗi');
         });
+    });
 }
 
 // Dọn hết dấu vết 1 conversationId khỏi UI cục bộ -- dùng chung cho cả 2 đường: (1) tự mình xoá
@@ -2522,7 +2568,7 @@ function saveBgMap(map) {
     } catch (e) {
         // Tràn hạn mức localStorage (thường do ảnh custom quá lớn/nhiều cuộc trò chuyện) -- bỏ qua
         // lặng lẽ, nền chỉ là tuỳ biến hiển thị phụ, không đáng chặn cả tính năng vì lỗi ghi cache này.
-        alert('Không lưu được (bộ nhớ trình duyệt đầy) -- thử chọn màu/gradient thay vì ảnh, hoặc xoá bớt tuỳ biến đã đặt ở cuộc trò chuyện khác.');
+        appAlert('Không lưu được (bộ nhớ trình duyệt đầy) -- thử chọn màu/gradient thay vì ảnh, hoặc xoá bớt tuỳ biến đã đặt ở cuộc trò chuyện khác.', 'Không lưu được');
     }
 }
 // Đọc tuỳ biến của 1 conversation, TỰ NHẬN DIỆN bản ghi cũ (từ trước khi có màu bong bóng -- khi đó
@@ -2672,7 +2718,7 @@ function ensureBgPicker() {
         e.target.value = '';
         if (!file) return;
         if (file.size > MAX_BG_IMAGE_BYTES) {
-            alert('Ảnh quá lớn (tối đa ' + (MAX_BG_IMAGE_BYTES / 1024 / 1024) + 'MB) -- nền ảnh lưu ngay trên trình duyệt, không upload lên server.');
+            appAlert('Ảnh quá lớn (tối đa ' + (MAX_BG_IMAGE_BYTES / 1024 / 1024) + 'MB) -- nền ảnh lưu ngay trên trình duyệt, không upload lên server.', 'Ảnh quá lớn');
             return;
         }
         var reader = new FileReader();
@@ -3142,7 +3188,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     function stagePendingFiles(fileList) {
         var remaining = MAX_PENDING_FILES - entry.pendingFiles.length;
         if (remaining <= 0) {
-            alert('Chỉ gửi được tối đa ' + MAX_PENDING_FILES + ' file trong 1 lần.');
+            appAlert('Chỉ gửi được tối đa ' + MAX_PENDING_FILES + ' file trong 1 lần.', 'Quá số lượng cho phép');
             return;
         }
         var files = Array.prototype.slice.call(fileList);
@@ -3159,10 +3205,10 @@ function ensureConversationCard(conversationId, label, subtitle) {
         renderPendingFilePreviews();
         inputEl.focus();
         if (skippedTooBigNames.length) {
-            alert('Bỏ qua file quá lớn (tối đa ' + (MAX_UPLOAD_BYTES / 1024 / 1024) + 'MB): ' + skippedTooBigNames.join(', '));
+            appAlert('Bỏ qua file quá lớn (tối đa ' + (MAX_UPLOAD_BYTES / 1024 / 1024) + 'MB): ' + skippedTooBigNames.join(', '), 'File quá lớn');
         }
         if (skippedTooManyCount > 0) {
-            alert('Chỉ thêm được ' + toAdd.length + '/' + files.length + ' file đã chọn (tối đa ' + MAX_PENDING_FILES + ' file trong 1 lần).');
+            appAlert('Chỉ thêm được ' + toAdd.length + '/' + files.length + ' file đã chọn (tối đa ' + MAX_PENDING_FILES + ' file trong 1 lần).', 'Vượt giới hạn');
         }
     }
     // .attachMenu gắn NGAY TRONG card này (khác #reactionPicker/#gifPicker dùng chung 1 phần tử toàn
@@ -3222,9 +3268,11 @@ function ensureConversationCard(conversationId, label, subtitle) {
             // Gửi TẤT CẢ file đã chọn trong CÙNG 1 TIN (body.files = [...], xem uploadAndSendFiles) --
             // giống Telegram/Messenger gộp cả album vào 1 bong bóng thay vì tách rời từng ảnh/video
             // thành nhiều tin lẻ. Chú thích gõ kèm (nếu có) gắn CHUNG cho cả tin đó.
+            var replyForFiles = pendingReplyTo;
             var files = entry.pendingFiles.map(function (item) { return item.file; });
             clearAllPendingFiles();
-            uploadAndSendFiles(conversationId, files, text);
+            clearPendingReply();
+            uploadAndSendFiles(conversationId, files, text, replyForFiles);
             inputEl.value = '';
             autoGrowComposeInput(); // co lại về 1 dòng -- gán value bằng JS không tự bắn "input" nên không tự co
             updateSendButtonState();
@@ -3239,12 +3287,14 @@ function ensureConversationCard(conversationId, label, subtitle) {
         // colony tu enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview), tin van di ngay,
         // khong bat user doi -- dung tinh than best-effort cua ca 3 pha.
         var body = {message: text};
+        if (pendingReplyTo) body.replyTo = pendingReplyTo;
         var soleUrlToSend = extractSoleUrl(text);
         if (soleUrlToSend && !composeLinkPreviewState.declined && composeLinkPreviewState.meta
             && composeLinkPreviewState.url === soleUrlToSend) {
             body.preview = composeLinkPreviewState.meta;
         }
         send({type: 'MESSAGE', id: newId(), conversationId: conversationId, body: body});
+        clearPendingReply();
         if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
         dismissComposeLinkPreview(); // an khoi xem truoc trong o nhap
         composeLinkPreviewState.declined = false; // reset: lan dan link tiep theo phai duoc fetch lai
@@ -3280,14 +3330,41 @@ function ensureConversationCard(conversationId, label, subtitle) {
     // tiên thêm vào (dù nạp lịch sử hay tin sống) tự cuộn xuống bình thường, không cần chờ tính toán
     // hình học trên 1 log rỗng (scrollHeight/clientHeight đều 0 lúc này, isNearBottom() sẽ luôn đúng
     // vậy thôi nhưng đặt tường minh cho dễ đọc).
+    // Reply bar (nằm trong .composeCard, trên .composeRow) -- hiện khi pendingReplyTo != null
+    var replyBarEl = document.createElement('div');
+    replyBarEl.className = 'replyBar';
+    replyBarEl.innerHTML = '<img class="replyBarThumb" alt=""><div class="replyBarBody"><div class="replyBarName"></div><div class="replyBarSnippet"></div></div><button type="button" class="replyBarClose">\u2715</button>';
+    card.querySelector('.composeCard').insertBefore(replyBarEl, card.querySelector('.composeRow'));
+    var pendingReplyTo = null;
+    function setPendingReply(replyTo) {
+        pendingReplyTo = replyTo;
+        replyBarEl.querySelector('.replyBarName').innerText = 'Tr\u1ea3 l\u1eddi ' + displayName(replyTo.fromUserId);
+        replyBarEl.querySelector('.replyBarSnippet').innerText = replyTo.snippet || 'Tin nh\u1eafn';
+        var rbt = replyBarEl.querySelector('.replyBarThumb');
+        if (replyTo.thumbUrl) { rbt.src = replyTo.thumbUrl; rbt.classList.add('show'); rbt.onerror = function(){ rbt.classList.remove('show'); }; }
+        else { rbt.removeAttribute('src'); rbt.classList.remove('show'); }
+        replyBarEl.classList.add('show');
+    }
+    function clearPendingReply() {
+        pendingReplyTo = null;
+        var rbt2 = replyBarEl.querySelector('.replyBarThumb');
+        if (rbt2) { rbt2.removeAttribute('src'); rbt2.classList.remove('show'); }
+        replyBarEl.classList.remove('show');
+    }
+    replyBarEl.querySelector('.replyBarClose').onclick = function(e){ e.stopPropagation(); clearPendingReply(); inputEl.focus(); };
+
     var entry = {
         label: initialLabel, el: card, logEl: logEl,
         jumpBtnEl: jumpBtnEl, jumpBadgeEl: jumpBadgeEl, readObserver: readObserver,
         stickToBottom: true, unreadIdSet: new Set(), totalUnreadCount: 0, renderedMessageIds: new Set(),
-        pendingFiles: [], // [{file, objectUrl}, ...] -- file/ảnh/video ĐANG chờ gửi (multi-file, xem stagePendingFiles)
+        pendingFiles: [], // [{file, objectUrl}, ...] -- file/\u1ea3nh/video \u0110ANG ch\u1edd g\u1eedi (multi-file, xem stagePendingFiles)
         hasMoreOlder: false, hasMoreNewer: false,
-        loadingOlder: false, loadingNewer: false, oldestLoadedTs: null, newestLoadedTs: null
+        loadingOlder: false, loadingNewer: false, oldestLoadedTs: null, newestLoadedTs: null,
+        pendingReplyToRef: function(v){ if(arguments.length) pendingReplyTo=v; return pendingReplyTo; },
+        clearPendingReply: null
     };
+    entry._setPendingReply = setPendingReply;
+    entry.clearPendingReply = clearPendingReply;
     // Đo lại mốc chiều cao .conv-send NGAY LÚC card thật sự hiện ra (gọi từ selectConversation, sau
     // classList.add('active')) -- offsetHeight ở đây là phép đo ĐỒNG BỘ (ép layout ngay lập tức), lấy
     // đúng kích thước THẬT của compose box tại đúng thời điểm này, KHÔNG phụ thuộc lần ResizeObserver
@@ -3391,11 +3468,40 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
             e.stopPropagation();
             openReactionPicker(e.currentTarget, conversationId, messageId);
         };
+        var replyBtn2 = row.querySelector('.replyBtn');
+        if (replyBtn2) replyBtn2.onclick = function (e) {
+            e.stopPropagation();
+            var snip = snippetForBody(body);
+            var entry2 = conversations[conversationId];
+            if (entry2) {
+                // use closure pendingReplyTo via entry reference stored on card
+                var card2 = entry2.el;
+                // find the replyBar via entry
+                var rb = card2.querySelector('.replyBar');
+                if (rb) {
+                    // build replyTo from current message
+                    var th1 = replyThumbForBody(body);
+                    var rt = {messageId: messageId, fromUserId: fromUserId, snippet: snip};
+                    if (th1 && th1.url) { rt.thumbUrl = th1.url; if (th1.isVideo) rt.thumbIsVideo = true; }
+                    if (tsEpochMillis) rt.ts = tsEpochMillis;
+                    // call setPendingReply via stored function on entry
+                    if (entry2._setPendingReply) entry2._setPendingReply(rt);
+                    else { entry2.pendingReplyToRef(rt); rb.querySelector('.replyBarName').innerText = 'Tr\u1ea3 l\u1eddi ' + displayName(fromUserId); rb.querySelector('.replyBarSnippet').innerText = snip; rb.classList.add('show'); }
+                    var inp = card2.querySelector('.composeInput');
+                    if (inp) inp.focus();
+                }
+            }
+        };
         var deleteBtn = row.querySelector('.msgDeleteBtn');
         if (deleteBtn) deleteBtn.onclick = function (e) {
             e.stopPropagation();
             deleteMessage(conversationId, messageId);
         };
+    }
+    // render reply quote inside bubble (before media/text)
+    if (body && body.replyTo) {
+        var bubbleEl2 = row.querySelector('.bubble');
+        if (bubbleEl2) bubbleEl2.insertBefore(buildReplyQuoteEl(body.replyTo, conversationId), bubbleEl2.firstChild);
     }
     if (mine) updateSeenDisplay(row, !!seen);
     if (deleted) renderDeletedPlaceholder(row);
@@ -3485,7 +3591,7 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         '<div class="bubble-wrap"><div class="bubble"></div><div class="reactions-row"></div></div>' +
         '<div class="bubble-time"><span class="bubble-time-text"></span><span class="seen-status"></span></div>' +
         '</div>' +
-        '<div class="msg-actions"><button type="button" class="react-btn" title="Thả cảm xúc">🙂</button>' +
+        '<div class="msg-actions"><button type="button" class="replyBtn" title="Trả lời">↩</button><button type="button" class="react-btn" title="Thả cảm xúc">🙂</button>' +
         (mine ? '<button type="button" class="msgDeleteBtn" title="Xoá tin nhắn">' + ICON.trash + '</button>' : '') +
         '</div>';
     if (!mine) {
@@ -4016,18 +4122,20 @@ function uploadOneFile(conversationId, file) {
 // không đọc nội dung bên trong, xem ARCHITECTURE.md), không cần thêm MessageType/FrameType riêng cho
 // "tin có nhiều file". Nếu 1 file lỗi giữa chừng thì KHÔNG gửi tin nào cả (tránh gửi thiếu file so với
 // những gì người dùng thực sự chọn) -- báo lỗi rõ file nào hỏng.
-function uploadAndSendFiles(conversationId, files, caption) {
+function uploadAndSendFiles(conversationId, files, caption, replyTo) {
     Promise.all(files.map(function (file) { return uploadOneFile(conversationId, file); }))
         .then(function (uploaded) {
+            var b = {message: caption || '', files: uploaded};
+            if (replyTo) b.replyTo = replyTo;
             send({
                 type: 'MESSAGE',
                 id: newId(),
                 conversationId: conversationId,
-                body: {message: caption || '', files: uploaded}
+                body: b
             });
         })
         .catch(function (err) {
-            alert('Gửi file lỗi: ' + err.message);
+            appAlert('Gửi file lỗi: ' + err.message, 'Lỗi gửi file');
         });
 }
 
@@ -4054,8 +4162,7 @@ function sendExternalImageMessage(conversationId, url, mime, width, height, file
 // là hàng rào phụ phía client, không phải chốt bảo mật thật.
 function deleteMessage(conversationId, messageId) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!confirm('Xoá tin nhắn này? Không thể hoàn tác.')) return;
-    send({type: 'DELETE', id: messageId, conversationId: conversationId});
+    appConfirm('Xoá tin nhắn này? Không thể hoàn tác.', {title: 'Xoá tin nhắn', confirmText: 'Xoá', cancelText: 'Huỷ', danger: true}).then(function(ok){ if(!ok) return; send({type: 'DELETE', id: messageId, conversationId: conversationId}); });
 }
 
 // Thay nội dung 1 dòng tin bằng placeholder "đã bị xoá" -- dùng chung cho cả tin MỚI bị xoá (nhận
@@ -4082,6 +4189,11 @@ function handleMessageDeleted(conversationId, messageId) {
     if (!messageId) return;
     var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
     if (row) renderDeletedPlaceholder(row);
+    document.querySelectorAll('.reply-quote[data-reply-to-id="' + CSS.escape(messageId) + '"]').forEach(function(q){
+        q.classList.add('reply-not-found');
+        var sn = q.querySelector('.reply-quote-snippet');
+        if (sn) sn.innerText = 'Tin nh\u1eafn \u0111\u00e3 b\u1ecb xo\u00e1';
+    });
     // Tin đã xoá thì không còn gì để "đọc" nữa -- bớt khỏi chấm đỏ (nếu đang tính là chưa đọc) thay
     // vì để nguyên 1 số đếm cho 1 tin giờ chẳng còn nội dung gì để xem.
     var entry = conversations[conversationId];
@@ -4191,6 +4303,205 @@ function renderReactions(messageId, rowEl) {
 
 function messageBodyText(body) {
     return body && body.message !== undefined ? body.message : JSON.stringify(body);
+}
+function snippetForBody(body) {
+    if (!body) return 'Tin nh\u1eafn';
+    var files = (typeof getMessageFiles === 'function') ? getMessageFiles(body) : [];
+    if (files.length) {
+        var cap = (body.message || '').trim();
+        var label = files.length === 1 ? ((files[0].fileMime||'').indexOf('video/')===0 ? '\uD83C\uDFA5 Video' : '\uD83D\uDDBC H\u00ecnh \u1ea3nh') : ('\uD83D\uDCCE ' + files.length + ' t\u1ec7p');
+        var shortCap = cap ? (cap.length>40? cap.slice(0,40)+'\u2026' : cap) : '';
+        return shortCap ? label + ' \u00b7 ' + shortCap : label;
+    }
+    var t = (body.message || '').trim();
+    if (!t) return 'Tin nh\u1eafn';
+    return t.length > 80 ? t.slice(0,80) + '\u2026' : t;
+}
+function replyThumbForBody(body) {
+    if (!body) return null;
+    var files = (typeof getMessageFiles === 'function') ? getMessageFiles(body) : [];
+    if (files.length) {
+        var f = files[0];
+        var isVideo = (f.fileMime||'').indexOf('video/')===0;
+        var url = null;
+        try { url = (isVideo && typeof posterUrlFor==='function') ? (posterUrlFor(f) || f.fileUrl) : f.fileUrl; } catch(e) { url = f.fileUrl; }
+        if (url) return {url: url, isVideo: isVideo};
+    }
+    if (body.preview && body.preview.image) return {url: body.preview.image, isVideo: false};
+    return null;
+}
+function buildReplyQuoteEl(replyTo, conversationId) {
+    var q = document.createElement('div');
+    q.className = 'reply-quote';
+    q.dataset.replyToId = replyTo.messageId;
+    var thumbHtml = replyTo.thumbUrl ? '<img class="reply-quote-thumb" src="' + replyTo.thumbUrl.replace(/"/g,'&quot;') + '" alt="">' : '';
+    q.innerHTML = thumbHtml + '<div class="reply-quote-body"><div class="reply-quote-name"></div><div class="reply-quote-snippet"></div></div>';
+    q.querySelector('.reply-quote-name').innerText = displayName(replyTo.fromUserId);
+    q.querySelector('.reply-quote-snippet').innerText = replyTo.snippet || 'Tin nh\u1eafn';
+    var th = q.querySelector('.reply-quote-thumb');
+    if (th) th.onerror = function(){ th.style.display='none'; };
+    q.onclick = function(e){ e.stopPropagation(); jumpToMessage(conversationId, replyTo.messageId, replyTo.ts); };
+    return q;
+}
+function ensureAppModal(){
+    var ov = document.getElementById('appModalOverlay');
+    if (ov) return ov;
+    ov = document.createElement('div');
+    ov.id = 'appModalOverlay';
+    ov.innerHTML = '<div class="appModal" role="dialog" aria-modal="true"><div class="appModalHead"></div><div class="appModalBody"></div><input class="appModalInput" type="text"><div class="appModalHint" style="display:none"></div><div class="appModalFoot"></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', function(e){ if(e.target===ov){ var c=ov._onCancel; if(c) c(); } });
+    return ov;
+}
+function appAlert(message, title){
+    return new Promise(function(resolve){
+        var ov = ensureAppModal();
+        ov.querySelector('.appModalHead').innerText = title || 'Th\u00f4ng b\u00e1o';
+        ov.querySelector('.appModalBody').innerText = message;
+        var inp = ov.querySelector('.appModalInput'); inp.classList.remove('show','invalid'); inp.value='';
+        var hint = ov.querySelector('.appModalHint'); hint.style.display='none'; hint.innerText='';
+        var foot = ov.querySelector('.appModalFoot'); foot.innerHTML='';
+        var ok = document.createElement('button'); ok.className='appModalBtn primary'; ok.innerText='OK';
+        foot.appendChild(ok);
+        function close(){ ov.classList.remove('show'); document.removeEventListener('keydown', onKey); }
+        function onKey(e){ if(e.key==='Escape'){ close(); resolve(); } if(e.key==='Enter'){ close(); resolve(); } }
+        ok.onclick = function(){ close(); resolve(); };
+        ov._onCancel = function(){ close(); resolve(); };
+        ov.classList.add('show');
+        document.addEventListener('keydown', onKey);
+        ok.focus();
+    });
+}
+function appConfirm(message, opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+        var ov = ensureAppModal();
+        ov.querySelector('.appModalHead').innerText = opts.title || 'X\u00e1c nh\u1eadn';
+        ov.querySelector('.appModalBody').innerText = message;
+        var inp = ov.querySelector('.appModalInput'); inp.classList.remove('show','invalid'); inp.value='';
+        var hint = ov.querySelector('.appModalHint'); hint.style.display='none'; hint.innerText='';
+        var foot = ov.querySelector('.appModalFoot'); foot.innerHTML='';
+        var cancel = document.createElement('button'); cancel.className='appModalBtn'; cancel.innerText = opts.cancelText || 'Hu\u1ef7';
+        var ok = document.createElement('button'); ok.className='appModalBtn ' + (opts.danger ? 'danger' : 'primary'); ok.innerText = opts.confirmText || 'X\u00e1c nh\u1eadn';
+        foot.appendChild(cancel); foot.appendChild(ok);
+        function close(v){ ov.classList.remove('show'); document.removeEventListener('keydown', onKey); resolve(v); }
+        function onKey(e){ if(e.key==='Escape') close(false); }
+        cancel.onclick = function(){ close(false); };
+        ok.onclick = function(){ close(true); };
+        ov._onCancel = function(){ close(false); };
+        ov.classList.add('show');
+        document.addEventListener('keydown', onKey);
+        ok.focus();
+    });
+}
+function appPrompt(message, defaultValue, opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+        var ov = ensureAppModal();
+        ov.querySelector('.appModalHead').innerText = opts.title || 'Nh\u1eadp th\u00f4ng tin';
+        ov.querySelector('.appModalBody').innerText = message;
+        var inp = ov.querySelector('.appModalInput'); inp.value = defaultValue || ''; inp.placeholder = opts.placeholder || ''; inp.classList.add('show'); inp.classList.remove('invalid');
+        var hint = ov.querySelector('.appModalHint');
+        if (opts.hint){ hint.innerText = opts.hint; hint.style.display='block'; hint.className='appModalHint'; } else { hint.style.display='none'; hint.innerText=''; }
+        var foot = ov.querySelector('.appModalFoot'); foot.innerHTML='';
+        var cancel = document.createElement('button'); cancel.className='appModalBtn'; cancel.innerText = opts.cancelText || 'Hu\u1ef7';
+        var ok = document.createElement('button'); ok.className='appModalBtn primary'; ok.innerText = opts.confirmText || 'L\u01b0u';
+        foot.appendChild(cancel); foot.appendChild(ok);
+        function close(v){ ov.classList.remove('show'); document.removeEventListener('keydown', onKey); resolve(v); }
+        function onKey(e){ if(e.key==='Escape') close(null); if(e.key==='Enter') doOk(); }
+        function doOk(){
+            var v = inp.value;
+            if (opts.required && !v.trim()){ inp.classList.add('invalid'); hint.innerText = opts.requiredMessage || 'Kh\u00f4ng \u0111\u01b0\u1ee3c \u0111\u1ec3 tr\u1ed1ng'; hint.style.display='block'; hint.className='appModalHint error'; inp.focus(); return; }
+            if (opts.validate){ var err = opts.validate(v); if(err){ inp.classList.add('invalid'); hint.innerText=err; hint.style.display='block'; hint.className='appModalHint error'; inp.focus(); return; } }
+            close(v);
+        }
+        cancel.onclick = function(){ close(null); };
+        ok.onclick = doOk;
+        ov._onCancel = function(){ close(null); };
+        ov.classList.add('show');
+        document.addEventListener('keydown', onKey);
+        inp.focus(); inp.select();
+        inp.oninput = function(){ inp.classList.remove('invalid'); if(!opts.hint){ hint.style.display='none'; } else { hint.className='appModalHint'; } };
+    });
+}
+function showToast(msg){
+    var t=document.createElement('div'); t.innerText=msg;
+    t.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:rgba(24,24,27,.92);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;z-index:9999;opacity:0;transition:opacity .2s';
+    document.body.appendChild(t); requestAnimationFrame(function(){ t.style.opacity='1'; });
+    setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },300); },2200);
+}
+function jumpToMessage(conversationId, targetMessageId, targetTs) {
+    var entry = conversations[conversationId];
+    if (!entry) return;
+    if (typeof selectConversation === 'function' && conversationId !== activeConversationId) {
+        selectConversation(conversationId);
+        entry = conversations[conversationId];
+    }
+    var row = entry.logEl.querySelector('[data-message-id="' + CSS.escape(targetMessageId) + '"]');
+    if (row) {
+        row.scrollIntoView({behavior: 'smooth', block: 'center'});
+        row.classList.add('jump-highlight');
+        setTimeout(function(){ row.classList.remove('jump-highlight'); }, 1300);
+        return;
+    }
+    if (targetTs == null) {
+        showToast('Tin g\u1ed1c ch\u01b0a \u0111\u01b0\u1ee3c t\u1ea3i \u2014 h\u00e3y cu\u1ed9n l\u00ean \u0111\u1ec3 t\u1ea3i th\u00eam');
+        return;
+    }
+    if (entry._seeking) return;
+    entry._seeking = true;
+    showToast('\u0110ang t\u1ea3i tin g\u1ed1c...');
+    var SEEK_HALF = Math.floor(HISTORY_PAGE_SIZE / 2) || 15;
+    Promise.all([
+        fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + SEEK_HALF + '&before=' + (targetTs + 1)),
+        fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + SEEK_HALF + '&after=' + targetTs)
+    ]).then(function(results){
+        var beforeMsgs = results[0] || [];
+        var afterMsgs = results[1] || [];
+        var logEl = entry.logEl;
+        try { entry.readObserver.disconnect(); } catch(e) {}
+        logEl.innerHTML = '';
+        entry.renderedMessageIds.clear();
+        entry.lastMessageMeta = null;
+        entry.lastDividerDateKey = null;
+        entry.lastGroupRow = null;
+        entry.oldestLoadedTs = null;
+        entry.newestLoadedTs = null;
+        entry.suppressAutoScroll = true;
+        entry.skipReadTracking = true;
+        entry.scrollAnchor = null;
+        beforeMsgs.slice().reverse().forEach(function(m){
+            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+        });
+        afterMsgs.forEach(function(m){
+            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+        });
+        entry.suppressAutoScroll = false;
+        entry.skipReadTracking = false;
+        var allTs = [];
+        beforeMsgs.forEach(function(m){ allTs.push(m.ts); });
+        afterMsgs.forEach(function(m){ allTs.push(m.ts); });
+        if (allTs.length) {
+            entry.oldestLoadedTs = Math.min.apply(null, allTs);
+            entry.newestLoadedTs = Math.max.apply(null, allTs);
+        }
+        entry.hasMoreOlder = beforeMsgs.length === SEEK_HALF;
+        entry.hasMoreNewer = afterMsgs.length === SEEK_HALF;
+        var targetRow = logEl.querySelector('[data-message-id="' + CSS.escape(targetMessageId) + '"]');
+        if (targetRow) {
+            requestAnimationFrame(function(){
+                targetRow.scrollIntoView({behavior: 'smooth', block: 'center'});
+                targetRow.classList.add('jump-highlight');
+                setTimeout(function(){ targetRow.classList.remove('jump-highlight'); }, 1500);
+            });
+        } else {
+            logEl.scrollTop = Math.max(0, (logEl.scrollHeight - logEl.clientHeight) / 2);
+            showToast('Kh\u00f4ng t\u00ecm th\u1ea5y tin g\u1ed1c (c\u00f3 th\u1ec3 \u0111\u00e3 b\u1ecb xo\u00e1)');
+        }
+    }).catch(function(err){
+        console.warn('seek failed', err);
+        showToast('Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c tin g\u1ed1c: ' + (err.message||''));
+    }).finally(function(){ entry._seeking = false; });
 }
 
 // Tô màu các cụm "@ai_đó" ngay trong nội dung tin -- thuần hiển thị (không tra cứu/link thật tới
@@ -5020,12 +5331,15 @@ function prependOlderMessages(conversationId, messagesDesc) {
                 e.stopPropagation();
                 openReactionPicker(e.currentTarget, conversationId, m.id);
             };
+            var replyBtn3 = row.querySelector('.replyBtn');
+            if (replyBtn3) (function(mid, fuid, bdy, ts){ replyBtn3.onclick = function(e){ e.stopPropagation(); var sn=snippetForBody(bdy); var th=replyThumbForBody(bdy); var ent=conversations[conversationId]; if(ent&&ent._setPendingReply){ var rt={messageId:mid, fromUserId:fuid, snippet:sn}; if(th&&th.url){ rt.thumbUrl=th.url; if(th.isVideo) rt.thumbIsVideo=true; } if(ts) rt.ts=ts; ent._setPendingReply(rt); var inp2=ent.el.querySelector('.composeInput'); if(inp2) inp2.focus(); } }; })(m.id, m.fromUserId, m.body, m.ts);
             var deleteBtn = row.querySelector('.msgDeleteBtn');
             if (deleteBtn) deleteBtn.onclick = function (e) {
                 e.stopPropagation();
                 deleteMessage(conversationId, m.id);
             };
         }
+        if (m.body && m.body.replyTo) { var be=row.querySelector('.bubble'); if(be) be.insertBefore(buildReplyQuoteEl(m.body.replyTo, conversationId), be.firstChild); }
         if (mine) updateSeenDisplay(row, !!m.seen);
         if (m.deleted) renderDeletedPlaceholder(row);
         frag.appendChild(row);
@@ -5084,13 +5398,13 @@ function startDm(peerUserId) {
             document.getElementById('newConvPanel').open = false;
         })
         .catch(function (err) {
-            alert('tạo DM lỗi: ' + err.message);
+            appAlert('tạo DM lỗi: ' + err.message, 'Lỗi');
         });
 }
 
 function startGroup() {
     if (selectedGroupMemberIds.length === 0) {
-        alert('cần ít nhất 1 thành viên khác');
+        appAlert('cần ít nhất 1 thành viên khác', 'Thiếu thành viên');
         return;
     }
     var members = selectedGroupMemberIds.slice();
@@ -5109,7 +5423,7 @@ function startGroup() {
             renderUserPickers();
         })
         .catch(function (err) {
-            alert('tạo group lỗi: ' + err.message);
+            appAlert('tạo group lỗi: ' + err.message, 'Lỗi');
         });
 }
 
