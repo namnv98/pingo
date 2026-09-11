@@ -382,6 +382,10 @@ function startGroup() {
         });
 }
 
+// id -> lúc gửi PING đó -- khớp lại đúng PONG tương ứng để tính độ trễ thật (xem case "PONG"), reset
+// mỗi lần connect() chạy lại (kết nối mới, id cũ không còn PONG nào tới nữa).
+var pingSentAt = {};
+
 function connect() {
     // Chưa đăng nhập thì không tự mở WebSocket -- no-op an toàn cho mọi nơi lỡ gọi lại connect() (vd auto-retry ở onclose).
     if (!identityConfirmed) return;
@@ -391,17 +395,26 @@ function connect() {
 
     ws.onopen = function () {
         reconnectDelayMs = 1000; // reset backoff mỗi khi nối thành công
+        pingSentAt = {}; // kết nối mới -- id PING của lần kết nối trước (nếu còn sót) không bao giờ có PONG khớp lại nữa
         setStatus('đã kết nối, đang xác thực...', 'pending');
         send({type: "AUTH", id: newId(), token: authToken});
 
         if (pingIntervalId) clearInterval(pingIntervalId);
         pingIntervalId = setInterval(function () {
-            if (ws && ws.readyState === WebSocket.OPEN) send({type: "PING", id: newId()});
+            if (ws && ws.readyState !== WebSocket.OPEN) return;
+            // Đo độ trễ thật qua đúng vòng PING/PONG định kỳ đã có sẵn (không tốn thêm round-trip riêng)
+            // -- id khớp lại đúng PONG tương ứng (harbor echo nguyên id, xem SocketFrames#pong), xem case "PONG".
+            var pingId = newId();
+            pingSentAt[pingId] = Date.now();
+            send({type: "PING", id: pingId});
         }, PING_INTERVAL_MS);
     };
 
     ws.onclose = function () {
         if (pingIntervalId) { clearInterval(pingIntervalId); pingIntervalId = null; }
+        // Rớt kết nối thì mọi tin đang "chờ xác nhận" chắc chắn không còn ACK/echo nào tới nữa -- báo lỗi
+        // ngay thay vì để người dùng chờ hết SEND_TIMEOUT_MS mới biết (xem sendChatMessage/markMessageFailed).
+        Object.keys(pendingSentMessages).forEach(function (id) { markMessageFailed(id, 'Mất kết nối'); });
         if (!identityConfirmed) return; // dong chu dong vi dang doi dat/xac nhan lai ten -- khong phai mat ket noi that, khong can bao/retry
         setStatus('mất kết nối, thử lại sau ' + (reconnectDelayMs / 1000) + 's...', 'bad');
         setTimeout(connect, reconnectDelayMs);
@@ -414,7 +427,7 @@ function connect() {
         switch (frame.type) {
             case "AUTH_OK":
                 // frame.serverId = pod harbor đang phục vụ session này -- tiện debug khi có nhiều pod mà không cần vào k8s check.
-                setStatus('đã xác thực', 'ok');
+                setStatus('Live', 'ok');
                 document.getElementById('podBadge').innerText = frame.serverId ? 'pod ' + frame.serverId : '';
                 break;
             case "AUTH_ERROR":
@@ -435,13 +448,21 @@ function connect() {
             case "ACK":
                 countSent++;
                 document.getElementById('countSent').innerText = countSent;
+                // frame.id = id tin nhắn client tự sinh lúc gửi (xem sendChatMessage) -- ACK chỉ tồn tại cho MESSAGE
+                // (xem ChatSessionManager#handleMessage), no-op an toàn nếu id không khớp bubble optimistic nào.
+                markMessageSent(frame.id);
                 break;
             case "ERROR":
                 console.warn('error:', frame.reason);
+                // frame.id trùng id đã gửi (xem sendChatMessage) -- chỉ có ý nghĩa nếu đúng là 1 tin đang chờ optimistic, no-op nếu không.
+                markMessageFailed(frame.id, frame.reason);
                 break;
             case "MESSAGE":
                 countReceived++;
                 document.getElementById('countReceived').innerText = countReceived;
+                // Echo của CHÍNH tin mình vừa gửi -- xác nhận luôn ở đây, thường tới TRƯỚC cả ACK (fan-out
+                // cục bộ chạy trước dòng gửi ACK bên colony) nên không thể chỉ dựa vào case ACK ở trên.
+                if (frame.fromUserId === myUserId) markMessageSent(frame.id);
                 // Tin sống cho conversation chưa từng loadHistory không được vẽ tay ở đây -- sẽ đứng sai chỗ (đầu log rỗng), đảo ngược thứ tự khi loadHistory nạp về sau (bug thật đã gặp); chỉ cần đảm bảo card + kích hoạt loadHistory, nó tự nạp đúng vị trí.
                 // READ chỉ gửi khi tin thật sự lọt vào khung nhìn qua IntersectionObserver trong appendMessageBubble (xem sendReadReceipt), không gửi mù ở đây.
                 var msgEntry = conversations[frame.conversationId];
@@ -465,6 +486,13 @@ function connect() {
                 send({type: "PONG", id: frame.id});
                 break;
             case "PONG":
+                // Phản hồi PONG cho đúng PING của CHÍNH mình vừa gửi (xem pingSentAt) -- pong harbor tự
+                // chủ động gửi lúc idle (không khớp id nào trong pingSentAt) thì bỏ qua, không có gì để đo.
+                if (pingSentAt[frame.id] != null) {
+                    var latencyMs = Date.now() - pingSentAt[frame.id];
+                    delete pingSentAt[frame.id];
+                    setStatus('Live ' + latencyMs + 'ms', 'ok');
+                }
                 break;
             case "TYPING":
                 handleTypingReceived(frame.conversationId, frame.fromUserId);

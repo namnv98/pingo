@@ -109,6 +109,26 @@ public class HallApiHandlers {
   }
 
   /**
+   * {@code GET /messages/search?q=<text>&conversationId=<uuid, tuỳ chọn>&limit=} -- tìm nội dung tin
+   * nhắn (full-text search, xem {@link MessageHistoryRegistry#searchMessages}). Bắt buộc auth --
+   * scoping quyền theo {@code conversation_members} của CHÍNH {@code userId} lấy từ token, không phải
+   * tham số client tự khai. {@code conversationId} thiếu/rỗng = tìm TOÀN CỤC xuyên mọi conversation
+   * đang là thành viên; có giá trị = chỉ tìm trong đúng conversation đó (vẫn lọc lại theo membership ở
+   * registry, không tin mù theo client).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "messages/search", type = Type.HTTP)})
+  public CompletionStage<byte[]> searchMessages(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var query = request.getParam("q");
+    if (query == null || query.isBlank()) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing q");
+    }
+    var conversationId = UUIDUtils.parseOrDefault(request.getParam("conversationId"));
+    var limit = parseLimit(request.getParam("limit"));
+    return history.searchMessages(userId, conversationId, query.strip(), limit).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
    * {@code GET /read-cursor?conversationId=} -- vị trí "đã đọc tới đâu" CỦA CHÍNH MÌNH trong 1
    * conversation (xem {@link MessageHistoryRegistry#getReadCursor}), dùng lúc mở lại conversation
    * để cuộn đúng chỗ lần trước dừng (xem demo.html loadHistory). Cần auth (khác {@code /messages}

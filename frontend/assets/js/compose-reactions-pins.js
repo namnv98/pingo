@@ -419,12 +419,7 @@ function uploadAndSendFiles(conversationId, files, caption, replyTo) {
         .then(function (uploaded) {
             var b = {message: caption || '', files: uploaded};
             if (replyTo) b.replyTo = replyTo;
-            send({
-                type: 'MESSAGE',
-                id: newId(),
-                conversationId: conversationId,
-                body: b
-            });
+            sendChatMessage(conversationId, b);
         })
         .catch(function (err) {
             appAlert('Gửi file lỗi: ' + err.message, 'Lỗi gửi file');
@@ -433,12 +428,6 @@ function uploadAndSendFiles(conversationId, files, caption, replyTo) {
 
 // Gửi ảnh trỏ thẳng tới URL ngoài (GIF/sticker) thay vì upload lại qua file-server -- server không validate domain của fileUrl, width/height gán thẳng để tránh layout nhảy lúc ảnh tải xong.
 function sendExternalImageMessage(conversationId, url, mime, width, height, fileName) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    send({
-        type: 'MESSAGE',
-        id: newId(),
-        conversationId: conversationId,
-        body: {message: '', files: [{fileUrl: url, fileMime: mime, fileName: fileName, width: width, height: height}]}
-    });
+    sendChatMessage(conversationId, {message: '', files: [{fileUrl: url, fileMime: mime, fileName: fileName, width: width, height: height}]});
 }
 

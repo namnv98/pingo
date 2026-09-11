@@ -279,7 +279,9 @@ function showToast(msg){
     document.body.appendChild(t); requestAnimationFrame(function(){ t.style.opacity='1'; });
     setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },300); },2200);
 }
-function jumpToMessage(conversationId, targetMessageId, targetTs) {
+// highlightTerm (tuỳ chọn) -- xem highlightTermInBubble bên dưới, dùng cho kết quả tìm kiếm (trong 1
+// đoạn chat lẫn toàn cục) để tô đúng phần CHỮ khớp trong bubble, không chỉ nháy sáng cả dòng như trước.
+function jumpToMessage(conversationId, targetMessageId, targetTs, highlightTerm) {
     var entry = conversations[conversationId];
     if (!entry) return;
     if (typeof selectConversation === 'function' && conversationId !== activeConversationId) {
@@ -288,11 +290,48 @@ function jumpToMessage(conversationId, targetMessageId, targetTs) {
     }
     // Phải đợi loadHistory vẽ xong hẳn rồi mới seek -- chạy song song thì ai xong sau ghi đè DOM (logEl.innerHTML='') của người xong trước, gây bug scroll/tô sáng sai lung tung (đã gặp thật).
     Promise.resolve(loadHistory(conversationId)).then(function () {
-        performJumpToMessage(conversationId, targetMessageId, targetTs);
+        performJumpToMessage(conversationId, targetMessageId, targetTs, highlightTerm);
     });
 }
 
-function performJumpToMessage(conversationId, targetMessageId, targetTs) {
+// Tô đúng đoạn CHỮ khớp {@code term} bên trong .bubble của 1 dòng tin -- chỉ đụng vào TEXT NODE (dùng
+// TreeWalker), không đụng innerHTML thô, để không phá markup mention/link đã render sẵn trong bubble
+// (renderMessageText). Tự gỡ lại sau 1 lúc, không tô vĩnh viễn.
+function highlightTermInBubble(row, term) {
+    if (!term) return;
+    var bubbleEl = row.querySelector('.bubble');
+    if (!bubbleEl) return;
+    var lowerTerm = term.toLowerCase();
+    var walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT, null);
+    var textNodes = [];
+    var n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+    textNodes.forEach(function (node) {
+        var text = node.nodeValue;
+        var lowerText = text.toLowerCase();
+        var idx = lowerText.indexOf(lowerTerm);
+        if (idx === -1) return;
+        var frag = document.createDocumentFragment();
+        var lastIndex = 0;
+        while (idx !== -1) {
+            frag.appendChild(document.createTextNode(text.slice(lastIndex, idx)));
+            var mark = document.createElement('mark');
+            mark.className = 'searchHit';
+            mark.textContent = text.slice(idx, idx + term.length);
+            frag.appendChild(mark);
+            lastIndex = idx + term.length;
+            idx = lowerText.indexOf(lowerTerm, lastIndex);
+        }
+        frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+        node.parentNode.replaceChild(frag, node);
+    });
+    setTimeout(function () {
+        bubbleEl.querySelectorAll('mark.searchHit').forEach(function (m) { m.replaceWith(document.createTextNode(m.textContent)); });
+        bubbleEl.normalize(); // gộp lại các text node liền kề sau khi gỡ <mark>, tránh để DOM vụn
+    }, 2500);
+}
+
+function performJumpToMessage(conversationId, targetMessageId, targetTs, highlightTerm) {
     var entry = conversations[conversationId];
     if (!entry) return;
     var row = entry.logEl.querySelector('[data-message-id="' + CSS.escape(targetMessageId) + '"]');
@@ -300,6 +339,7 @@ function performJumpToMessage(conversationId, targetMessageId, targetTs) {
         row.scrollIntoView({behavior: 'smooth', block: 'center'});
         row.classList.add('jump-highlight');
         setTimeout(function(){ row.classList.remove('jump-highlight'); }, 1300);
+        highlightTermInBubble(row, highlightTerm);
         return;
     }
     if (targetTs == null) {
@@ -351,6 +391,7 @@ function performJumpToMessage(conversationId, targetMessageId, targetTs) {
                 targetRow.scrollIntoView({behavior: 'smooth', block: 'center'});
                 targetRow.classList.add('jump-highlight');
                 setTimeout(function(){ targetRow.classList.remove('jump-highlight'); }, 1500);
+                highlightTermInBubble(targetRow, highlightTerm);
             });
         } else {
             logEl.scrollTop = Math.max(0, (logEl.scrollHeight - logEl.clientHeight) / 2);

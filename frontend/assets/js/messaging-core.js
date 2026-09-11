@@ -3,8 +3,107 @@ function newId() {
     return crypto.randomUUID();
 }
 
+// Trả về true/false thay vì ném lỗi ra ngoài -- ws.send() ném exception nếu socket chưa/không còn
+// OPEN (đang connecting/closing/closed), trước đây không ai bọc try/catch nên 1 lần gửi lúc mất kết
+// nối sẽ làm rớt cả hàm gọi nó giữa chừng (bug thật đã gặp -- xem sendChatMessage). Không đổi gì cho
+// các loại frame khác (TYPING/READ/REACTION/PIN/DELETE...) -- vẫn gọi y hệt, chỉ là giờ AN TOÀN hơn
+// khi mất kết nối, không cần sửa gì thêm ở các chỗ gọi đó.
 function send(frame) {
-    ws.send(JSON.stringify(frame));
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+        ws.send(JSON.stringify(frame));
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+// ===== Optimistic send: hiện bubble NGAY lúc bấm gửi, tự cập nhật trạng thái đang gửi/đã gửi/lỗi =====
+// Trước đây bubble CHỈ hiện khi server echo frame MESSAGE quay lại (fan-out) -- nếu vì lý do gì đó
+// (mất kết nối, lỗi server, echo bị rớt) mà echo không bao giờ tới thì người gửi không thấy GÌ CẢ,
+// không có cách nào biết tin đã gửi hay chưa (bug thật đã gặp/được hỏi). Giờ render local trước bằng
+// đúng id client tự sinh (appendMessageBubble đã có sẵn cơ chế khử trùng theo id, xem
+// entry.renderedMessageIds), rồi 3 tín hiệu sau tự "nhận" lại đúng bubble đó qua data-message-id:
+//   - ACK (frame.id trùng)      -> markMessageSent
+//   - MESSAGE echo (fromUserId === mình, frame.id trùng) -> markMessageSent (thường tới TRƯỚC ACK
+//     vì fan-out cục bộ chạy trước dòng gửi ACK bên colony, xem ChatSessionManager#handleMessage --
+//     nhưng không chắc chắn tuyệt đối nên xử lý cả 2 đường, idempotent nếu trùng)
+//   - ERROR (frame.id trùng)   -> markMessageFailed
+// Không có tín hiệu nào tới trong SEND_TIMEOUT_MS (mất gói, server treo...) cũng tự coi là lỗi.
+var pendingSentMessages = {}; // id -> {type, id, conversationId, body} -- giữ nguyên frame gốc để "gửi lại" dùng lại được
+var sendTimeoutTimers = {}; // id -> setTimeout handle
+var SEND_TIMEOUT_MS = 12000; // dư dả so với round-trip WS bình thường -- tránh báo lỗi oan lúc mạng chỉ hơi chậm
+
+function scheduleSendTimeout(messageId) {
+    clearSendTimeout(messageId);
+    sendTimeoutTimers[messageId] = setTimeout(function () {
+        markMessageFailed(messageId, 'Không nhận được xác nhận từ server (hết thời gian chờ)');
+    }, SEND_TIMEOUT_MS);
+}
+function clearSendTimeout(messageId) {
+    if (sendTimeoutTimers[messageId]) {
+        clearTimeout(sendTimeoutTimers[messageId]);
+        delete sendTimeoutTimers[messageId];
+    }
+}
+
+function markMessageSent(messageId) {
+    if (!pendingSentMessages[messageId]) return; // ACK lẫn echo đều gọi tới đây -- lần thứ 2 (nếu có) là no-op vô hại
+    delete pendingSentMessages[messageId];
+    clearSendTimeout(messageId);
+    var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+    if (!row) return;
+    row.classList.remove('pending', 'failed');
+    var seenEl = row.querySelector('.seen-status');
+    if (seenEl) { seenEl.classList.remove('failed'); seenEl.onclick = null; seenEl.title = ''; }
+    updateSeenDisplay(row, false); // '✓' -- đã gửi, chưa ai xem; '✓✓' sẽ tới sau qua handleSeenReceived như bình thường
+}
+
+function markMessageFailed(messageId, reason) {
+    // REACTION/PIN/DELETE frame cũng dùng ĐÚNG messageId làm frame.id (xem openReactionPicker/openPinMenu/
+    // deleteMessage) -- 1 frame ERROR cho các hành động đó sẽ trùng data-message-id với chính tin nhắn
+    // đang bị react/ghim/xoá. Phải chặn ở đây bằng pendingSentMessages (chỉ chứa id của tin ĐANG chờ gửi
+    // qua sendChatMessage) để không gắn nhầm trạng thái "gửi lỗi" lên 1 bubble đã gửi xong từ trước.
+    if (!pendingSentMessages[messageId]) return;
+    clearSendTimeout(messageId);
+    var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+    if (!row) return;
+    row.classList.remove('pending');
+    row.classList.add('failed');
+    var seenEl = row.querySelector('.seen-status');
+    if (seenEl) {
+        seenEl.classList.add('failed');
+        seenEl.innerText = '!';
+        seenEl.title = (reason || 'Gửi lỗi') + ' -- bấm để gửi lại';
+        seenEl.onclick = function (e) { e.stopPropagation(); retrySendMessage(messageId); };
+    }
+}
+
+// Gửi lại NGUYÊN payload cũ dưới đúng id cũ -- vẫn đúng 1 bubble đó chuyển lại trạng thái "đang gửi", không tạo bubble mới.
+function retrySendMessage(messageId) {
+    var frame = pendingSentMessages[messageId];
+    if (!frame) return;
+    var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+    if (row) {
+        row.classList.remove('failed');
+        row.classList.add('pending');
+        var seenEl = row.querySelector('.seen-status');
+        if (seenEl) { seenEl.classList.remove('failed'); seenEl.innerText = '○'; seenEl.title = ''; seenEl.onclick = null; }
+    }
+    if (send(frame)) scheduleSendTimeout(messageId);
+    else markMessageFailed(messageId, 'Mất kết nối');
+}
+
+// Điểm vào DUY NHẤT để gửi 1 tin MESSAGE (chữ/file/GIF-sticker đều gọi qua đây) -- xem sendMsg,
+// uploadAndSendFiles, sendExternalImageMessage. body đã đúng shape server mong đợi (message/files/replyTo/...).
+function sendChatMessage(conversationId, body) {
+    var id = newId();
+    appendMessageBubble(conversationId, myUserId, body, Date.now(), id, false, null, false, true);
+    var frame = {type: 'MESSAGE', id: id, conversationId: conversationId, body: body};
+    pendingSentMessages[id] = frame;
+    if (send(frame)) scheduleSendTimeout(id);
+    else markMessageFailed(id, 'Mất kết nối');
+    return id;
 }
 
 // Gửi READ cho 1 tin (dùng chung cho mọi đường đánh dấu "đã đọc") -- tab đang nền/mất focus thì xếp hàng vào pendingReadAcks, gửi bù khi tab quay lại active.
@@ -319,12 +418,20 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<div class="subtitle"></div><div class="online-status"></div></div></div>' +
         '<div class="headRight">' +
         '<span class="badge">' + conversationId.substring(0, 8) + '…</span>' +
+        '<button class="icon searchToggleBtn" title="Tìm trong đoạn chat">' + ICON.search + '</button>' +
         '<button class="icon starBtn" title="Gắn sao">' + ICON.star + '</button>' +
         '<button class="icon renameBtn" title="Đổi tên riêng">' + ICON.edit + '</button>' +
         '<button class="icon bgBtn" title="Đổi hình nền &amp; màu chat">' + ICON.image + '</button>' +
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
         '<button class="icon infoBtn" title="Ẩn/hiện panel thông tin" onclick="toggleInfoPanel()">' + ICON.info + '</button>' +
         '</div></div>' +
+        '<div class="convSearchBar"><span class="convSearchIcon">' + ICON.search + '</span>' +
+        '<input type="text" class="convSearchInput" placeholder="Tìm trong đoạn chat...">' +
+        '<span class="convSearchCount"></span>' +
+        '<button type="button" class="icon convSearchPrevBtn" title="Kết quả trước">' + ICON.down + '</button>' +
+        '<button type="button" class="icon convSearchNextBtn" title="Kết quả sau">' + ICON.down + '</button>' +
+        '<button type="button" class="icon convSearchCloseBtn" title="Đóng (Esc)">' + ICON.closeSm + '</button>' +
+        '</div>' +
         '<div class="conv-log-wrap"><div class="conv-log"></div>' +
         '<button type="button" class="jumpToBottomBtn" title="Xuống tin mới nhất">' + ICON.down +
         '<span class="jumpBadge"></span></button></div>' +
@@ -723,7 +830,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
             && composeLinkPreviewState.url === soleUrlToSend) {
             body.preview = composeLinkPreviewState.meta;
         }
-        send({type: 'MESSAGE', id: newId(), conversationId: conversationId, body: body});
+        sendChatMessage(conversationId, body);
         clearPendingReply();
         if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
         dismissComposeLinkPreview(); // an khoi xem truoc trong o nhap
@@ -892,6 +999,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         jumpBtnEl: jumpBtnEl, jumpBadgeEl: jumpBadgeEl, readObserver: readObserver,
         stickToBottom: true, unreadIdSet: new Set(), totalUnreadCount: 0, renderedMessageIds: new Set(),
         pendingFiles: [], // [{file, objectUrl}, ...] -- file/\u1ea3nh/video \u0110ANG ch\u1edd g\u1eedi (multi-file, xem stagePendingFiles)
+        searchResults: [], searchIndex: -1, searchDebounce: null, searchTerm: null, // xem toggleConvSearch/runConvSearch
         hasMoreOlder: false, hasMoreNewer: false,
         loadingOlder: false, loadingNewer: false, oldestLoadedTs: null, newestLoadedTs: null,
         pendingReplyToRef: function(v){ if(arguments.length) pendingReplyTo=v; return pendingReplyTo; },
@@ -902,8 +1010,81 @@ function ensureConversationCard(conversationId, label, subtitle) {
     // Đo lại mốc .conv-send NGAY lúc card hiện ra (gọi từ selectConversation) -- offsetHeight đồng bộ ở đây tránh phụ thuộc lần ResizeObserver báo đầu tiên có thể đã gộp mất thay đổi thật (xem composeResizeObserver phía trên).
     entry.resetComposeSendBaseline = function () { lastConvSendHeight = convSendEl.offsetHeight; };
     conversations[conversationId] = entry;
+
+    // ===== Tìm trong đoạn chat đang mở (xem GET /messages/search, hall) =====
+    card.querySelector('.searchToggleBtn').onclick = function (e) { e.stopPropagation(); toggleConvSearch(conversationId); };
+    card.querySelector('.convSearchCloseBtn').onclick = function (e) { e.stopPropagation(); toggleConvSearch(conversationId); };
+    var searchInputEl = card.querySelector('.convSearchInput');
+    searchInputEl.addEventListener('input', function () {
+        if (entry.searchDebounce) clearTimeout(entry.searchDebounce);
+        var term = searchInputEl.value.trim();
+        entry.searchDebounce = setTimeout(function () { runConvSearch(conversationId, term); }, 300);
+    });
+    searchInputEl.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); stepConvSearch(conversationId, e.shiftKey ? -1 : 1); }
+        else if (e.key === 'Escape') { e.preventDefault(); toggleConvSearch(conversationId); }
+    });
+    card.querySelector('.convSearchPrevBtn').onclick = function (e) { e.stopPropagation(); stepConvSearch(conversationId, -1); };
+    card.querySelector('.convSearchNextBtn').onclick = function (e) { e.stopPropagation(); stepConvSearch(conversationId, 1); };
     updateConvHeadPresence(conversationId);
     return entry;
+}
+
+// ===== Tìm trong 1 đoạn chat đang mở -- xem .convSearchBar trong ensureConversationCard, dùng
+// jumpToMessage() có sẵn (messages-render.js) để nhảy tới đúng tin thay vì tự viết lại phần
+// scroll/tải thêm/tô sáng (hàm đó đã lo hết). =====
+
+function toggleConvSearch(conversationId) {
+    var entry = conversations[conversationId];
+    if (!entry) return;
+    var bar = entry.el.querySelector('.convSearchBar');
+    var opening = !bar.classList.contains('show');
+    bar.classList.toggle('show');
+    if (opening) {
+        entry.el.querySelector('.convSearchInput').focus();
+    } else {
+        entry.searchResults = [];
+        entry.searchIndex = -1;
+        entry.el.querySelector('.convSearchInput').value = '';
+        entry.el.querySelector('.convSearchCount').innerText = '';
+    }
+}
+
+function updateConvSearchCount(entry) {
+    var countEl = entry.el.querySelector('.convSearchCount');
+    if (entry.searchResults.length) countEl.innerText = (entry.searchIndex + 1) + '/' + entry.searchResults.length;
+    else countEl.innerText = entry.el.querySelector('.convSearchInput').value.trim() ? '0/0' : '';
+}
+
+function runConvSearch(conversationId, term) {
+    var entry = conversations[conversationId];
+    if (!entry) return;
+    if (!term) {
+        entry.searchResults = [];
+        entry.searchIndex = -1;
+        updateConvSearchCount(entry);
+        return;
+    }
+    fetchJson('/messages/search?conversationId=' + encodeURIComponent(conversationId) + '&q=' + encodeURIComponent(term), true)
+        .then(function (results) {
+            // Người dùng có thể đã gõ tiếp/đóng thanh tìm trong lúc chờ HTTP -- bỏ kết quả trễ nếu ô nhập không còn khớp term này nữa.
+            if (entry.el.querySelector('.convSearchInput').value.trim() !== term) return;
+            entry.searchResults = results;
+            entry.searchIndex = results.length ? 0 : -1;
+            entry.searchTerm = term; // giữ lại để stepConvSearch (▲▼) tô đúng chữ khớp khi chuyển kết quả
+            updateConvSearchCount(entry);
+            if (results.length) jumpToMessage(conversationId, results[0].id, results[0].ts, term);
+        })
+        .catch(function (err) { console.warn('tìm trong đoạn chat lỗi', err); });
+}
+
+function stepConvSearch(conversationId, delta) {
+    var entry = conversations[conversationId];
+    if (!entry || !entry.searchResults.length) return;
+    entry.searchIndex = (entry.searchIndex + delta + entry.searchResults.length) % entry.searchResults.length;
+    updateConvSearchCount(entry);
+    var r = entry.searchResults[entry.searchIndex];
+    jumpToMessage(conversationId, r.id, r.ts, entry.searchTerm);
 }
 
 // Dòng hệ thống (sys) -- xác nhận subscribe, thông báo tạo conversation..., không phải tin nhắn chat thật (xem appendMessageBubble cho bong bóng chat).
@@ -946,7 +1127,7 @@ function maybeInsertDateDivider(entry, tsEpochMillis) {
 }
 
 // Mọi conversation (DM lẫn nhóm) đều dùng chung 1 kiểu hiển thị bong bóng Messenger (buildDmBubbleRow) -- theo yêu cầu bỏ giao diện chat nhóm kiểu Slack riêng, làm giống chat riêng.
-function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, messageId, seen, reactions, deleted) {
+function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, messageId, seen, reactions, deleted, pending) {
     var entry = ensureConversationCard(conversationId, 'Conversation');
     // Tin có thể tới trùng qua 2 đường (lazy-load đúng lúc tin đó cũng vừa đẩy sống qua WS) -- bỏ qua nếu id đã render rồi, tránh vẽ trùng row và cộng trùng totalUnreadCount.
     if (messageId && entry.renderedMessageIds.has(messageId)) return;
@@ -1010,7 +1191,11 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
         var bubbleEl2 = row.querySelector('.bubble');
         if (bubbleEl2) bubbleEl2.insertBefore(buildReplyQuoteEl(body.replyTo, conversationId), bubbleEl2.firstChild);
     }
-    if (mine) updateSeenDisplay(row, !!seen);
+    if (mine) {
+        updateSeenDisplay(row, !!seen);
+        // Bubble optimistic (xem sendChatMessage) -- chờ ACK/echo/ERROR xác nhận, xem markMessageSent/markMessageFailed.
+        if (pending) { row.classList.add('pending'); var seenEl0 = row.querySelector('.seen-status'); if (seenEl0) seenEl0.innerText = '○'; }
+    }
     if (deleted) renderDeletedPlaceholder(row);
 
     entry.logEl.appendChild(row);

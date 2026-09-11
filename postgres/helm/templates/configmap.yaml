@@ -230,3 +230,38 @@ data:
         last_read_ts BIGINT NOT NULL,
         PRIMARY KEY (conversation_id, user_id)
     );
+
+    -- Tim kiem noi dung tin nhan (full-text search) -- search_text la phan chu THUAN (body.message)
+    -- trich rieng luc INSERT (xem MessageHistoryRegistry#saveMessage), KHONG dong bo lai khi
+    -- enrichLinkPreview UPDATE body sau nay (enrich chi them body.preview, khong bao gio doi
+    -- body.message). Tin nhan tu TRUOC migration nay co search_text = NULL (khong tim duoc) -- chap
+    -- nhan duoc, giong cac cot ALTER them sau khac trong file nay, khong backfill.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_text TEXT;
+
+    -- Tim KHONG can go dau tieng Viet (bug that da gap: config 'simple' mac dinh KHONG tu bo dau, go
+    -- "chao" khong ra "chào") -- tao 1 text search configuration RIENG "pingo_search", copy tu
+    -- 'simple' roi gan them dictionary "unaccent" (extension chuan cua Postgres) TRUOC dictionary
+    -- simple trong chuoi mapping. Day la cach lam dung khuyen nghi cua Postgres (khac voi tu goi ham
+    -- unaccent() truc tiep len van ban): to_tsvector/ts_headline/websearch_to_tsquery dung config nay
+    -- se TU tach dau luc so khop lexeme, nhung van giu nguyen van ban GOC (co dau) de hien thi snippet
+    -- -- khong bi mat dau nhu cach goi unaccent() thang vao van ban roi moi dua vao ts_headline.
+    CREATE EXTENSION IF NOT EXISTS unaccent;
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pingo_search') THEN
+            CREATE TEXT SEARCH CONFIGURATION pingo_search (COPY = simple);
+            ALTER TEXT SEARCH CONFIGURATION pingo_search
+                ALTER MAPPING FOR hword, hword_part, word WITH unaccent, simple;
+        END IF;
+    END $$;
+
+    -- search_vector la generated column tu search_text (qua config pingo_search o tren), GIN index de
+    -- query nhanh qua @@ websearch_to_tsquery (xem MessageHistoryRegistry#searchMessages). DROP truoc
+    -- roi ADD lai (thay vi ADD COLUMN IF NOT EXISTS nhu moi noi khac trong file nay) vi day la cot
+    -- GENERATED thuan tuy suy ra tu search_text (khong phai du lieu goc) -- an toan de tai tao lai moi
+    -- lan chay script, dam bao ban da tung deploy TRUOC KHI co config pingo_search (dung 'simple' thang,
+    -- khong bo dau duoc) cung duoc nang cap dung theo dinh nghia moi nay.
+    ALTER TABLE messages DROP COLUMN IF EXISTS search_vector;
+    ALTER TABLE messages ADD COLUMN search_vector tsvector
+        GENERATED ALWAYS AS (to_tsvector('pingo_search', coalesce(search_text, ''))) STORED;
+    CREATE INDEX IF NOT EXISTS idx_messages_search_vector ON messages USING GIN (search_vector);

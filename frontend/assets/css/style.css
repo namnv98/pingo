@@ -450,6 +450,16 @@
         .conv-head .online-status.show { display: block; }
         .typing-indicator { flex: none; padding: 4px 20px; font-size: 11.5px; color: var(--accent); font-style: italic; display: none; }
         .typing-indicator.show { display: block; }
+        /* Thanh tìm trong đoạn chat đang mở (kiểu Ctrl+F trình duyệt) -- nằm ngay dưới conv-head, xem
+           .searchToggleBtn/toggleConvSearch. Không hiện danh sách kết quả -- chỉ đếm x/y + nhảy tới
+           đúng tin qua jumpToMessage() có sẵn (đã tự lo scroll/tải thêm/tô sáng). */
+        .convSearchBar { display: none; align-items: center; gap: 8px; flex: none; padding: 8px 16px; background: var(--canvas); border-bottom: 1px solid var(--line); }
+        .convSearchBar.show { display: flex; }
+        .convSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
+        .convSearchInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        .convSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        .convSearchCount { flex: none; font-size: 11.5px; color: var(--ink-faint); font-family: ui-monospace, monospace; min-width: 32px; text-align: center; }
+        .convSearchPrevBtn svg { transform: rotate(180deg); } /* tái dùng ICON.down, xoay ngược thành mũi tên lên */
 
         /* ---------- panel thông tin/thành viên bên phải -- kiểu Telegram "Bot Info" ---------- */
         /* Nền panel XÁM (canvas), các khối nội dung là THẺ TRẮNG (surface) bo góc nổi lên -- đúng bố cục
@@ -538,7 +548,6 @@
         /* MỖI DÒNG 1 HÀNG ngang: icon trái + nhãn mờ (chiếm giữa) + giá trị phải đậm. Bỏ layout 2
            dòng chồng nhau (value/nhãn) -- yêu cầu gọn thành 1 hàng duy nhất mỗi thông tin. */
         .infoRow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; font-size: 13px; }
-        .infoRow + .infoRow { border-top: 1px solid var(--line); }
         .infoRowIcon { width: 20px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--ink-faint); }
         .infoRowLabel { color: var(--ink-soft); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .infoRowValue { font-weight: 600; color: var(--ink); text-align: right; flex: none; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -552,7 +561,6 @@
         /* ---------- danh sách thành viên: cũng là 1 thẻ trắng, cùng ngôn ngữ với card trên ---------- */
         #infoMemberList { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; box-shadow: var(--shadow-sm); overflow: hidden; }
         .infoMemberRow { display: flex; align-items: center; gap: 12px; padding: 10px 16px; transition: background .1s; }
-        .infoMemberRow + .infoMemberRow { border-top: 1px solid var(--line); }
         .infoMemberRow:hover { background: var(--canvas); }
         .infoMemberRow .avatar-wrap { position: relative; flex: none; }
         .infoMemberRow .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; }
@@ -694,6 +702,9 @@
         /* Overlay nền tối cho modal "Hồ sơ của bạn" -- cùng khuôn hệt #bgPickerOverlay ở trên, id riêng vì đây là 1 overlay độc lập (không phải cùng singleton). */
         #profileModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
         #profileModalOverlay.show { display: flex; }
+        /* Overlay nền tối cho modal tìm kiếm toàn cục -- cùng khuôn hệt 2 overlay trên. */
+        #searchModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
+        #searchModalOverlay.show { display: flex; }
         /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
         #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
         #appModalOverlay.show { display: flex; }
@@ -741,6 +752,28 @@
         .profileUsernameRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 2px 4px; border-top: 1px solid var(--line); font-size: 14px; font-weight: 700; color: var(--ink); }
         .profileUsernameRow button.icon { border-color: transparent; background: none; }
         .profileUsernameRow button.icon:hover { background: var(--canvas); border-color: var(--line); }
+        /* Modal tìm kiếm toàn cục (xem ensureSearchModal, sidebar-conversations.js) -- tái dùng khung
+           .bgPickerModal/.bgPickerHead/.bgPickerBody như modal Hồ sơ, chỉ khác nội dung: ô nhập + danh
+           sách kết quả cuộn. Rộng/cao hơn hẳn 2 modal kia vì cần chỗ cho danh sách. */
+        .searchModal { width: 560px; max-height: 70vh; display: flex; flex-direction: column; }
+        .searchModal .bgPickerBody { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; }
+        .searchModalInputWrap { flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 18px 14px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+        .searchModalIcon { flex: none; color: var(--ink-faint); display: flex; }
+        .searchModalInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 14px; font-family: inherit; color: var(--ink); box-shadow: none !important; padding: 4px 0; }
+        .searchModalInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        .searchModalResults { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 8px 12px; }
+        .searchModalEmpty { padding: 30px 20px; text-align: center; color: var(--ink-faint); font-size: 12.5px; }
+        .searchResultItem { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: 12px; cursor: pointer; }
+        .searchResultItem:hover { background: var(--canvas); }
+        .searchResultItem .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 12.5px; font-weight: 700; margin-top: 2px; }
+        .searchResultBody { flex: 1; min-width: 0; }
+        .searchResultHead { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; }
+        .searchResultName { font-weight: 700; color: var(--ink); flex: none; }
+        .searchResultConv { color: var(--ink-faint); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .searchResultConv::before { content: '· '; }
+        .searchResultTime { flex: none; color: var(--ink-faint); font-size: 11px; }
+        .searchResultSnippet { font-size: 13px; color: var(--ink-soft); line-height: 1.5; margin-top: 2px; overflow-wrap: break-word; }
+        .searchResultSnippet mark { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; border-radius: 3px; padding: 0 1px; }
         .msg-caption { margin-top: 6px; }
         .bubble .mention { color: var(--accent-dark); font-weight: 600; }
         /* Link trong tin nhắn chữ -- xanh + gạch chân (mine: nền màu đậm nên chỉ cần chữ đậm, không
@@ -836,6 +869,9 @@
         .bubble-row.mine .reply-quote-snippet { color: rgba(255,255,255,.78); }
         .bubble-row.jump-highlight .bubble { animation: replyFlash 1.2s ease; }
         @keyframes replyFlash { 0%{box-shadow:0 0 0 3px var(--accent-soft);} 100%{box-shadow:none;} }
+        /* Tô đúng CHỮ khớp từ khoá tìm kiếm bên trong bubble (xem highlightTermInBubble, messages-render.js)
+           -- vàng đục + chữ tối CỐ ĐỊNH bất kể bubble nền gì (mine: nền accent màu, theirs: nền trung tính) -- 1 màu duy nhất luôn đủ tương phản trên cả 2. */
+        .bubble mark.searchHit { background: #ffd93d; color: #1b1d29; border-radius: 2px; padding: 0 1px; }
         /* reply bar in composer */
         .replyBar { display: none; align-items: center; gap: 8px; background: var(--canvas); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
         .replyBar.show { display: flex; }
@@ -928,6 +964,13 @@
         .bubble-row.mine .bubble-time { text-align: right; }
         .bubble-row .seen-status { margin-left: 4px; }
         .bubble-row .seen-status.seen { color: var(--accent-dark); font-weight: 700; }
+        /* Optimistic send (xem sendChatMessage/appendMessageBubble) -- bubble mờ đi trong lúc chờ
+           ACK/echo xác nhận (.pending), '!' đỏ + con trỏ tay khi lỗi/hết timeout (.failed, bấm vào
+           .seen-status để gửi lại, xem markMessageFailed/retrySendMessage). */
+        .bubble-row.pending .bubble, .bubble-row.pending .bubble-time { opacity: .55; }
+        .bubble-row.failed .bubble { box-shadow: inset 0 0 0 1.5px #e5484d; }
+        .bubble-row .seen-status.failed { color: #e5484d; font-weight: 800; cursor: pointer; }
+        .bubble-row .seen-status.failed:hover { text-decoration: underline; }
         /* bubble-wrap: bọc riêng .bubble để .reactions-row có 1 điểm neo position:relative chính xác
            bằng kích thước bubble -- shrink-wrap tự nhiên vì reactions-row là absolute. */
         .bubble-wrap { position: relative; }

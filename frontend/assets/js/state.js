@@ -103,6 +103,7 @@ var ICON = {
 // <script> nằm cuối <body>.
 document.getElementById('sidebarSearchIcon').innerHTML = ICON.search;
 document.getElementById('newConvSearchIcon').innerHTML = ICON.search;
+document.getElementById('globalSearchBtn').innerHTML = ICON.search;
 document.getElementById('newConvCloseBtn').innerHTML = ICON.closeSm;
 document.getElementById('userListRefreshBtn').innerHTML = ICON.refresh;
 document.getElementById('convListRefreshBtn').innerHTML = ICON.refresh;

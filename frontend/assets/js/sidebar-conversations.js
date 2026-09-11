@@ -111,6 +111,119 @@ function closeProfileModal() {
     if (overlay) overlay.classList.remove('show');
 }
 
+// --- Tìm kiếm tin nhắn TOÀN CỤC (xuyên mọi cuộc trò chuyện) -- GET /messages/search không kèm
+// conversationId. Cùng khuôn lazy-create "ensureX()" + portal document.body với ensureProfileModal/
+// ensureBgPicker (KHÔNG lồng trong DOM tại chỗ -- xem bug thật đã gặp với #notifMenu/#themeMenu). ---
+
+var globalSearchDebounce = null;
+
+function ensureSearchModal() {
+    var overlay = document.getElementById('searchModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'searchModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal">' +
+        '<div class="bgPickerHead"><span>Tìm kiếm tin nhắn</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="searchModalInputWrap"><span class="searchModalIcon">' + ICON.search + '</span>' +
+        '<input type="text" class="searchModalInput" placeholder="Tìm trong mọi cuộc trò chuyện..."></div>' +
+        '<div class="searchModalResults"></div>' +
+        '<div class="searchModalEmpty" style="display:none">Không tìm thấy tin nhắn nào khớp.</div>' +
+        '</div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeSearchModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeSearchModal(); };
+    document.body.appendChild(overlay);
+    var inputEl = overlay.querySelector('.searchModalInput');
+    inputEl.addEventListener('input', function () {
+        if (globalSearchDebounce) clearTimeout(globalSearchDebounce);
+        var term = inputEl.value.trim();
+        if (!term) { renderSearchResults([]); return; }
+        globalSearchDebounce = setTimeout(function () { runGlobalSearch(term); }, 300);
+    });
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('searchModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeSearchModal();
+});
+// Ctrl/Cmd+K mở tìm kiếm toàn cục (kiểu Slack) -- chặn hành vi mặc định của trình duyệt (thường là focus thanh địa chỉ).
+document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && identityConfirmed) {
+        e.preventDefault();
+        openSearchModal();
+    }
+});
+
+function openSearchModal() {
+    var overlay = ensureSearchModal();
+    overlay.classList.add('show');
+    var inputEl = overlay.querySelector('.searchModalInput');
+    inputEl.focus();
+    inputEl.select();
+}
+
+function closeSearchModal() {
+    var overlay = document.getElementById('searchModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
+function runGlobalSearch(term) {
+    fetchJson('/messages/search?q=' + encodeURIComponent(term), true)
+        .then(function (results) {
+            var overlay = document.getElementById('searchModalOverlay');
+            // Người dùng có thể đã gõ tiếp/đóng modal trong lúc chờ HTTP -- bỏ kết quả trễ nếu ô nhập không còn khớp term này nữa.
+            if (!overlay || overlay.querySelector('.searchModalInput').value.trim() !== term) return;
+            renderSearchResults(results, term);
+        })
+        .catch(function (err) { console.warn('tìm kiếm toàn cục lỗi', err); });
+}
+
+// Escape HTML TRƯỚC rồi mới thay marker (/, xem ts_headline ở MessageHistoryRegistry#searchMessages)
+// thành <mark> thật -- BẮT BUỘC đúng thứ tự này, không thì snippet (nội dung tin nhắn CỦA NGƯỜI DÙNG,
+// không đáng tin) chèn thẳng qua innerHTML sẽ là lỗ hổng XSS lưu trữ (cùng cách renderMessageText đã làm).
+function escapeAndMarkSnippet(snippet) {
+    if (!snippet) return '';
+    var escaped = snippet.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped.replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>');
+}
+
+function renderSearchResults(results, searchTerm) {
+    var overlay = document.getElementById('searchModalOverlay');
+    if (!overlay) return;
+    var listEl = overlay.querySelector('.searchModalResults');
+    var emptyEl = overlay.querySelector('.searchModalEmpty');
+    listEl.innerHTML = '';
+    emptyEl.style.display = results.length ? 'none' : (overlay.querySelector('.searchModalInput').value.trim() ? '' : 'none');
+    results.forEach(function (r) {
+        var conv = lastConvList.filter(function (c) { return c.conversationId === r.conversationId; })[0];
+        var item = document.createElement('div');
+        item.className = 'searchResultItem';
+        item.innerHTML = '<span class="avatar"></span>' +
+            '<div class="searchResultBody">' +
+            '<div class="searchResultHead"><span class="searchResultName"></span><span class="searchResultConv"></span><span class="searchResultTime"></span></div>' +
+            '<div class="searchResultSnippet"></div>' +
+            '</div>';
+        var senderImageUrl = userAvatarUrl(r.fromUserId);
+        applyAvatar(item.querySelector('.avatar'), senderImageUrl ? {imageUrl: senderImageUrl} : {color: avatarColor(r.fromUserId), initial: avatarInitial(displayName(r.fromUserId))});
+        item.querySelector('.searchResultName').innerText = displayName(r.fromUserId);
+        item.querySelector('.searchResultConv').innerText = conv ? conversationLabel(conv) : 'Cuộc trò chuyện';
+        item.querySelector('.searchResultTime').innerText = relativeTime(r.ts);
+        item.querySelector('.searchResultSnippet').innerHTML = escapeAndMarkSnippet(r.snippet);
+        item.onclick = function () {
+            closeSearchModal();
+            // Hội thoại này có thể CHƯA TỪNG mở trong phiên hiện tại (chưa có card) -- jumpToMessage tự
+            // return im lặng nếu thiếu card (bug thật đã gặp y hệt ở chỗ bấm thông báo, xem history-ws.js
+            // renderNotifMenu). openConversation() trước để đảm bảo có card, giống hệt cách noti đã làm.
+            openConversation(r.conversationId, conv && conversationLabel(conv), conv && membersSubtitle(conv));
+            if (typeof isNarrowViewport === 'function' && isNarrowViewport()) document.getElementById('layout').classList.add('mobileChatOpen');
+            jumpToMessage(r.conversationId, r.id, r.ts, searchTerm);
+        };
+        listEl.appendChild(item);
+    });
+}
+
 // Tái dùng NGUYÊN luồng upload file-server đã có cho ảnh/video gửi trong chat (xem uploadOneFile,
 // compose-reactions-pins.js) -- conversationId rỗng vì avatar không thuộc về 1 cuộc trò chuyện nào,
 // không nên lẫn vào tab "Files" của bất kỳ ai (xem FileRegistry#listForConversation).

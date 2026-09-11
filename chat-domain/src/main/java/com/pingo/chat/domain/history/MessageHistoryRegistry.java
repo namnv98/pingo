@@ -32,12 +32,80 @@ public class MessageHistoryRegistry {
    * giao thức.
    */
   public CompletionStage<Void> saveMessage(UUID id, UUID conversationId, UUID fromUserId, Object body, long tsEpochMillis) {
+    // search_text = phan chu THUAN cua tin (body.message) -- cung 1 cach trich nhu
+    // ChatSessionManager#extractMessageLinks, chi set 1 LAN o day (enrichLinkPreview sau nay chi them
+    // body.preview qua updateBodyJson, khong bao gio doi body.message nen khong can dong bo lai).
+    // search_vector (generated column, xem schema) tu tinh lai tu cot nay, dung cho searchMessages().
+    var searchText = body instanceof JsonObject j ? j.getString("message") : null;
     return supplier.execute(conn -> conn.preparedQuery(
-            "INSERT INTO messages (id, conversation_id, from_user_id, body, created_at) "
-                + "VALUES (?, ?, ?, ?, to_timestamp(? / 1000.0))")
-        .execute(Tuple.of(id, conversationId, fromUserId, Json.encode(body), tsEpochMillis))
+            "INSERT INTO messages (id, conversation_id, from_user_id, body, created_at, search_text) "
+                + "VALUES (?, ?, ?, ?, to_timestamp(? / 1000.0), ?)")
+        .execute(Tuple.of(id, conversationId, fromUserId, Json.encode(body), tsEpochMillis, searchText))
         .toCompletionStage()
         .thenApply(unused -> null));
+  }
+
+  /**
+   * Tim tin nhan theo noi dung (full-text search qua search_vector, xem schema) -- {@code
+   * conversationId} null = tim TOAN CUC xuyen moi conversation cua {@code userId} (xem {@code
+   * HallApiHandlers}'s {@code GET /messages/search}). Luon gioi han qua {@code conversation_members}
+   * (giong {@code ConversationMembershipRegistry#listConversationsForUser}) du la tim trong 1
+   * conversation hay toan cuc -- khong bao gio cho tim vao 1 conversation khong phai thanh vien, ke
+   * ca khi client tu truyen conversationId tay.
+   *
+   * <p>Dung text search configuration {@code pingo_search} (xem schema) thay vi {@code simple} -- co
+   * gan dictionary {@code unaccent} nen tim KHONG can go dau tieng Viet ("chao" van ra "chào"), van
+   * giu nguyen van ban GOC co dau de hien thi snippet (unaccent chi anh huong luc so khop lexeme, xem
+   * javadoc schema.sql).
+   *
+   * <p>{@code snippet} dung {@code ts_headline} voi StartSel/StopSel la 2 ky tu dieu khien hiem gap
+   * (U+0001/U+0002) THAY VI the {@code <b>}/{@code </b>} mac dinh -- BAT BUOC, vi ts_headline KHONG
+   * tu escape noi dung tin nhan goc: client phai escape HTML AN TOAN roi moi thay marker do bang
+   * {@code <mark>} that (xem javadoc phia frontend, ensureSearchModal/renderSearchResults) -- neu de
+   * marker la {@code <b>} that va chen thang vao innerHTML se la XSS luu tru that su (1 tin nhan cu
+   * chua chu {@code <script>} dang text se thuc thi).
+   */
+  public CompletionStage<JsonArray> searchMessages(UUID userId, UUID conversationId, String queryText, int limit) {
+    var sql = new StringBuilder(
+        "SELECT id, conversation_id, from_user_id, body, "
+            + "(extract(epoch from created_at) * 1000)::bigint AS ts, "
+            + "ts_headline('pingo_search', search_text, websearch_to_tsquery('pingo_search', ?), ?) AS snippet "
+            + "FROM messages "
+            + "WHERE deleted_at IS NULL "
+            + "AND search_vector @@ websearch_to_tsquery('pingo_search', ?) "
+            + "AND conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = ?) ");
+    if (conversationId != null) {
+      sql.append("AND conversation_id = ? ");
+    }
+    sql.append("ORDER BY created_at DESC LIMIT ?");
+    var headlineOptions = "StartSel=\u0001,StopSel=\u0002,MaxFragments=1,MaxWords=20,MinWords=5";
+    var params = new java.util.ArrayList<Object>();
+    params.add(queryText);
+    params.add(headlineOptions);
+    params.add(queryText);
+    params.add(userId);
+    if (conversationId != null) {
+      params.add(conversationId);
+    }
+    params.add(limit);
+    return supplier.executeReadOnly(conn -> conn.preparedQuery(sql.toString())
+        .execute(Tuple.from(params))
+        .toCompletionStage()
+        .thenApply(rows -> {
+          var result = new JsonArray();
+          for (var row : rows) {
+            var bodyText = row.getString("body");
+            result.add(
+                new JsonObject()
+                    .put("id", row.getUUID("id").toString())
+                    .put("conversationId", row.getUUID("conversation_id").toString())
+                    .put("fromUserId", row.getUUID("from_user_id").toString())
+                    .put("body", bodyText == null ? null : Json.decodeValue(bodyText))
+                    .put("ts", row.getLong("ts"))
+                    .put("snippet", row.getString("snippet")));
+          }
+          return result;
+        }));
   }
 
   /**
