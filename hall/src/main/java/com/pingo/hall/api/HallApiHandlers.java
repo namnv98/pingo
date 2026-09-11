@@ -245,6 +245,21 @@ public class HallApiHandlers {
         });
   }
 
+  /**
+   * {@code PUT /users/avatar?avatarFileId=<uuid|rỗng>} — đổi/xoá ảnh đại diện của CHÍNH mình. id lấy
+   * từ token (như {@link #setUsername}). {@code avatarFileId} rỗng/thiếu = xoá (quay lại vòng tròn
+   * màu mặc định phía client); không kiểm tra fileId có thật trong bảng {@code files} hay không (id
+   * sai chỉ khiến {@code <img>} phía client 404, cùng mức chấp nhận được như file đính kèm tin nhắn
+   * hỏng khác — xem javadoc plan/PR liên quan).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "users/avatar", type = Type.HTTP)})
+  public CompletionStage<byte[]> setUserAvatar(IRequest request) {
+    var id = requireAuthenticatedUserId(request);
+    var avatarFileId = parseOptionalUuidParam(request.getParam("avatarFileId"));
+    return users.updateAvatar(id, avatarFileId)
+        .thenApply(unused -> bytes(new JsonObject().put("id", id.toString()).put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())));
+  }
+
   /** {@code GET /conversations} (bắt buộc {@code Authorization: Bearer <token>}) — mọi conversation mà CHÍNH mình đang là thành viên, mới hoạt động gần đây trước. */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "conversations", type = Type.HTTP)})
   public CompletionStage<byte[]> listConversations(IRequest request) {
@@ -327,6 +342,35 @@ public class HallApiHandlers {
   }
 
   /**
+   * {@code PUT /conversations/avatar?conversationId=<uuid>&avatarFileId=<uuid|rỗng>} — đổi/xoá ảnh
+   * đại diện RIÊNG của 1 group (không dùng cho DM — DM hiện avatar thật của người kia, xem
+   * {@code conversationAvatar()} phía client). Chỉ thành viên hiện tại mới đổi được, cùng cách kiểm
+   * tra với {@link #renameConversation}. {@code avatarFileId} rỗng/thiếu = xoá.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/avatar", type = Type.HTTP)})
+  public CompletionStage<byte[]> setConversationAvatar(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var avatarFileId = parseOptionalUuidParam(request.getParam("avatarFileId"));
+    var finalConversationId = conversationId;
+    return membership
+        .isMember(finalConversationId, userId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return membership.upsertAvatar(finalConversationId, avatarFileId);
+            })
+        .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())));
+  }
+
+  /**
    * {@code DELETE /conversations?conversationId=<uuid>} — xoá HẲN 1 conversation cho MỌI thành
    * viên (không phải "rời khỏi" chỉ riêng mình): xoá messages, notifications, tên riêng (nếu có),
    * rồi conversation_members liên quan tới conversationId đó, theo đúng thứ tự (dọn dữ liệu phụ
@@ -357,7 +401,7 @@ public class HallApiHandlers {
               return history
                   .deleteForConversation(finalConversationId)
                   .thenCompose(unused -> notifications.deleteForConversation(finalConversationId))
-                  .thenCompose(unused -> membership.upsertName(finalConversationId, null))
+                  .thenCompose(unused -> membership.clearConversationRow(finalConversationId))
                   .thenCompose(unused -> membership.deleteConversation(finalConversationId));
             })
         .thenApply(
@@ -541,6 +585,18 @@ public class HallApiHandlers {
       return Math.max(1, Math.min(MAX_LIMIT, Integer.parseInt(raw)));
     } catch (NumberFormatException e) {
       return DEFAULT_LIMIT;
+    }
+  }
+
+  /** Rỗng/thiếu = null (xoá avatar). Có giá trị nhưng SAI định dạng UUID -> 400 (khác {@code UUIDUtils.parseOrDefault} dùng ở nơi khác, vốn lặng lẽ trả null cho input tuỳ chọn/khoan dung hơn — ở đây avatarFileId sai định dạng là lỗi client thật sự cần báo rõ). */
+  private static UUID parseOptionalUuidParam(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(raw.strip());
+    } catch (IllegalArgumentException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "invalid avatarFileId");
     }
   }
 

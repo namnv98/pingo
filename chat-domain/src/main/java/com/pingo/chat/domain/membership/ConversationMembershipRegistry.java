@@ -116,12 +116,15 @@ public class ConversationMembershipRegistry {
     /**
      * Đặt/đổi tên riêng cho 1 conversationId, dùng chung cho MỌI thành viên (khác bản đầu chỉ lưu
      * localStorage riêng từng trình duyệt) — xem {@code HallApiHandlers} POST/PUT {@code /conversations}.
-     * {@code name} rỗng/blank thì XOÁ dòng (quay lại tự suy label từ danh sách thành viên phía
-     * client, xem {@link #listConversationsForUser}) thay vì lưu chuỗi rỗng vô nghĩa.
+     * {@code name} rỗng/blank thì CHỈ xoá cột tên (quay lại tự suy label từ danh sách thành viên
+     * phía client, xem {@link #listConversationsForUser}) — KHÔNG xoá cả dòng nữa (khác trước đây)
+     * vì dòng này giờ còn giữ {@code avatar_file_id} (xem {@link #upsertAvatar}), xoá cả dòng ở đây sẽ
+     * vô tình mất luôn ảnh nhóm đã đặt riêng dù user chỉ muốn xoá TÊN. Xoá sạch cả dòng (mọi field)
+     * dùng {@link #clearConversationRow} riêng — chỉ dành cho xoá hẳn conversation.
      */
     public CompletionStage<Void> upsertName(UUID conversationId, String name) {
         if (name == null || name.isBlank()) {
-            return supplier.execute(conn -> conn.preparedQuery("DELETE FROM conversations WHERE id = ?")
+            return supplier.execute(conn -> conn.preparedQuery("UPDATE conversations SET name = NULL WHERE id = ?")
                 .execute(Tuple.of(conversationId))
                 .toCompletionStage()
                 .thenApply(unused -> null));
@@ -129,6 +132,32 @@ public class ConversationMembershipRegistry {
         return supplier.execute(conn -> conn.preparedQuery(
                 "INSERT INTO conversations (id, name) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")
             .execute(Tuple.of(conversationId, name))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    /**
+     * Đặt/đổi/xoá ảnh đại diện riêng cho 1 GROUP — {@code avatarFileId} null = xoá (quay lại icon
+     * "users" mặc định phía client, xem {@code conversationAvatar()}). KHÔNG dùng cho DM — DM hiện
+     * avatar thật của người kia, không phải thứ chính conversation "sở hữu". Cùng khuôn UPSERT như
+     * nhánh còn lại của {@link #upsertName}, độc lập hoàn toàn với cột {@code name} trên cùng dòng.
+     */
+    public CompletionStage<Void> upsertAvatar(UUID conversationId, UUID avatarFileId) {
+        return supplier.execute(conn -> conn.preparedQuery(
+                "INSERT INTO conversations (id, avatar_file_id) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET avatar_file_id = EXCLUDED.avatar_file_id")
+            .execute(Tuple.of(conversationId, avatarFileId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    /**
+     * Xoá SẠCH dòng {@code conversations} (mọi field: tên riêng lẫn ảnh đại diện) — dùng riêng khi
+     * xoá hẳn 1 conversation (xem {@code HallApiHandlers#deleteConversation}), khác {@link #upsertName}
+     * với tên rỗng (giờ chỉ xoá cột tên, giữ lại ảnh nếu có, xem javadoc ở đó).
+     */
+    public CompletionStage<Void> clearConversationRow(UUID conversationId) {
+        return supplier.execute(conn -> conn.preparedQuery("DELETE FROM conversations WHERE id = ?")
+            .execute(Tuple.of(conversationId))
             .toCompletionStage()
             .thenApply(unused -> null));
     }
@@ -173,7 +202,8 @@ public class ConversationMembershipRegistry {
                     + "       ) / 1000.0)"
                     + "    ) AS unread_count, "
                     + "    min(cm.created_at) AS conv_created_at, "
-                    + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name "
+                    + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name, "
+                    + "    (SELECT c.avatar_file_id FROM conversations c WHERE c.id = cm.conversation_id) AS conv_avatar_file_id "
                     + "  FROM conversation_members cm "
                     + "  WHERE cm.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = ?) "
                     + "  GROUP BY cm.conversation_id"
@@ -196,11 +226,13 @@ public class ConversationMembershipRegistry {
                     var lastMessageDeleted = Boolean.TRUE.equals(row.getBoolean("last_message_deleted"));
                     var lastMessageBodyText = row.getString("last_message_body");
                     var lastMessageFromUserId = row.getUUID("last_message_from_user_id");
+                    var avatarFileId = row.getUUID("conv_avatar_file_id");
                     result.add(
                         new JsonObject()
                             .put("conversationId", row.getUUID("conversation_id").toString())
                             .put("memberUserIds", memberIds)
                             .put("name", row.getString("conv_name"))
+                            .put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())
                             .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli())
                             .put("lastMessageFromUserId", lastMessageFromUserId == null ? null : lastMessageFromUserId.toString())
                             .put("lastMessageDeleted", lastMessageDeleted)

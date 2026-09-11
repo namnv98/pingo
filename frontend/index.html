@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Pingo chat demo</title>
+    <link rel="icon" type="image/svg+xml" href="images/app-icon.svg">
     <script>
         // Set data-theme SỚM NHẤT có thể (trước khi CSS/body kịp vẽ) -- tránh nháy sáng->tối 1 khung
         // hình lúc tải trang nếu người dùng đã chọn "Tối" từ trước (main <script> nằm cuối <body>, đợi
@@ -40,7 +41,7 @@
 
 <div id="authScreen">
     <div id="authCard">
-        <div id="authLogo">💬</div>
+        <div id="authLogo">P</div>
         <h1>Pingo chat demo</h1>
         <div class="sub">Tài khoản thật — password hash (bcrypt) ở server, token JWT dùng để xác thực WebSocket.</div>
         <div class="field">
@@ -62,12 +63,13 @@
 <div id="mainApp">
     <div id="topbar">
         <div id="topbarLeft">
+            <span id="appLogo">P</span>
             <span id="status" class="pill pending">đang kết nối...</span>
             <span id="podBadge"></span>
         </div>
         <div id="topbarRight">
             <span id="counters">Gửi/ACK: <b id="countSent">0</b> · Nhận: <b id="countReceived">0</b></span>
-            <span id="whoami"></span>
+            <span id="whoami" onclick="openProfileModal()" title="Hồ sơ của bạn"></span>
             <div id="notifMenuWrap">
                 <button type="button" class="icon" id="notifBtn" title="Thông báo"></button>
                 <span id="notifBadge" style="display:none"></span>
@@ -87,9 +89,6 @@
 
     <div id="layout">
         <aside id="sidebar">
-            <div id="sidebarHead">
-                <span class="brand">Đoạn chat</span>
-            </div>
             <div id="sidebarSearchWrap">
                 <span id="sidebarSearchIcon"></span>
                 <input type="text" id="conversationSearchInput" placeholder="Tìm cuộc trò chuyện...">
@@ -167,7 +166,7 @@
             <div id="infoEmpty">Chọn 1 cuộc trò chuyện để xem thông tin.</div>
             <div id="infoPanelBody">
                 <div id="infoPanelTop">
-                    <div id="infoPanelAvatarWrap"><span id="infoPanelAvatar"></span><span id="infoPanelStatusDot"></span></div>
+                    <div id="infoPanelAvatarWrap"><span id="infoPanelAvatar"></span><span id="infoPanelStatusDot"></span><button type="button" id="infoPanelAvatarEditBtn" title="Đổi ảnh đại diện nhóm"></button></div>
                     <div id="infoPanelName"></div>
                     <div id="infoPanelSubtitle"></div>
                 </div>

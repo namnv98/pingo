@@ -127,7 +127,10 @@
            không có gì để mắt phải xử lý ngoài chính cái card đăng nhập. */
         #authScreen { height: 100%; display: flex; align-items: center; justify-content: center; background: var(--canvas); }
         #authCard { width: 372px; border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 32px; background: var(--surface); box-shadow: var(--shadow-md); }
-        #authLogo { width: 46px; height: 46px; border-radius: 14px; background: var(--primary-btn-bg); display: flex; align-items: center; justify-content: center; font-size: 21px; margin-bottom: 16px; box-shadow: var(--shadow-md); }
+        /* border-radius 4 giá trị (TL TR BR BL) -- 3 góc bo rộng (34%) + 1 góc nhọn hơn hẳn (8%,
+           góc dưới-phải) tạo dáng "bong bóng chat" chỉ bằng hình khối, không cần vẽ icon riêng bên
+           trong -- xem cùng logo ở #appLogo (topbar) và favicon (images/app-icon.svg). */
+        #authLogo { width: 46px; height: 46px; border-radius: 34% 34% 8% 34%; background: linear-gradient(135deg, #7c6cf7, #5a48e0); display: flex; align-items: center; justify-content: center; font-family: inherit; font-weight: 800; font-size: 20px; color: #fff; margin-bottom: 16px; box-shadow: 0 6px 16px rgba(109,91,245,.35), var(--shadow-md); }
         #authCard h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.02em; font-weight: 800; }
         #authCard .sub { color: var(--ink-soft); font-size: 12.5px; margin-bottom: 22px; line-height: 1.55; }
         #authCard .field { margin-bottom: 13px; display: flex; flex-direction: column; gap: 6px; }
@@ -138,17 +141,39 @@
 
         /* ---------- khung app chính (2 cột toàn màn hình) ---------- */
         #mainApp { height: 100%; display: none; flex-direction: column; }
-        #topbar { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 11px 20px; border-bottom: 1px solid var(--line); background: var(--surface); gap: 12px; z-index: 1; }
+        /* position:relative BẮT BUỘC đi kèm z-index -- thiếu nó thì z-index vô tác dụng (chỉ có hiệu
+           lực trên phần tử đã positioned), #topbar rơi về "layer 3" (non-positioned) trong thứ tự vẽ
+           CSS, trong khi #chatMain (position:relative, xem CSS đó) lại tự động rơi vào "layer 6" cao
+           hơn -- kết quả: #chatMain/.conv-head (đặc biệt group, header cao hơn 2 dòng do có subtitle
+           tên thành viên) VẼ ĐÈ LÊN TRÊN #topbar, che mất #notifMenu/#themeMenu dù 2 popup đó đã khai
+           z-index:250 hẳn hoi (giá trị đó chỉ so sánh được với anh em CÙNG 1 stacking context -- không
+           có position ở đây thì #topbar không tự tạo context nào để 2 popup neo vào, z-index của chúng
+           bị "bung" so sánh nhầm chỗ). Bug thật đã gặp (che nặng nhất ở conv-head group vì cao hơn DM,
+           dễ thấy nhất, nhưng lỗi tồn tại chung cho mọi conv-head). Thêm position:relative là đủ -- lúc
+           đó z-index:1 sẵn có bắt đầu có tác dụng, tự thắng "layer 6" ngầm định của #chatMain. */
+        #topbar { position: relative; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 11px 20px; border-bottom: 1px solid var(--line); background: var(--surface); gap: 12px; z-index: 1; }
         .pill { padding: 4px 11px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
         .pill.ok { background: #dcfce7; color: #15803d; }
         .pill.bad { background: #fee2e2; color: #b91c1c; }
         .pill.pending { background: #fef3c7; color: #b45309; }
         #topbarLeft, #topbarRight { display: flex; align-items: center; gap: 10px; }
+        /* Logo app -- dáng "bong bóng chat" bằng hình khối (border-radius bất đối xứng, 1 góc nhọn
+           hơn hẳn 3 góc còn lại) + chữ "P", cùng mark với #authLogo (màn đăng nhập) và favicon
+           (images/app-icon.svg) để nhận diện nhất quán. */
+        #appLogo { width: 26px; height: 26px; border-radius: 34% 34% 8% 34%; background: linear-gradient(135deg, #7c6cf7, #5a48e0); display: flex; align-items: center; justify-content: center; flex: none; font-weight: 800; font-size: 12px; color: #fff; box-shadow: 0 2px 6px rgba(109,91,245,.4); }
 
-        /* Quả chuông thông báo kiểu Teams -- cùng cơ chế neo popup với #themeMenuWrap bên dưới. */
+        /* Quả chuông thông báo kiểu Teams -- #notifBadge neo theo wrap này (position:relative), còn
+           popup #notifMenu giờ portal ra document.body + position:fixed, JS tự tính top/left (xem
+           positionTopbarMenu, theme-accent.js), không còn "neo" bằng CSS theo wrap này nữa. */
         #notifMenuWrap { position: relative; }
         #notifBadge { position: absolute; top: -3px; right: -3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: #e5484d; color: white; font-size: 9.5px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--surface); pointer-events: none; }
-        #notifMenu { position: absolute; top: calc(100% + 8px); right: 0; width: 320px; max-width: 88vw; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); display: none; flex-direction: column; z-index: 250; }
+        /* position:fixed + JS tự đặt top/left (xem positionTopbarMenu, theme-accent.js) -- KHÔNG còn
+           position:absolute lồng trong #notifMenuWrap nữa. Lý do: #notifMenuWrap nằm bên trong #topbar,
+           mà #topbar/.conv-head/#chatMain có cách stack CSS lồng nhau khá rối (bug thật đã gặp: popup
+           bị .conv-head đè lên dù z-index cao hơn hẳn) -- MỌI popup khác trong app (#reactionPicker,
+           .attachMenu, #pinMenu, #bgPickerOverlay...) đều portal thẳng ra document.body + position:fixed
+           để né hẳn vấn đề này, #notifMenu/#themeMenu trước đây là 2 CHỖ DUY NHẤT không theo cách đó. */
+        #notifMenu { position: fixed; width: 320px; max-width: 88vw; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); display: none; flex-direction: column; z-index: 250; }
         #notifMenu.show { display: flex; }
         #notifMenuHead { flex: none; padding: 12px 14px; font-size: 13px; font-weight: 700; border-bottom: 1px solid var(--line); }
         #notifMenuList { max-height: 360px; overflow-y: auto; }
@@ -157,18 +182,27 @@
         .notifItem:hover { background: var(--canvas); }
         .notifItem.unread { background: var(--accent-soft); }
         .notifItem.unread:hover { background: var(--accent-soft); filter: brightness(.97); }
-        .notifItemIcon { flex: none; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; margin-top: 1px; }
-        .notifItemIcon.mention, .notifItemIcon.message { background: var(--accent); }
-        .notifItemIcon.reaction { background: #f5a623; }
-        .notifItemIcon.reply { background: #22b8a0; }
+        /* Avatar THẬT của người gây ra thông báo (applyAvatar, fallback màu+chữ cái như mọi nơi khác) --
+           loại thông báo (mention/reaction/reply/message) giờ chỉ còn là 1 badge nhỏ đè góc dưới-phải,
+           không còn chiếm hẳn cả vòng tròn như trước (đã mất tác dụng nhận diện AI gửi khi có ảnh thật). */
+        .notifItemAvatarWrap { position: relative; flex: none; margin-top: 1px; }
+        .notifItemAvatar { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 700; }
+        .notifItemTypeBadge { position: absolute; right: -3px; bottom: -3px; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; border: 2px solid var(--surface); }
+        .notifItemTypeBadge svg { width: 9px; height: 9px; }
+        .notifItemTypeBadge.mention, .notifItemTypeBadge.message { background: var(--accent); }
+        .notifItemTypeBadge.reaction { background: #f5a623; }
+        .notifItemTypeBadge.reply { background: #22b8a0; }
         .notifItemBody { flex: 1; min-width: 0; }
         .notifItemText { font-size: 12.5px; line-height: 1.4; color: var(--ink); }
         .notifItemTime { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
 
-        /* Popup chọn theme sáng/tối/theo hệ thống -- neo dưới nút themeBtn (wrap có position:relative
-           để absolute con định vị theo ĐÚNG nút đó, không theo cả #topbarRight). */
+        /* Popup chọn theme sáng/tối/theo hệ thống -- portal ra document.body + position:fixed, JS tự
+           tính top/left theo ĐÚNG nút themeBtn (xem positionTopbarMenu, theme-accent.js), không còn
+           định vị qua wrap position:relative như trước (bug thật đã gặp: popup bị .conv-head đè lên,
+           xem lịch sử sửa). */
         #themeMenuWrap { position: relative; }
-        #themeMenu { position: absolute; top: calc(100% + 8px); right: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; display: none; flex-direction: column; gap: 1px; min-width: 176px; z-index: 250; }
+        /* position:fixed + JS tự đặt top/left, cùng lý do với #notifMenu ở trên (xem comment đó). */
+        #themeMenu { position: fixed; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 6px; display: none; flex-direction: column; gap: 1px; min-width: 176px; z-index: 250; }
         #themeMenu.show { display: flex; }
         .themeMenuItem { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); border: none; background: none; color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; font-family: inherit; }
         .themeMenuItem:hover { background: var(--canvas); }
@@ -185,12 +219,19 @@
         #podBadge { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--ink-soft); background: var(--canvas); padding: 3px 8px; border-radius: 6px; }
         #counters { color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
         #counters b { color: var(--ink); }
-        #whoami { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 4px; }
+        /* Bấm vào mở modal "Hồ sơ của bạn" (đổi ảnh đại diện + tên hiển thị) -- xem openProfileModal(). */
+        #whoami { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 4px; cursor: pointer; border-radius: var(--radius-md); }
+        #whoami:hover { background: var(--canvas); }
         #whoami .avatar { width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; }
         /* Avatar NHÓM (icon "users" outline, xem conversationAvatar()) -- co giãn theo % kích thước
            avatar thay vì cỡ px cố định của icon gốc, dùng chung được cho mọi nơi (sidebar 38px, đầu
            khung chat 36px, panel Info 64px...) mà không cần viết riêng từng cỡ. */
         .avatar svg, #infoPanelAvatar svg { width: 52%; height: 52%; display: block; }
+        /* Ảnh đại diện thật (applyAvatar khi avatar.imageUrl có giá trị) -- mọi nơi dùng .avatar/#infoPanelAvatar
+           đều bo tròn + có kích thước cố định riêng (26/36/38/48/64/96px...), 1 rule chung theo % là đủ,
+           không cần lặp lại cho từng nơi. overflow:hidden để ảnh không tràn ra ngoài vòng tròn khi tỷ lệ khác 1:1. */
+        .avatar, #infoPanelAvatar, .userRowAvatar, .mentionSuggestAvatar, .notifItemAvatar { overflow: hidden; }
+        .avatar img, #infoPanelAvatar img, .userRowAvatar img, .mentionSuggestAvatar img, .notifItemAvatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
 
         #layout { flex: 1; display: flex; min-height: 0; }
 
@@ -202,13 +243,12 @@
            định góc dưới-phải CỦA SIDEBAR bất kể danh sách hội thoại bên dưới cuộn tới đâu, đúng kiểu
            nút soạn tin nổi của Telegram (không nằm trong dòng chảy nội dung, không cuộn theo list). */
         #sidebar { width: 392px; flex: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--canvas); min-height: 0; position: relative; }
-        #sidebarHead { flex: none; padding: 20px 18px 4px; }
-        #sidebarHead .brand { font-weight: 800; letter-spacing: -.01em; font-size: 21px; }
         /* Ô tìm kiếm hội thoại luôn hiện sẵn (không phải ẩn sau 1 icon bấm-vào-không-làm-gì như
            trước) -- bo góc vừa (radius-md) ĐỒNG NHẤT với ô tìm user trong panel tạo mới, KHÔNG còn
            pill tròn 999px (nhìn lệch với phần còn lại). KHÔNG đổi viền/glow tím lúc focus -- giữ
-           nguyên 1 kiểu cho cả lúc rỗng lẫn lúc đang gõ. */
-        #sidebarSearchWrap { flex: none; margin: 14px 18px 6px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; align-items: center; gap: 9px; }
+           nguyên 1 kiểu cho cả lúc rỗng lẫn lúc đang gõ. margin-top 28px (thay 14px) -- bù lại khoảng
+           thở phía trên vốn do #sidebarHead (đã bỏ, logo giờ chuyển sang #topbarLeft) đảm nhiệm. */
+        #sidebarSearchWrap { flex: none; margin: 28px 18px 6px; padding: 9px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); display: flex; align-items: center; gap: 9px; }
         #sidebarSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
         #conversationSearchInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
         #conversationSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
@@ -468,6 +508,13 @@
         /* Chấm trạng thái tổng quan của hội thoại -- xanh nếu có ai khác online, xám nếu ngoại tuyến. */
         #infoPanelStatusDot { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 50%; background: #c2c6d2; border: 3px solid var(--canvas); }
         #infoPanelStatusDot.online { background: #22c55e; }
+        /* Nút đổi ảnh đại diện nhóm -- chỉ tồn tại về mặt hiển thị khi #infoPanelAvatarWrap có class
+           "editable" (JS chỉ gắn class này cho GROUP, xem renderInfoPanel), và chỉ hiện lúc hover để
+           đỡ rối mắt khi chỉ đang xem thông tin chứ chưa có ý định đổi ảnh. */
+        #infoPanelAvatarEditBtn { display: none; position: absolute; left: 2px; bottom: 2px; width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--canvas); background: var(--ink); color: white; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+        #infoPanelAvatarEditBtn svg { width: 13px; height: 13px; }
+        #infoPanelAvatarWrap.editable { cursor: pointer; }
+        #infoPanelAvatarWrap.editable:hover #infoPanelAvatarEditBtn { display: flex; }
         #infoPanelName { font-weight: 700; font-size: 17px; letter-spacing: -.01em; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #infoPanelSubtitle { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
 
@@ -639,6 +686,9 @@
            dùng cho mọi lần bấm -- cùng khuôn với #mediaLightbox/#reactionPicker.  */
         #bgPickerOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
         #bgPickerOverlay.show { display: flex; }
+        /* Overlay nền tối cho modal "Hồ sơ của bạn" -- cùng khuôn hệt #bgPickerOverlay ở trên, id riêng vì đây là 1 overlay độc lập (không phải cùng singleton). */
+        #profileModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #profileModalOverlay.show { display: flex; }
         /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
         #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
         #appModalOverlay.show { display: flex; }
@@ -677,6 +727,15 @@
         .bgSwatch.bubbleSwatch { border-radius: 50%; }
         .bgUploadBtn { width: 100%; margin-top: 6px; padding: 11px; border-radius: 10px; border: 1.5px dashed var(--line); background: none; color: var(--ink-faint); font-size: 12.5px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .bgUploadBtn:hover { border-color: var(--accent); color: var(--accent-dark); }
+        /* Modal "Hồ sơ của bạn" (đổi ảnh đại diện + tên hiển thị) -- tái dùng NGUYÊN khung .bgPickerModal/
+           .bgPickerHead/.bgPickerBody/.bgUploadBtn đã có (xem ensureProfileModal trong sidebar-conversations.js),
+           chỉ thêm CSS riêng cho 2 hàng nội dung (avatar lớn + dòng tên) không có ở bgPicker. */
+        .profileAvatarRow { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 18px; }
+        .profileAvatarRow .avatar { width: 96px; height: 96px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 30px; font-weight: 700; box-shadow: var(--shadow-md); }
+        .profileAvatarRow .bgUploadBtn { width: auto; margin-top: 0; padding: 8px 16px; border-radius: 999px; }
+        .profileUsernameRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 2px 4px; border-top: 1px solid var(--line); font-size: 14px; font-weight: 700; color: var(--ink); }
+        .profileUsernameRow button.icon { border-color: transparent; background: none; }
+        .profileUsernameRow button.icon:hover { background: var(--canvas); border-color: var(--line); }
         .msg-caption { margin-top: 6px; }
         .bubble .mention { color: var(--accent-dark); font-weight: 600; }
         /* Link trong tin nhắn chữ -- xanh + gạch chân (mine: nền màu đậm nên chỉ cần chữ đậm, không

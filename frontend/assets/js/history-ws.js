@@ -41,8 +41,10 @@ function renderNotifMenu() {
         var item = document.createElement('div');
         item.className = 'notifItem' + (n.read ? '' : ' unread');
         item.innerHTML =
-            '<span class="notifItemIcon ' + n.type + '">' + notifIconFor(n.type) + '</span>' +
+            '<span class="notifItemAvatarWrap"><span class="notifItemAvatar"></span><span class="notifItemTypeBadge ' + n.type + '">' + notifIconFor(n.type) + '</span></span>' +
             '<div class="notifItemBody"><div class="notifItemText"></div><div class="notifItemTime"></div></div>';
+        var notifAvatarImageUrl = userAvatarUrl(n.fromUserId);
+        applyAvatar(item.querySelector('.notifItemAvatar'), notifAvatarImageUrl ? {imageUrl: notifAvatarImageUrl} : {color: avatarColor(n.fromUserId), initial: avatarInitial(displayName(n.fromUserId))});
         item.querySelector('.notifItemText').innerHTML = notifText(n);
         item.querySelector('.notifItemTime').innerText = relativeTime(n.ts);
         item.onclick = function () {
@@ -82,6 +84,7 @@ function toggleNotifMenu(e) {
     var opening = !menu.classList.contains('show');
     menu.classList.toggle('show');
     if (!opening) return;
+    positionTopbarMenu(document.getElementById('notifBtn'), menu); // xem positionTopbarMenu (theme-accent.js), dùng chung với #themeMenu
     // Đồng bộ lại danh sách thật trước khi dùng (không dùng cache cũ, badge tạm có thể đã lệch).
     loadNotifications().then(function () {
         var unread = notifications.filter(function (n) { return !n.read; });
@@ -103,6 +106,9 @@ function closeNotifMenu() {
 document.getElementById('notifBtn').innerHTML =
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 document.getElementById('notifBtn').onclick = toggleNotifMenu;
+// Portal thẳng ra document.body (KHÔNG còn lồng trong #notifMenuWrap) -- cùng lý do/cùng pattern với
+// mọi popup khác trong app, xem CSS #notifMenu + comment ở positionTopbarMenu (theme-accent.js).
+document.body.appendChild(document.getElementById('notifMenu'));
 document.addEventListener('click', closeNotifMenu);
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeNotifMenu(); });
 renderNotifMenu();

@@ -59,8 +59,9 @@ var MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 // Giới hạn UI khi chọn nhiều file cùng lúc -- mỗi file vẫn upload+gửi thành 1 tin riêng (không có khái niệm "1 tin nhiều file" ở server).
 var MAX_PENDING_FILES = 10;
 
-var knownUsers = []; // [{id, username, firstSeenAt}, ...] từ GET /users
+var knownUsers = []; // [{id, username, firstSeenAt, avatarFileId}, ...] từ GET /users
 var usernameById = {}; // cache tra nhanh id -> username khi hiển thị chat log
+var avatarFileIdById = {}; // cache tra nhanh id -> avatarFileId (ảnh đại diện, có thể null), xem conversationAvatar()
 
 // true từ khi enterApp() chạy tới khi logout()/AUTH_ERROR -- connect()/ws.onclose dùng để biết có nên tự mở/giữ WebSocket.
 var identityConfirmed = false;

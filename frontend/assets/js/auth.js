@@ -91,10 +91,15 @@ function refreshUserList() {
         .then(function (list) {
             knownUsers = list;
             usernameById = {};
-            list.forEach(function (u) { if (u.username) usernameById[u.id] = u.username; });
+            avatarFileIdById = {};
+            list.forEach(function (u) {
+                if (u.username) usernameById[u.id] = u.username;
+                avatarFileIdById[u.id] = u.avatarFileId || null;
+            });
             renderUserPickers();
             // Sửa race: nếu list hội thoại về trước usernameById, tên bị kẹt dạng ID -- vẽ lại sidebar (cache) ngay khi tên đã sẵn sàng.
             renderConversationList(lastConvList);
+            renderWhoami();
             refreshPresenceSnapshot(collectRelevantUserIdsForPresence());
         })
         .catch(function (err) {
@@ -175,8 +180,8 @@ function buildUserRow(u, canSelect) {
     row.title = u.id;
     var av = document.createElement('div');
     av.className = 'userRowAvatar';
-    av.style.background = avatarColor(u.id);
-    av.innerText = avatarInitial(u.username);
+    var uImageUrl = userAvatarUrl(u.id);
+    applyAvatar(av, uImageUrl ? {imageUrl: uImageUrl} : {color: avatarColor(u.id), initial: avatarInitial(u.username)});
     row.appendChild(av);
     var name = document.createElement('div');
     name.className = 'userName';

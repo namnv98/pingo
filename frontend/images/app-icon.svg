@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c6cf7"/>
+      <stop offset="1" stop-color="#5a48e0"/>
+    </linearGradient>
+  </defs>
+  <!-- Bo góc bất đối xứng (TL/TR/BL 22, BR 5) -- dáng "bong bóng chat" bằng hình khối, khớp
+       border-radius: 34% 34% 8% 34% dùng cho #authLogo/#appLogo (CSS không áp dụng được ở file SVG
+       rời này nên vẽ tay bằng path). -->
+  <path d="M22,0 L42,0 A22,22 0 0 1 64,22 L64,59 A5,5 0 0 1 59,64 L22,64 A22,22 0 0 1 0,42 L0,22 A22,22 0 0 1 22,0 Z" fill="url(#g)"/>
+  <text x="32" y="43.5" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="30" fill="#fff" text-anchor="middle">P</text>
+</svg>

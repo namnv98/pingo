@@ -14,20 +14,150 @@ function avatarInitial(name) {
     return (name || '?').trim().charAt(0).toUpperCase() || '?';
 }
 
-// Avatar cho cả conversation -- DM lấy avatar người kia, group dùng icon chung (không có 1 "mặt" đại diện tự nhiên cho nhiều người).
+// Ảnh đại diện thật (đã upload qua PUT /users/avatar hoặc /conversations/avatar) nếu có, null nếu chưa đặt -- xem applyAvatar.
+function userAvatarUrl(userId) {
+    var fileId = avatarFileIdById[userId];
+    return fileId ? FILE_SERVER_BASE + '/v2/api/download?id=' + encodeURIComponent(fileId) : null;
+}
+
+// Avatar cho cả conversation -- DM lấy avatar người kia (ảnh thật nếu người đó đã đặt, không thì màu+chữ cái),
+// group ưu tiên ảnh riêng của group (conv.avatarFileId, xem PUT /conversations/avatar) rồi mới tới icon chung mặc định.
 function conversationAvatar(conv) {
     var others = conv.memberUserIds.filter(function (id) { return id !== myUserId; });
     if (others.length === 1) {
+        var peerImageUrl = userAvatarUrl(others[0]);
+        if (peerImageUrl) return {imageUrl: peerImageUrl};
         return {color: avatarColor(others[0]), initial: avatarInitial(displayName(others[0]))};
+    }
+    if (conv.avatarFileId) {
+        return {imageUrl: FILE_SERVER_BASE + '/v2/api/download?id=' + encodeURIComponent(conv.avatarFileId)};
     }
     // Icon "users" màu accent thay vì emoji 👥 nền xám để đồng bộ bộ icon outline dùng khắp app.
     return {color: 'var(--accent)', icon: ICON.users};
 }
 
-// Dùng chung cho mọi nơi hiện avatar (sidebar, conv-head, Info panel) để tránh lặp nhánh if/else initial/icon ở từng nơi gọi.
+// Dùng chung cho mọi nơi hiện avatar (sidebar, conv-head, Info panel, whoami) để tránh lặp nhánh if/else ảnh/initial/icon ở từng nơi gọi.
 function applyAvatar(el, avatar) {
+    if (avatar.imageUrl) {
+        el.style.background = 'none';
+        el.innerHTML = '<img src="' + avatar.imageUrl + '" alt="">';
+        return;
+    }
     el.style.background = avatar.color;
     if (avatar.icon) el.innerHTML = avatar.icon; else el.innerText = avatar.initial;
+}
+
+// Avatar+tên của CHÍNH MÌNH ở topbar -- gọi lại mỗi khi myUsername/avatar của mình đổi (xem refreshUserList, openProfileModal).
+function renderWhoami() {
+    var whoamiEl = document.getElementById('whoami');
+    whoamiEl.innerHTML = '<span class="avatar"></span><span class="name"></span>';
+    var myImageUrl = userAvatarUrl(myUserId);
+    applyAvatar(whoamiEl.querySelector('.avatar'), myImageUrl ? {imageUrl: myImageUrl} : {color: avatarColor(myUserId), initial: avatarInitial(myUsername)});
+    whoamiEl.querySelector('.name').innerText = myUsername;
+}
+
+// --- "Hồ sơ của bạn" -- đổi ảnh đại diện + tên hiển thị của CHÍNH mình (PUT /users/avatar, PUT /users) ---
+// Cùng khuôn lazy-create "ensureX()" + toggle class .show với ensureBgPicker (messaging-core.js).
+
+function ensureProfileModal() {
+    var overlay = document.getElementById('profileModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'profileModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal">' +
+        '<div class="bgPickerHead"><span>Hồ sơ của bạn</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="profileAvatarRow"><span class="avatar" id="profileAvatarPreview"></span>' +
+        '<input type="file" accept="image/*" id="profileAvatarInput" style="display:none">' +
+        '<button type="button" class="bgUploadBtn" id="profileChangeAvatarBtn">' + ICON.image + ' Đổi ảnh</button></div>' +
+        '<div class="profileUsernameRow"><span id="profileUsernameValue"></span>' +
+        '<button type="button" class="icon" id="profileRenameBtn" title="Đổi tên hiển thị">' + ICON.edit + '</button></div>' +
+        '</div></div>';
+    // Bấm ra NGOÀI modal (đúng vào nền tối) mới đóng -- giống #bgPickerOverlay/#mediaLightbox.
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeProfileModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeProfileModal(); };
+    document.body.appendChild(overlay);
+    overlay.querySelector('#profileChangeAvatarBtn').onclick = function () { overlay.querySelector('#profileAvatarInput').click(); };
+    overlay.querySelector('#profileAvatarInput').addEventListener('change', function (e) {
+        var file = e.target.files[0];
+        e.target.value = '';
+        if (file) changeMyAvatar(file);
+    });
+    overlay.querySelector('#profileRenameBtn').onclick = function () { changeMyUsername(); };
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('profileModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeProfileModal();
+});
+
+function refreshProfileModalContent() {
+    var overlay = document.getElementById('profileModalOverlay');
+    if (!overlay) return;
+    var myImageUrl = userAvatarUrl(myUserId);
+    applyAvatar(overlay.querySelector('#profileAvatarPreview'), myImageUrl ? {imageUrl: myImageUrl} : {color: avatarColor(myUserId), initial: avatarInitial(myUsername)});
+    overlay.querySelector('#profileUsernameValue').innerText = myUsername;
+}
+
+function openProfileModal() {
+    ensureProfileModal().classList.add('show');
+    refreshProfileModalContent();
+}
+
+function closeProfileModal() {
+    var overlay = document.getElementById('profileModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
+// Tái dùng NGUYÊN luồng upload file-server đã có cho ảnh/video gửi trong chat (xem uploadOneFile,
+// compose-reactions-pins.js) -- conversationId rỗng vì avatar không thuộc về 1 cuộc trò chuyện nào,
+// không nên lẫn vào tab "Files" của bất kỳ ai (xem FileRegistry#listForConversation).
+function changeMyAvatar(file) {
+    uploadOneFile('', file).then(function (result) {
+        return fetch(HISTORY_API_BASE + '/users/avatar?avatarFileId=' + encodeURIComponent(result.fileId), {
+            method: 'PUT',
+            headers: {'Authorization': 'Bearer ' + authToken}
+        });
+    }).then(function (res) {
+        if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+        return res.json();
+    }).then(function (data) {
+        avatarFileIdById[myUserId] = data.avatarFileId;
+        renderWhoami();
+        refreshProfileModalContent();
+        renderConversationList(lastConvList); // avatar mới có thể hiện lại ở DM/group mà mình là thành viên
+        if (activeConversationId) renderInfoPanel(activeConversationId);
+    }).catch(function (err) {
+        appAlert('đổi ảnh đại diện lỗi: ' + err.message, 'Lỗi');
+    });
+}
+
+// PUT /users?username= đã có sẵn từ trước (UserRegistry#updateUsername) nhưng chưa có UI nào gọi tới -- tái dùng appPrompt như renameConversation.
+function changeMyUsername() {
+    appPrompt('Tên hiển thị của bạn:', myUsername, {title: 'Đổi tên hiển thị', confirmText: 'Lưu', cancelText: 'Huỷ', placeholder: 'Nhập tên...'}).then(function (next) {
+        if (next === null) return;
+        next = next.trim();
+        if (!next || next === myUsername) return;
+        fetch(HISTORY_API_BASE + '/users?username=' + encodeURIComponent(next), {
+            method: 'PUT',
+            headers: {'Authorization': 'Bearer ' + authToken}
+        }).then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            return res.json();
+        }).then(function (data) {
+            myUsername = data.username;
+            localStorage.setItem(STORAGE_USERNAME_KEY, myUsername);
+            usernameById[myUserId] = myUsername;
+            renderWhoami();
+            refreshProfileModalContent();
+            renderConversationList(lastConvList); // tên của mình có thể hiện trong label DM/subtitle group
+            if (activeConversationId) renderInfoPanel(activeConversationId);
+        }).catch(function (err) {
+            appAlert('đổi tên lỗi: ' + err.message, 'Lỗi');
+        });
+    });
 }
 
 function formatTime(tsEpochMillis) {
@@ -92,6 +222,13 @@ function updateConvHeadPresence(conversationId) {
 // --- panel thông tin/thành viên bên phải (kiểu Slack/Discord "Details") ---
 
 // Dưới 1000px #infoPanel là drawer che kín màn hình (@media max-width:1000px) -- mặc định mở sẵn như desktop sẽ che kín app ngay lúc vào trên điện thoại (bug thật đã gặp), nên default theo đúng breakpoint CSS đó.
+// Bấm bất kỳ chỗ nào trong avatar đầu panel (cả ảnh lẫn nút bút chì nhỏ #infoPanelAvatarEditBtn, event
+// bubble lên tới đây) đều mở đổi ảnh nhóm -- CHỈ khi đang editable (group, xem renderInfoPanel gắn/gỡ
+// class này), khỏi phải gắn onclick riêng cho từng phần tử con.
+document.getElementById('infoPanelAvatarWrap').addEventListener('click', function () {
+    if (this.classList.contains('editable')) changeGroupAvatar();
+});
+
 var infoPanelDrawerQuery = window.matchMedia('(max-width: 1000px)');
 var infoPanelVisible = !infoPanelDrawerQuery.matches;
 document.getElementById('infoPanel').classList.toggle('collapsed', !infoPanelVisible);
@@ -149,15 +286,20 @@ function renderInfoPanel(conversationId) {
         return;
     }
 
+    var isGroupConv = conv.memberUserIds.filter(function (id) { return id !== myUserId; }).length > 1;
     var avatar = conversationAvatar(conv);
     var avatarEl = document.getElementById('infoPanelAvatar');
     applyAvatar(avatarEl, avatar);
+    // Chỉ GROUP mới sửa được ảnh đại diện -- DM hiện avatar thật của người kia, không phải thứ chính
+    // mình sở hữu (xem changeGroupAvatar). Nút chỉ hiện khi hover (CSS #infoPanelAvatarWrap.editable:hover).
+    var avatarWrapEl = document.getElementById('infoPanelAvatarWrap');
+    avatarWrapEl.classList.toggle('editable', isGroupConv);
+    if (isGroupConv) document.getElementById('infoPanelAvatarEditBtn').innerHTML = ICON.edit;
     document.getElementById('infoPanelName').innerText = conversationLabel(conv);
     document.getElementById('infoPanelSubtitle').innerText = conv.memberUserIds.length + ' thành viên';
     document.getElementById('infoMemberCount').innerText = conv.memberUserIds.length;
     document.getElementById('infoMemberCountRow').innerText = conv.memberUserIds.length;
     document.getElementById('infoConvIdValue').innerText = conv.conversationId.substring(0, 8) + '…';
-    var isGroupConv = conv.memberUserIds.filter(function (id) { return id !== myUserId; }).length > 1;
     document.getElementById('infoTypeValue').innerText = isGroupConv ? 'Nhóm' : 'Nhắn tin trực tiếp';
     document.getElementById('infoActivityValue').innerText = relativeTime(conv.lastMessageAt);
 
@@ -182,9 +324,8 @@ function renderInfoPanel(conversationId) {
         row.className = 'infoMemberRow';
         row.innerHTML = '<span class="avatar-wrap"><span class="avatar"></span><span class="status-dot' + (online ? ' online' : '') + '"></span></span><span class="name"></span>' +
             '<span class="roleBadge ' + (online ? 'online">Online' : 'offline">Offline') + '</span>';
-        var a = row.querySelector('.avatar');
-        a.style.background = avatarColor(id);
-        a.innerText = avatarInitial(displayName(id));
+        var memberImageUrl = userAvatarUrl(id);
+        applyAvatar(row.querySelector('.avatar'), memberImageUrl ? {imageUrl: memberImageUrl} : {color: avatarColor(id), initial: avatarInitial(displayName(id))});
         var nameEl = row.querySelector('.name');
         nameEl.innerText = displayName(id);
         if (isMe) {
@@ -195,6 +336,40 @@ function renderInfoPanel(conversationId) {
         }
         listEl.appendChild(row);
     });
+}
+
+// Đổi ảnh đại diện RIÊNG của group đang mở trong Info panel -- chỉ nút #infoPanelAvatarEditBtn (chỉ
+// hiện cho group, xem renderInfoPanel) gọi tới hàm này nên khỏi tự kiểm tra lại isGroupConv ở đây.
+// Cùng luồng upload với changeMyAvatar (tái dùng uploadOneFile), chỉ khác endpoint đích.
+function changeGroupAvatar() {
+    if (!activeConversationId) return;
+    var conversationId = activeConversationId;
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    input.addEventListener('change', function (e) {
+        var file = e.target.files[0];
+        input.remove();
+        if (!file) return;
+        uploadOneFile('', file).then(function (result) {
+            return fetch(HISTORY_API_BASE + '/conversations/avatar?conversationId=' + encodeURIComponent(conversationId) + '&avatarFileId=' + encodeURIComponent(result.fileId), {
+                method: 'PUT',
+                headers: {'Authorization': 'Bearer ' + authToken}
+            });
+        }).then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            return res.json();
+        }).then(function () {
+            // Nạp lại NGUYÊN từ server rồi vẽ lại sidebar + conv-head + info panel cùng lúc -- đúng
+            // pattern renameConversation() đang dùng, thay vì tự vá lastConvList + gọi rải rác từng hàm render.
+            refreshConversationList();
+        }).catch(function (err) {
+            appAlert('đổi ảnh nhóm lỗi: ' + err.message, 'Lỗi');
+        });
+    });
+    document.body.appendChild(input);
+    input.click();
 }
 
 // Tab "Files" -- ảnh/video lấy thẳng từ bảng files (gắn conversationId lúc upload, xem FileRegistry#listForConversation), không cần dò lịch sử tin nhắn.
@@ -344,12 +519,7 @@ function enterApp() {
     identityConfirmed = true;
     document.getElementById('authScreen').style.display = 'none';
     document.getElementById('mainApp').style.display = 'flex';
-    var whoamiEl = document.getElementById('whoami');
-    whoamiEl.innerHTML = '<span class="avatar"></span><span class="name"></span>';
-    var whoamiAvatar = whoamiEl.querySelector('.avatar');
-    whoamiAvatar.style.background = avatarColor(myUserId);
-    whoamiAvatar.innerText = avatarInitial(myUsername);
-    whoamiEl.querySelector('.name').innerText = myUsername;
+    renderWhoami();
     refreshUserList();
     refreshConversationList();
     loadNotifications(); // đồng bộ badge chuông thông báo ngay lúc vào app (xem history-ws.js)

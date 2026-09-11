@@ -25,15 +25,34 @@ function refreshThemeMenuSelection() {
         el.classList.toggle('active', el.dataset.mode === current);
     });
 }
+// Đặt vị trí popup neo cạnh 1 nút trong #topbar (notif/theme) -- LUÔN mở XUỐNG dưới nút (đủ chỗ vì
+// nút nằm sát mép trên màn hình, không như positionComposeEmojiPicker ưu tiên mở LÊN), căn phải theo
+// mép phải nút, kẹp lại trong viewport nếu popup rộng hơn khoảng trống bên trái (màn hình hẹp).
+function positionTopbarMenu(triggerEl, menu) {
+    var rect = triggerEl.getBoundingClientRect();
+    var margin = 8;
+    var menuWidth = menu.offsetWidth || 320;
+    var idealLeft = rect.right - menuWidth;
+    var clampedLeft = Math.max(margin, Math.min(window.innerWidth - menuWidth - margin, idealLeft));
+    menu.style.top = (rect.bottom + margin) + 'px';
+    menu.style.left = clampedLeft + 'px';
+}
+
 function toggleThemeMenu(e) {
     e.stopPropagation(); // không thì document click listener đóng menu (mở bằng logic bên dưới) chạy ngay sau khi vừa mở
-    document.getElementById('themeMenu').classList.toggle('show');
+    var menu = document.getElementById('themeMenu');
+    var opening = !menu.classList.contains('show');
+    menu.classList.toggle('show');
+    if (opening) positionTopbarMenu(document.getElementById('themeBtn'), menu);
 }
 function closeThemeMenu() {
     document.getElementById('themeMenu').classList.remove('show');
 }
 document.getElementById('themeBtn').innerHTML = ICON.contrast;
 document.getElementById('themeBtn').onclick = toggleThemeMenu;
+// Portal thẳng ra document.body (KHÔNG còn lồng trong #themeMenuWrap) -- cùng lý do/cùng pattern với
+// mọi popup khác trong app (#reactionPicker, .attachMenu, #bgPickerOverlay...), xem CSS #themeMenu.
+document.body.appendChild(document.getElementById('themeMenu'));
 var themeMenuEl = document.getElementById('themeMenu');
 THEME_OPTIONS.forEach(function (opt) {
     var item = document.createElement('button');

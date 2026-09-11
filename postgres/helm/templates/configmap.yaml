@@ -22,13 +22,18 @@ data:
     -- Ten rieng (tuy chon) cho 1 conversation, dung chung cho MOI thanh vien (khac ban dau chi luu
     -- localStorage rieng tung trinh duyet) -- xem ConversationMembershipRegistry#upsertName,
     -- HallApiHandlers POST/PUT /conversations. Loose-schema quen thuoc cua repo: KHONG bat buoc co
-    -- dong cho moi conversationId -- chi ton tai khi da tung duoc dat ten; client tu suy label tu
-    -- danh sach thanh vien khi khong co dong nao khop (xem conversationLabel trong demo.html).
+    -- dong cho moi conversationId -- chi ton tai khi da tung duoc dat ten HOAC dat anh dai dien rieng;
+    -- client tu suy label tu danh sach thanh vien khi khong co dong nao khop (xem conversationLabel).
     CREATE TABLE IF NOT EXISTS conversations (
         id UUID NOT NULL PRIMARY KEY,
         name TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Anh dai dien rieng cho 1 GROUP (khong danh cho DM -- DM hien avatar that cua nguoi kia, xem
+    -- conversationAvatar() phia client) -- cung tro toi files.id nhu users.avatar_file_id o tren.
+    -- Tach rieng upsertAvatar() voi upsertName() (ConversationMembershipRegistry): xoa ten rieng
+    -- (name = NULL) KHONG duoc lam mat anh dai dien da dat rieng tren cung 1 dong nay.
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS avatar_file_id UUID;
 
     -- He thong login THAT: username + password (hash bang bcrypt, xem UserRegistry/RestApiVerticle
     -- POST /register, /login) -- khong con la "dang ky ten hien thi" don thuan nhu truoc nua.
@@ -40,6 +45,10 @@ data:
         password_hash TEXT NOT NULL,
         first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Anh dai dien ca nhan -- tro toi files.id (khong FK, dung quy uoc loose-schema cua ca file nay),
+    -- file that upload/luu qua cung duong file-server nhu anh/video gui trong chat (xem FileRegistry).
+    -- NULL = chua dat, client tu ve vong tron mau + chu cai dau (xem avatarColor/avatarInitial).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_file_id UUID;
 
     -- 4 tai khoan test co san -- mat khau THAT ca 4 deu la "123456aA@" (hash bcrypt ben duoi, tao
     -- bang chinh org.mindrot.jbcrypt ma UserRegistry dung, KHONG phai gia lap) -- khoi phai

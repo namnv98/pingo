@@ -796,8 +796,11 @@ function ensureConversationCard(conversationId, label, subtitle) {
             row.className = 'mentionSuggestItem';
             var avatarEl = document.createElement('span');
             avatarEl.className = 'mentionSuggestAvatar';
-            if (u.id === 'all') { avatarEl.style.background = 'var(--ink-faint)'; avatarEl.innerHTML = ICON.users; }
-            else { avatarEl.style.background = avatarColor(u.id); avatarEl.innerText = avatarInitial(u.username); }
+            if (u.id === 'all') { applyAvatar(avatarEl, {color: 'var(--ink-faint)', icon: ICON.users}); }
+            else {
+                var mentionImageUrl = userAvatarUrl(u.id);
+                applyAvatar(avatarEl, mentionImageUrl ? {imageUrl: mentionImageUrl} : {color: avatarColor(u.id), initial: avatarInitial(u.username)});
+            }
             var nameEl = document.createElement('span');
             nameEl.className = 'mentionSuggestName';
             nameEl.innerText = u.label || u.username;
@@ -1066,8 +1069,8 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         var avatarEl = row.querySelector('.avatar');
         var nameEl = row.querySelector('.sender-name');
         var senderColor = avatarColor(fromUserId);
-        avatarEl.style.background = senderColor;
-        avatarEl.innerText = avatarInitial(name);
+        var senderImageUrl = userAvatarUrl(fromUserId);
+        applyAvatar(avatarEl, senderImageUrl ? {imageUrl: senderImageUrl} : {color: senderColor, initial: avatarInitial(name)});
         // Tên chỉ hiện ở tin đầu nhóm. Tô màu tên theo avatarColor() (kiểu Discord) -- hữu ích nhất trong nhóm đông người, với DM vô hại vì chỉ 1 người "theirs".
         if (grouped) nameEl.style.display = 'none'; else { nameEl.innerText = name; nameEl.style.color = senderColor; }
     }

@@ -80,21 +80,31 @@ public class UserRegistry {
 
   /** Toàn bộ user đã từng xuất hiện — dùng cho UI hiện danh sách để chọn (DM peer/thành viên group). Không bao giờ trả password_hash. */
   public CompletionStage<JsonArray> listUsers() {
-    return supplier.executeReadOnly(conn -> conn.preparedQuery("SELECT id, username, first_seen_at FROM users ORDER BY username, first_seen_at DESC")
+    return supplier.executeReadOnly(conn -> conn.preparedQuery("SELECT id, username, first_seen_at, avatar_file_id FROM users ORDER BY username, first_seen_at DESC")
         .execute()
         .toCompletionStage()
         .thenApply(
             rows -> {
               var result = new JsonArray();
               for (var row : rows) {
+                var avatarFileId = row.getUUID("avatar_file_id");
                 result.add(
                     new JsonObject()
                         .put("id", row.getUUID("id").toString())
                         .put("username", row.getString("username"))
-                        .put("firstSeenAt", row.getOffsetDateTime("first_seen_at").toInstant().toEpochMilli()));
+                        .put("firstSeenAt", row.getOffsetDateTime("first_seen_at").toInstant().toEpochMilli())
+                        .put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString()));
               }
               return result;
             }));
+  }
+
+  /** Đổi/xoá ảnh đại diện của chính mình — id lấy từ token đã verify (xem HallApiHandlers), avatarFileId null = xoá, quay lại vòng tròn màu mặc định phía client. */
+  public CompletionStage<Void> updateAvatar(UUID id, UUID avatarFileId) {
+    return supplier.execute(conn -> conn.preparedQuery("UPDATE users SET avatar_file_id = ? WHERE id = ?")
+            .execute(Tuple.of(avatarFileId, id))
+            .toCompletionStage())
+        .thenApply(unused -> null);
   }
 
   /**
