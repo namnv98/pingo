@@ -28,7 +28,6 @@ function clearAuth() {
     localStorage.removeItem(STORAGE_TOKEN_KEY);
 }
 
-// path: '/login' hoặc '/register' — cùng 1 body {username, password}, cùng cách xử lý kết quả.
 function doAuth(path) {
     clearAuthError();
     var username = document.getElementById('authUsername').value.trim();
@@ -83,7 +82,6 @@ function logout() {
     showLoginForm();
 }
 
-// Re-fetch + vẽ lại danh sách/picker -- gọi lúc enterApp() và mỗi khi bấm nút "🔄 Làm mới danh sách".
 function refreshUserList() {
     fetch(HISTORY_API_BASE + '/users')
         .then(function (res) {
@@ -95,11 +93,7 @@ function refreshUserList() {
             usernameById = {};
             list.forEach(function (u) { if (u.username) usernameById[u.id] = u.username; });
             renderUserPickers();
-            // refreshUserList() và refreshConversationList() chạy song song lúc enterApp() -- nếu
-            // list hội thoại về TRƯỚC khi usernameById kịp có (race condition thường gặp), tên hiện
-            // ra sẽ tạm rơi về dạng ID rút gọn (xem displayName) và KẸT NGUYÊN như vậy tới khi có gì
-            // đó chủ động vẽ lại. Vẽ lại sidebar (dùng cache lastConvList, không cần fetch lại) ngay
-            // khi tên vừa sẵn sàng để tự sửa đúng, không bắt người dùng phải tự bấm 🔄.
+            // Sửa race: nếu list hội thoại về trước usernameById, tên bị kẹt dạng ID -- vẽ lại sidebar (cache) ngay khi tên đã sẵn sàng.
             renderConversationList(lastConvList);
             refreshPresenceSnapshot(collectRelevantUserIdsForPresence());
         })
@@ -108,9 +102,7 @@ function refreshUserList() {
         });
 }
 
-// Chỉ xin snapshot presence cho user THỰC SỰ liên quan (thành viên các hội thoại đang có + user đã
-// đặt tên thật trong picker) -- không xin cho cả nghìn tài khoản test dạng UUID, vừa vô nghĩa vừa
-// có thể vượt giới hạn 1 lần gọi (xem HeraldApiHandlers#getPresence, MAX_PRESENCE_USER_IDS).
+// Chỉ xin presence cho user thực sự liên quan, tránh vượt giới hạn 1 lần gọi (xem HeraldApiHandlers#getPresence, MAX_PRESENCE_USER_IDS).
 function collectRelevantUserIdsForPresence() {
     var ids = {};
     lastConvList.forEach(function (conv) {
@@ -122,15 +114,10 @@ function collectRelevantUserIdsForPresence() {
     return Object.keys(ids).slice(0, 200);
 }
 
-// username LUÔN có giá trị (bắt buộc từ lúc /register, xem HallApiHandlers#register) — nhưng rất
-// nhiều tài khoản trong DB là do e2e test tự sinh username = uuid() (registerUser() trong
-// e2e/lib.mjs), nhìn không khác gì ID, không ai nhận ra được là ai. Lọc theo "trông giống UUID tự
-// sinh" (không phải "có/không có tên" -- lúc nào cũng có) để ẩn bớt rác test theo mặc định.
+// Lọc theo "giống UUID tự sinh" (username luôn có giá trị, xem HallApiHandlers#register) để ẩn tài khoản e2e test (registerUser() sinh username=uuid()) khỏi danh sách mặc định.
 var UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Chuyển tab DM / Group trong panel "Cuộc trò chuyện mới" -- tách biệt 2 luồng tạo, đỡ rối hơn hẳn
-// so với nhồi chung 1 danh sách (DM chọn phát đi ngay, Group cần chọn nhiều + đặt tên nên khác hẳn
-// thao tác, để chung 1 chỗ trước đây khó nhìn/khó phân biệt đang thao tác cho cái nào).
+// Tách tab DM/Group riêng vì luồng tạo khác nhau (DM chọn là gửi ngay, Group cần chọn nhiều + đặt tên) -- gộp chung trước đây rối.
 function switchNewConvTab(tab) {
     document.getElementById('tabDmBtn').classList.toggle('active', tab === 'dm');
     document.getElementById('tabGroupBtn').classList.toggle('active', tab === 'group');
@@ -144,10 +131,7 @@ function switchNewConvTab(tab) {
     if (isGroup) updateGroupFoot();
 }
 
-// Panel "Cuộc trò chuyện mới" giờ nổi thành thẻ riêng phía trên nút tròn (FAB, xem CSS
-// #newConvPanel[open] #newConvBody) chứ không còn đẩy danh sách hội thoại xuống -- đóng lại khi bấm ra
-// NGOÀI panel hoặc Esc, giống mọi popup khác trong app (theme menu, background picker...), thay vì chỉ
-// đóng được bằng cách bấm lại đúng nút tròn như hành vi mặc định của <details>.
+// Đóng khi bấm ra ngoài / Esc thay vì chỉ bấm lại nút tròn (hành vi mặc định của <details>), giống các popup khác trong app.
 document.addEventListener('click', function (e) {
     var panel = document.getElementById('newConvPanel');
     if (panel.open && !panel.contains(e.target)) panel.open = false;
@@ -156,15 +140,12 @@ document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') document.getElementById('newConvPanel').open = false;
 });
 
-// Vẽ lại danh sách user ở CẢ 2 tab (DM + Group) thành các hàng .userRow (avatar + tên + ô tick),
-// từ knownUsers đã fetch sẵn (không gọi lại API) — tách riêng khỏi refreshUserList() để checkbox/ô
-// tìm kiếm chỉ cần vẽ lại, không cần fetch lại mỗi lần gõ/tick. KHÔNG còn ô nhập UUID tay -- chọn
-// bằng tên duy nhất (không ai gõ nổi 1 UUID 36 ký tự chính xác), search-by-name đã đủ giữa hàng nghìn user.
+// Vẽ lại từ knownUsers đã fetch sẵn (không gọi lại API mỗi lần gõ/tick) -- không còn nhập UUID tay, chọn theo tên là đủ.
 function renderUserPickers() {
     var showTest = document.getElementById('showTestAccounts').checked;
     var query = document.getElementById('userSearch').value.trim().toLowerCase();
     var visible = knownUsers.filter(function (u) {
-        if (u.id === myUserId) return false; // không tự nhắn/tự chọn chính mình
+        if (u.id === myUserId) return false;
         if (!showTest && UUID_LIKE_RE.test(u.username)) return false;
         if (query && u.username.toLowerCase().indexOf(query) === -1) return false;
         return true;
@@ -188,8 +169,6 @@ function renderUserPickers() {
     });
 }
 
-// Dựng 1 hàng user (avatar màu ổn định theo id + tên + ô tick bên phải). canSelect=true (tab Group)
-// thì hiện ô tick tròn để chọn/bỏ nhiều người; tab DM (canSelect=false) không có tick -- bấm là nhắn ngay.
 function buildUserRow(u, canSelect) {
     var row = document.createElement('div');
     row.className = 'userRow' + (canSelect ? ' canSelect' : '');
@@ -217,7 +196,6 @@ function toggleGroupMember(userId, rowEl) {
     updateGroupFoot();
 }
 
-// Cập nhật ô tên nhóm + nút tạo + đếm số thành viên ở chân panel -- chỉ hiện ở tab Group.
 function updateGroupFoot() {
     var n = selectedGroupMemberIds.length;
     var count = document.getElementById('memberCount');

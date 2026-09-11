@@ -1,7 +1,4 @@
-// .attachMenu (nút "+" trong khu soạn tin) là phần tử RIÊNG của TỪNG card (không phải 1 singleton toàn
-// cục như #reactionPicker) -- vẫn cần 1 biến TOÀN CỤC theo dõi "cái nào đang mở" (nếu có) để CÁC popup
-// KHÁC (reaction/compose-emoji/gif/sticker) đóng được nó khi chúng mở lên, và ngược lại -- xem
-// openAttachMenu bên trong ensureConversationCard.
+// .attachMenu là phần tử riêng của từng card (không phải singleton) nhưng vẫn cần biến toàn cục để các popup khác đóng nó khi chúng mở lên, và ngược lại.
 var openAttachMenuEl = null;
 function closeAttachMenu() {
     if (openAttachMenuEl) openAttachMenuEl.classList.remove('show');
@@ -9,12 +6,7 @@ function closeAttachMenu() {
 }
 document.addEventListener('click', closeAttachMenu);
 
-// --- popup THẢ CẢM XÚC lên tin kiểu Facebook (1 người chỉ có 1 reaction/tin, chọn lại đúng emoji
-// đang chọn để huỷ, chọn khác THAY THẾ, xem ChatSessionManager#handleReaction) -- LUÔN đúng 6 icon cố
-// định trong images/chat (REACTIONS ở trên), KHÔNG liên quan gì tới popup CHÈN EMOJI vào ô nhập tin
-// (xem khối riêng ensureComposeEmojiPicker bên dưới, dùng emoji-picker-element, đầy đủ bộ Unicode) --
-// 2 khái niệm khác hẳn nhau: reaction là bộ nhỏ cố định có ý nghĩa xã hội, còn chèn emoji vào chữ thì
-// cần đầy đủ như bàn phím thật, không thể dùng chung 1 popup nữa. ---
+// Popup reaction (Facebook-style, 6 icon cố định trong REACTIONS) khác hẳn popup chèn emoji vào ô nhập (ensureComposeEmojiPicker, bộ Unicode đầy đủ) -- không dùng chung vì mục đích khác nhau.
 
 var pickerOnSelect = null; // callback(emoji) -- gán bởi openReactionPicker
 
@@ -27,7 +19,6 @@ function ensureReactionPicker() {
     return picker;
 }
 
-// Vẽ lại 6 nút icon reaction (images/chat) mỗi lần mở picker.
 function populatePicker(picker) {
     picker.innerHTML = '';
     REACTIONS.forEach(function (r, idx) {
@@ -60,28 +51,21 @@ function openReactionPicker(triggerEl, conversationId, messageId) {
 function positionAndShowPicker(triggerEl) {
     var picker = ensureReactionPicker();
     reactionPickerTriggerEl = triggerEl;
-    // Giữ CẢ CỤM .msg-actions (không chỉ riêng nút 🙂) hiện CƯỠNG BỨC trong lúc popup còn mở --
-    // picker gắn vào document.body (ngoài .bubble-row), nên chuột rời hàng tin để bấm chọn emoji sẽ
-    // mất :hover, cả cụm sẽ tự ẩn theo CSS mặc định (opacity theo :hover) nếu không có class này ghi
-    // đè, trong khi popup vẫn đang hiện -- nhìn rất kỳ (mũi tên popup trỏ xuống 1 chỗ trống).
+    // picker gắn vào document.body (ngoài .bubble-row) nên rời chuột mất :hover -- ép hiện .msg-actions bằng class "picker-open" để không tự ẩn khi popup còn mở.
     var actionsEl = triggerEl.closest('.msg-actions');
     if (actionsEl) actionsEl.classList.add('picker-open');
 
-    // Hiện trước rồi mới đo (offsetWidth) -- kích thước thật của popup tuỳ font/emoji hệ điều hành,
-    // không đoán cứng 1 con số (dễ sai lệch giữa các máy khác nhau).
+    // Hiện trước rồi mới đo offsetWidth -- kích thước popup tuỳ font/emoji hệ điều hành, không đoán cứng.
     picker.classList.add('show');
     var rect = triggerEl.getBoundingClientRect();
     var buttonCenterX = rect.left + rect.width / 2;
     var margin = 8;
     var pickerWidth = picker.offsetWidth;
     var idealLeft = buttonCenterX - pickerWidth / 2;
-    // Kẹp popup trong viewport -- sát lề trái/phải thì tự đẩy sang phía ngược lại cho đủ chỗ thay vì
-    // bị cắt (tràn ra ngoài màn hình, phần bị cắt không bấm được).
     var clampedLeft = Math.max(margin, Math.min(window.innerWidth - pickerWidth - margin, idealLeft));
     picker.style.left = clampedLeft + 'px';
     picker.style.top = Math.max(margin, rect.top - 46) + 'px';
-    // Popup bị đẩy lệch khỏi vị trí "giữa nút" lý tưởng thì mũi tên phải tự bù lại, luôn trỏ đúng
-    // vào giữa nút kích hoạt -- không để mũi tên trỏ vào khoảng trống do popup đã bị đẩy sang bên.
+    // Popup bị đẩy lệch khỏi tâm nút thì mũi tên phải tự bù lại để luôn trỏ đúng vào nút kích hoạt.
     var arrowLeft = buttonCenterX - clampedLeft;
     arrowLeft = Math.max(14, Math.min(pickerWidth - 14, arrowLeft));
     picker.style.setProperty('--arrow-left', arrowLeft + 'px');
@@ -100,12 +84,7 @@ function closeReactionPicker() {
 }
 document.addEventListener('click', closeReactionPicker);
 
-// --- popup GHIM (pinBtn -- .msg-actions) -- menu nhỏ 2 lựa chọn (chung/riêng), dùng lại đúng cách
-// định vị/kẹp-trong-viewport của #reactionPicker (positionAndShowPicker) nhưng KHÔNG dùng chung 1
-// phần tử -- #reactionPicker là lưới emoji cố định 6 icon, #pinMenu là danh sách nút chữ dọc, khác
-// hẳn cấu trúc. "Bỏ ghim" KHÔNG có ở đây -- làm ở tab Pins (nút ✕ trên từng dòng, xem
-// renderPinsList) vì menu này không biết trước tin đang được ghim ở chế độ nào (không giữ state
-// ghim cho MỌI tin đang hiển thị, tránh phải gọi thêm API cho từng bubble).
+// Popup ghim (2 lựa chọn chung/riêng) -- "Bỏ ghim" không có ở đây, làm ở tab Pins vì menu này không biết trước tin đang ghim ở chế độ nào (không giữ state ghim cho mọi tin đang hiển thị).
 var pinMenuTarget = null;
 var pinMenuTriggerEl = null; // nút 📌 đã mở menu hiện tại -- giữ hiện cưỡng bức (class "picker-open") tới khi đóng, cùng cơ chế reactionPickerTriggerEl
 
@@ -138,10 +117,7 @@ function openPinMenu(triggerEl, conversationId, messageId) {
     closePinMenu();
     pinMenuTarget = {conversationId: conversationId, messageId: messageId};
     var menu = ensurePinMenu();
-    // Giữ CẢ CỤM .msg-actions hiện cưỡng bức trong lúc menu còn mở -- menu gắn vào document.body
-    // (ngoài .bubble-row), nên rê chuột từ nút 📌 sang menu sẽ mất :hover của hàng tin, cả cụm nút
-    // (react/reply/delete) sẽ tự ẩn theo CSS mặc định nếu không có class này ghi đè -- đúng bug đã
-    // gặp với #reactionPicker trước đây (xem positionAndShowPicker), quên áp dụng lại ở đây.
+    // Cùng bug :hover như #reactionPicker (xem positionAndShowPicker) -- ép hiện .msg-actions bằng "picker-open" khi menu còn mở.
     pinMenuTriggerEl = triggerEl;
     var actionsEl = triggerEl.closest('.msg-actions');
     if (actionsEl) actionsEl.classList.add('picker-open');
@@ -167,11 +143,7 @@ function closePinMenu() {
 }
 document.addEventListener('click', closePinMenu);
 
-/**
- * Ghim/bỏ ghim tin qua WS -- server tự persist (bảng message_pins_shared/message_pins_private tuỳ
- * scope) rồi fan-out (CHỈ scope 'shared', xem ChatSessionManager#handlePin bên colony). Ghim riêng
- * không có xác nhận nào bay về -- refresh lại tab Pins (nếu đang mở) để thấy ngay.
- */
+// Ghim/bỏ ghim qua WS -- server chỉ fan-out lại frame PIN cho scope 'shared', nên scope 'private' phải tự refresh tab Pins ở đây vì không có xác nhận nào bay về.
 function sendPin(conversationId, messageId, scope, pinned) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     send({type: 'PIN', id: messageId, conversationId: conversationId, body: {scope: scope, pinned: pinned}});
@@ -180,19 +152,14 @@ function sendPin(conversationId, messageId, scope, pinned) {
     }
 }
 
-// Nhận frame PIN (chỉ bay tới với scope 'shared', xem javadoc MessageType#PIN) -- cập nhật lại tab
-// Pins nếu đang mở đúng conversation đó.
+// Frame PIN chỉ bay tới với scope 'shared' (xem MessageType#PIN) -- cập nhật tab Pins nếu đang mở đúng conversation đó.
 function handlePinReceived(conversationId, messageId, fromUserId, pinned) {
     if (infoActiveTab === 'pins' && activeConversationId === conversationId) {
         loadConversationPins(conversationId);
     }
 }
 
-// --- popup CHÈN EMOJI vào ô nhập tin (composeEmojiBtn) -- dùng emoji-picker-element (open-source,
-// MIT, xem <script type="module"> ở <head>) thay vì tự vẽ tay: đầy đủ bộ Unicode + tìm kiếm + phân
-// loại + skin-tone, không giới hạn 6 icon như popup reaction. Custom element <emoji-picker> tự quản lý
-// toàn bộ nội dung/scroll/tìm kiếm bên trong Shadow DOM -- phần này chỉ lo tạo/định vị/ẩn-hiện, không
-// đụng vào bên trong nó. ---
+// Popup chèn emoji dùng thư viện emoji-picker-element (custom element, tự quản lý nội dung trong Shadow DOM) -- phần này chỉ lo tạo/định vị/ẩn-hiện.
 
 var composeEmojiPickerTarget = null; // callback(emoji) -- gán mỗi lần mở, giống pickerOnSelect của reaction
 var composeEmojiPickerTriggerEl = null;
@@ -202,12 +169,9 @@ function ensureComposeEmojiPicker() {
     if (picker) return picker;
     picker = document.createElement('emoji-picker');
     picker.id = 'composeEmojiPicker';
-    // Bấm bất kỳ đâu TRONG picker (ô tìm kiếm, đổi tab phân loại, chọn emoji...) không được coi là
-    // "bấm ra ngoài" -- không thì document click listener (đóng picker, xem cuối hàm) đóng ngay giữa
-    // lúc đang gõ tìm kiếm hay chỉ mới đổi tab, chưa kịp chọn gì.
+    // Chặn bubble để bấm trong picker không bị document click listener (đóng picker) coi là "bấm ra ngoài".
     picker.addEventListener('click', function (e) { e.stopPropagation(); });
-    // "emoji-click" là sự kiện riêng của emoji-picker-element, bắn ra ngay khi người dùng bấm chọn 1
-    // emoji -- e.detail.unicode là ký tự emoji thật (vd "😀"), đúng thứ insertEmojiAtCursor cần.
+    // "emoji-click" là sự kiện riêng của emoji-picker-element -- e.detail.unicode là ký tự emoji thật.
     picker.addEventListener('emoji-click', function (e) {
         if (composeEmojiPickerTarget) composeEmojiPickerTarget(e.detail.unicode);
         closeComposeEmojiPicker();
@@ -228,14 +192,7 @@ function openComposeEmojiPicker(triggerEl, inputEl) {
     positionComposeEmojiPicker(triggerEl, picker);
 }
 
-// Canh popup ngay TRÊN nút bấm (composeEmojiBtn/attachMenuBtn/... luôn nằm ở khu vực soạn tin, sát đáy
-// màn hình) -- picker khá to (search box + lưới emoji/GIF) nên mở LÊN TRÊN mới đủ chỗ, chỉ mở XUỐNG nếu
-// màn hình quá thấp (không đủ chỗ phía trên, hiếm khi xảy ra với layout chat bình thường).
-// CĂN GIỮA theo TÂM nút (không phải áp mép phải) -- bug thật đã gặp: áp mép phải chỉ đúng cho MỖI
-// composeEmojiBtn (hàm này viết riêng cho nó lúc đầu, nút luôn nằm gần rìa PHẢI khu soạn tin nên áp mép
-// phải giữ popup không tràn qua phải) -- giờ hàm này dùng CHUNG cho cả attachMenuBtn (nằm rìa TRÁI) nên
-// áp mép phải làm popup lệch hẳn sang 1 bên thay vì đứng giữa nút. Căn giữa theo tâm nút mới ĐÚNG cho
-// MỌI nút bất kể nằm bên nào của hàng, và vẫn được kẹp trong viewport như cũ nên không lo tràn màn hình.
+// Dùng chung cho nhiều nút (composeEmojiBtn, attachMenuBtn...) nên căn giữa theo TÂM nút, không áp mép -- bug đã gặp: áp mép phải chỉ đúng khi hàm này còn viết riêng cho composeEmojiBtn (nằm rìa phải).
 function positionComposeEmojiPicker(triggerEl, picker) {
     var rect = triggerEl.getBoundingClientRect();
     var margin = 8;
@@ -257,33 +214,14 @@ function closeComposeEmojiPicker() {
 }
 document.addEventListener('click', closeComposeEmojiPicker);
 
-// --- popup GIF (.gifTrayBtn) VÀ STICKER (.stickerTrayBtn) -- CÙNG dùng API Giphy, DÙNG CHUNG 1 bộ UI
-// (tìm kiếm + lưới ảnh) vì hệt nhau, chỉ khác đường dẫn API -- Giphy có 2 catalog TÁCH RIÊNG hẳn nhau:
-// /v1/gifs/... (GIF thường) và /v1/stickers/... (is_sticker:1 -- ảnh minh hoạ nhân vật/biểu cảm, nền
-// trong suốt, ĐÚNG NGHĨA "sticker" thật, khác hẳn GIF thường) -- xem lịch sử sửa: bản đầu lỡ dùng ảnh
-// Twemoji (chỉ là emoji, không phải sticker) cho mục sticker, giờ đổi đúng sang catalog sticker thật
-// của chính Giphy, dùng LUÔN key đang có, không cần đăng ký thêm dịch vụ nào khác.
-//
-// KHÔNG có lựa chọn mã nguồn mở cho GIF/sticker: đây là nội dung có bản quyền, không ai tự host nổi 1
-// bộ "hàng nghìn GIF/sticker" mã nguồn mở như đã trao đổi. ĐÃ THỬ 2 key demo công khai phổ biến (Giphy
-// "dc6zaTOxFJmzC" -- Giphy tự chặn luôn rồi, trả 403 BANNED khi gọi thật; Tenor v1 "LIVDSRZULELA" --
-// Tenor đã khai tử hẳn API v1 từ lâu, v2 bắt buộc đăng ký key riêng qua Google Cloud, không còn key demo
-// dùng chung) -- CẢ 2 đều chết, không dùng được nữa. Để trống GIPHY_API_KEY, tự đăng ký 1 key MIỄN PHÍ
-// tại developers.giphy.com (vài phút, không cần thẻ) rồi dán vào đây là chạy được ngay cho cả 2 -- không
-// giả vờ chạy được rồi lỗi khó hiểu, xem nhánh "chưa có key" trong loadMediaItems. Tự vẽ tay ô tìm kiếm
-// + lưới ảnh (không có SDK vanilla JS gọn nhẹ nào tương đương emoji-picker-element cho GIF/sticker),
-// dùng CHUNG logic định vị popup (positionComposeEmojiPicker) cho đồng bộ vị trí/kích thước. ---
+// GIF và sticker dùng chung UI (API Giphy, 2 catalog riêng /v1/gifs và /v1/stickers) -- cần tự đăng ký GIPHY_API_KEY miễn phí tại developers.giphy.com (không có key demo dùng chung nào còn sống).
 var GIPHY_API_KEY = 'PipdjFdjE9cnkC0B7sykyRPP5HJyiKgl'; // key riêng của bạn, tự đăng ký tại developers.giphy.com
 var mediaPickerTarget = null; // callback(item) -- gán mỗi lần mở, giống composeEmojiPickerTarget
 var mediaPickerSearchDebounce = null;
-// Gõ nhanh (mỗi ký tự bắn 1 request debounce) -- request GÕ SAU có thể trả lời VỀ TRƯỚC request gõ
-// trước nếu mạng chập chờn, ghi đè nhầm kết quả mới hơn bằng kết quả cũ -- so số thứ tự, chỉ render nếu
-// đúng là request MỚI NHẤT đã gửi, bỏ qua mọi phản hồi trễ của request cũ hơn.
+// Request gõ sau có thể trả lời về trước request gõ trước (mạng chập chờn) -- so số thứ tự, chỉ render nếu là request mới nhất.
 var mediaPickerRequestSeq = 0;
 
-// kind: 'gifs' hoặc 'stickers' -- ĐÚNG tên nhánh API Giphy (/v1/gifs/... hay /v1/stickers/...), dùng
-// LUÔN làm id DOM (#gifPicker/#stickerPicker) cho gọn -- 2 phần tử TÁCH RIÊNG (không dùng chung 1 <div>
-// đổi nội dung) để tránh phải render lại toàn bộ lưới mỗi lần đổi qua lại giữa GIF/sticker.
+// kind: 'gifs' hoặc 'stickers' -- 2 phần tử DOM tách riêng để không phải render lại lưới khi đổi qua lại.
 function mediaPickerElId(kind) { return kind === 'stickers' ? 'stickerPicker' : 'gifPicker'; }
 
 function ensureMediaPicker(kind) {
@@ -296,8 +234,7 @@ function ensureMediaPicker(kind) {
     picker.innerHTML =
         '<input type="text" class="mediaPickerSearch" placeholder="' + (kind === 'stickers' ? 'Tìm sticker...' : 'Tìm GIF...') + '">' +
         '<div class="mediaPickerGrid"></div>';
-    // Bấm bất kỳ đâu TRONG picker (gõ tìm kiếm, bấm ảnh...) không bị coi là "bấm ra ngoài" -- cùng lý
-    // do với #composeEmojiPicker.
+    // Chặn bubble, cùng lý do với #composeEmojiPicker.
     picker.addEventListener('click', function (e) { e.stopPropagation(); });
     var searchEl = picker.querySelector('.mediaPickerSearch');
     searchEl.addEventListener('input', function () {
@@ -330,15 +267,11 @@ function renderMediaResults(kind, items) {
     });
 }
 
-// q rỗng -- nạp THỊNH HÀNH (trending); có q -- tìm theo từ khoá. previewUrl (fixed_height_small, nhỏ/
-// nhẹ) chỉ dùng để HIỆN lưới cho nhanh -- sendUrl (fixed_height, ảnh động đủ lớn) mới là thứ GỬI ĐI (xem
-// openGifPicker/openStickerPicker/sendExternalImageMessage) -- 2 URL khác nhau, không gửi nhầm bản xem
-// trước bé tí.
+// q rỗng -- nạp trending; có q -- tìm theo từ khoá. previewUrl (nhỏ, để hiện lưới) khác sendUrl (ảnh gửi đi) -- không gửi nhầm bản xem trước bé tí.
 function loadMediaItems(kind, q) {
     var grid = document.querySelector('#' + mediaPickerElId(kind) + ' .mediaPickerGrid');
     if (!grid) return;
-    // Chưa dán key -- báo rõ THIẾU KEY (kèm hướng dẫn) thay vì âm thầm gọi API chắc chắn lỗi (401/403)
-    // rồi hiện "Lỗi tải" chung chung, khó hiểu vì sao. Xem giải thích key ở khai báo GIPHY_API_KEY.
+    // Báo rõ thiếu key thay vì âm thầm gọi API chắc chắn lỗi rồi hiện "Lỗi tải" chung chung.
     if (!GIPHY_API_KEY) {
         grid.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Chưa cấu hình Giphy API key.<br>Đăng ký miễn phí tại developers.giphy.com rồi dán vào biến GIPHY_API_KEY trong assets/js/compose-reactions-pins.js.</div>';
         return;
@@ -378,9 +311,7 @@ function openMediaPicker(kind, triggerEl, conversationId) {
     closeAttachMenu();
     closeMediaPicker(kind === 'stickers' ? 'gifs' : 'stickers'); // đóng nốt cái CÒN LẠI (gif hoặc sticker)
     var picker = ensureMediaPicker(kind);
-    // Field "url" (fixed_height.url) LUÔN là .gif -- kể cả bên catalog /stickers/ (đã tự kiểm chứng qua
-    // API thật) dù Giphy CÓ trả thêm rendition .webp/.mp4 riêng -- dùng đúng field đang lấy (sendImg.url,
-    // xem loadMediaItems), không đoán mime theo kind.
+    // Field url (fixed_height.url) LUÔN là .gif, kể cả catalog /stickers/ (đã kiểm chứng qua API thật) -- không đoán mime theo kind.
     var fileNamePrefix = kind === 'stickers' ? 'sticker' : 'giphy';
     mediaPickerTarget = function (it) { sendExternalImageMessage(conversationId, it.sendUrl, 'image/gif', it.width, it.height, fileNamePrefix + '.gif'); };
     picker.classList.add('show');
@@ -401,9 +332,7 @@ function closeStickerPicker() { closeMediaPicker('stickers'); }
 document.addEventListener('click', closeGifPicker);
 document.addEventListener('click', closeStickerPicker);
 
-// Chèn 1 emoji vào ĐÚNG vị trí con trỏ trong ô nhập (không phải luôn nối cuối chuỗi -- gõ dở giữa
-// câu rồi chèn emoji phải chèn đúng chỗ đang gõ). Bắn lại sự kiện "input" để mọi thứ đang lắng nghe
-// input đó (updateSendButtonState, báo "đang gõ") tự chạy lại như khi gõ tay, không cần gọi trùng.
+// Chèn emoji đúng vị trí con trỏ (không nối cuối chuỗi) rồi bắn lại sự kiện "input" để các listener khác (updateSendButtonState...) tự chạy như gõ tay.
 function insertEmojiAtCursor(inputEl, emoji) {
     var start = inputEl.selectionStart != null ? inputEl.selectionStart : inputEl.value.length;
     var end = inputEl.selectionEnd != null ? inputEl.selectionEnd : inputEl.value.length;
@@ -414,28 +343,7 @@ function insertEmojiAtCursor(inputEl, emoji) {
     inputEl.dispatchEvent(new Event('input', {bubbles: true}));
 }
 
-// Upload ảnh/video: thẳng lên file-server (multipart, KHÔNG qua WebSocket -- file có thể nặng vài MB,
-// không hợp để nhét vào 1 frame WS như tin nhắn chữ), server trả về fileId, tự dựng URL tải xuống.
-// KHÔNG tự gửi frame MESSAGE ở hàm này -- xem uploadAndSendFiles bên dưới, gộp kết quả upload của
-// nhiều file (nếu có) vào ĐÚNG 1 tin.
-//
-// fileMime/fileName gắn qua QUERY STRING (không phải multipart header) -- upload.lua bên file-server
-// đọc content-type qua "?fileMime=" thay vì tự phân tích header multipart thật (nguyên bản đã vậy).
-// token cũng qua query (?token=) vì jad.create_file_path không forward header Authorization cho
-// route tạo file (xem HallApiHandlers#createFile).
-// Upload 1 file, trả về Promise({fileUrl, fileId, fileMime, fileName}) -- KHÔNG tự gửi frame MESSAGE
-// (xem uploadAndSendFiles bên dưới, gọi hàm này song song cho mọi file rồi mới gộp lại gửi ĐÚNG 1 tin
-// duy nhất, giống Telegram/Messenger gộp cả album vào 1 bong bóng thay vì tách rời từng ảnh/video
-// thành nhiều tin lẻ).
-//
-// conversationId đi kèm để hall ghi vào bảng files -- cần cho tab "Files" (liệt kê lại đúng file
-// của ĐÚNG conversation này, xem loadConversationFiles/FileRegistry#listForConversation).
-// Đọc trước kích thước THẬT (width/height) của ảnh/video NGAY TRÊN MÁY người gửi -- trước khi kịp
-// upload lên server, không cần đợi server dựng xong thumbnail (video) hay tải xong ảnh mới biết. Đọc
-// qua chính File local (URL.createObjectURL, KHÔNG qua mạng) nên gần như tức thời. Gắn kèm vào
-// body.files[i] lúc gửi tin (xem uploadOneFile) để BÊN NHẬN (kể cả trên thiết bị khác, hay load lại
-// trang) cũng biết trước tỷ lệ khung hình mà chừa sẵn chỗ đúng kích cỡ, xem CSS .msg-media +
-// renderMessageContent -- không phải chỉ người gửi mới hưởng lợi.
+// Đọc trước width/height thật của ảnh/video ngay trên máy người gửi (qua File local, không qua mạng) để gắn kèm vào tin, giúp bên nhận chừa đúng chỗ khung hình trước khi ảnh/video tải xong.
 function getMediaDimensions(file) {
     var mime = file.type || '';
     var isImage = mime.indexOf('image/') === 0;
@@ -453,16 +361,10 @@ function getMediaDimensions(file) {
             if (el.parentNode) el.parentNode.removeChild(el);
             resolve(result);
         };
-        // Gắn vào DOM THẬT (ẩn ngoài màn hình, không display:none -- phần tử display:none có thể
-        // KHÔNG tải metadata ở 1 số engine) thay vì để hoàn toàn rời DOM -- 1 số trình duyệt (đặc biệt
-        // Safari/WebKit cũ) không đáng tin cậy bắn loadedmetadata cho <video> chưa từng gắn vào cây
-        // DOM, khiến getMediaDimensions() luôn rơi vào nhánh lỗi/timeout, mất luôn kích thước thật --
-        // đây chính là nguyên nhân khiến placeholder đôi khi vẫn "nẩy" (không đặt được aspect-ratio vì
-        // width/height là null, xem renderMessageContent/renderLightboxCurrent).
+        // Gắn vào DOM thật (ẩn off-screen, không display:none) -- Safari/WebKit cũ không bắn loadedmetadata cho <video> chưa từng gắn vào DOM.
         el.style.cssText = 'position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;';
         document.body.appendChild(el);
-        // Timeout an toàn -- file hỏng/codec lạ có thể không bao giờ bắn onload/onloadedmetadata LẪN
-        // onerror ở vài trường hợp hiếm, không được treo Promise mãi mãi (uploadOneFile đang chờ nó).
+        // Timeout an toàn -- file hỏng/codec lạ hiếm khi không bắn onload lẫn onerror, không được treo Promise mãi.
         var timer = setTimeout(function () { finish(null); }, 4000);
         if (isImage) {
             el.onload = function () { finish({width: el.naturalWidth, height: el.naturalHeight}); };
@@ -478,6 +380,7 @@ function getMediaDimensions(file) {
     });
 }
 
+// Upload multipart thẳng lên file-server (không qua WS vì file có thể nặng) -- fileMime/fileName/token đi qua query string vì upload.lua đọc content-type qua "?fileMime=" và jad.create_file_path không forward header Authorization.
 function uploadOneFile(conversationId, file) {
     if (file.size > MAX_UPLOAD_BYTES) {
         return Promise.reject(new Error('File "' + file.name + '" quá lớn (tối đa ' + (MAX_UPLOAD_BYTES / 1024 / 1024) + 'MB)'));
@@ -491,8 +394,7 @@ function uploadOneFile(conversationId, file) {
     var formData = new FormData();
     formData.append('file', file, file.name);
 
-    // Đọc kích thước local SONG SONG với upload (không đợi lẫn nhau) -- đằng nào cũng phải đợi upload
-    // xong mới gửi tin được, đọc kích thước gần như tức thời nên không kéo dài thời gian chờ thực tế.
+    // Đọc kích thước local song song với upload -- không kéo dài thời gian chờ thực tế vì đằng nào cũng phải đợi upload xong.
     return Promise.all([
         fetch(uploadUrl, {method: 'POST', body: formData}).then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -504,19 +406,14 @@ function uploadOneFile(conversationId, file) {
         var dims = results[1];
         if (!data || !data.id) throw new Error(JSON.stringify(data));
         var fileUrl = FILE_SERVER_BASE + '/v2/api/download?id=' + encodeURIComponent(data.id);
-        // fileId riêng (không chỉ fileUrl) -- cần để tự dựng URL /v2/api/thumbnail (poster cho
-        // video, xem renderMessageContent) mà không phải parse ngược lại từ fileUrl.
+        // fileId riêng (không chỉ fileUrl) -- cần để tự dựng URL /v2/api/thumbnail cho video.
         var result = {fileUrl: fileUrl, fileId: data.id, fileMime: data.mime || mime, fileName: file.name};
         if (dims) { result.width = dims.width; result.height = dims.height; }
         return result;
     });
 }
 
-// Upload TẤT CẢ file song song (Promise.all), rồi gửi ĐÚNG 1 frame MESSAGE với body.files = [...] --
-// từ góc nhìn colony/harbor đây vẫn chỉ là 1 tin nhắn như mọi tin khác (body luôn là JSON mờ, server
-// không đọc nội dung bên trong, xem ARCHITECTURE.md), không cần thêm MessageType/FrameType riêng cho
-// "tin có nhiều file". Nếu 1 file lỗi giữa chừng thì KHÔNG gửi tin nào cả (tránh gửi thiếu file so với
-// những gì người dùng thực sự chọn) -- báo lỗi rõ file nào hỏng.
+// Upload tất cả file song song rồi gửi đúng 1 frame MESSAGE với body.files -- nếu 1 file lỗi giữa chừng thì không gửi tin nào cả (tránh thiếu file so với người dùng đã chọn).
 function uploadAndSendFiles(conversationId, files, caption, replyTo) {
     Promise.all(files.map(function (file) { return uploadOneFile(conversationId, file); }))
         .then(function (uploaded) {
@@ -534,14 +431,7 @@ function uploadAndSendFiles(conversationId, files, caption, replyTo) {
         });
 }
 
-// Gửi 1 tin ẢNH TRỎ THẲNG TỚI URL NGOÀI (sticker Twemoji, GIF Giphy...) -- KHÔNG upload lại qua chính
-// file-server của app như uploadAndSendFiles() (ảnh/video người dùng tự chọn từ máy), vì file đã có sẵn
-// 1 URL public rồi, tải về rồi tải lên lại tốn băng thông + độ trễ vô ích. body.files dùng CHUNG đúng
-// shape {fileUrl, fileMime, fileName, width, height} mà getMessageFiles/renderMessageContent đã hiểu --
-// server (colony) chỉ lưu nguyên JSON client gửi, không validate domain của fileUrl (giống body.preview
-// của link preview), nên trỏ thẳng ra ngoài vẫn hiển thị đúng cho MỌI người trong hội thoại (ai cũng tự
-// tải ảnh từ URL đó, không phải chỉ máy mình). width/height gán THẲNG (biết trước, không cần đo) để
-// tránh đúng bug "layout nhảy lúc ảnh tải xong" đã sửa cho link preview trước đó.
+// Gửi ảnh trỏ thẳng tới URL ngoài (GIF/sticker) thay vì upload lại qua file-server -- server không validate domain của fileUrl, width/height gán thẳng để tránh layout nhảy lúc ảnh tải xong.
 function sendExternalImageMessage(conversationId, url, mime, width, height, fileName) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     send({

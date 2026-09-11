@@ -1,11 +1,4 @@
-// ===== Theme sáng/tối cho TOÀN BỘ app =====
-// Khác nền/màu bong bóng chat Ở TRÊN (riêng TỪNG cuộc trò chuyện, xem BG_STORAGE_KEY) -- đây là 1 lựa
-// chọn DUY NHẤT áp dụng cho toàn app (sidebar, topbar, mọi cuộc trò chuyện...), lưu client-side
-// (localStorage) vì cũng thuần là tuỳ biến hiển thị cá nhân. "Theo hệ thống" nghĩa là KHÔNG set
-// data-theme (CSS @media (prefers-color-scheme) tự lo, kể cả khi OS đổi theme trong lúc app đang mở --
-// không cần JS lắng nghe gì thêm). Việc set data-theme SỚM (ngay đầu <head>, xem <script> nhỏ ngay sau
-// thẻ viewport) để tránh nháy sáng->tối lúc tải trang -- code ở đây chỉ để ĐỒNG BỘ LẠI UI (menu đang
-// chọn gì) và xử lý khi người dùng bấm đổi, không phải lần set data-theme đầu tiên.
+// Theme sáng/tối cho TOÀN app (khác nền riêng từng cuộc trò chuyện, xem BG_STORAGE_KEY), lưu localStorage; data-theme đã set sớm ở <head> để tránh nháy sáng->tối, code ở đây chỉ đồng bộ UI và xử lý khi người dùng đổi.
 var THEME_STORAGE_KEY = 'pingoTheme_v1';
 var THEME_OPTIONS = [
     {mode: 'light', label: 'Sáng', icon: ICON.sun},
@@ -55,10 +48,7 @@ refreshThemeMenuSelection();
 document.addEventListener('click', closeThemeMenu);
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeThemeMenu(); });
 
-// ===== Màu chủ đạo (accent) -- cho người dùng tự chọn thay vì cố định tím, lưu client-side
-// (localStorage) như theme sáng/tối ở trên. Mỗi preset có 1 cặp giá trị sáng/tối riêng (accent-soft
-// đặc biệt cần đổi hẳn công thức giữa 2 theme, không đơn giản là "cùng màu nhạt hơn") -- áp lại mỗi
-// khi đổi theme (xem setThemeMode) hoặc khi OS đổi theme lúc đang ở chế độ "Theo hệ thống".
+// Accent màu chủ đạo (lưu localStorage như theme); mỗi preset có cặp giá trị sáng/tối riêng vì accent-soft cần đổi hẳn công thức giữa 2 theme, không chỉ nhạt hơn -- áp lại mỗi khi đổi theme hoặc OS đổi theme lúc đang "Theo hệ thống".
 var ACCENT_STORAGE_KEY = 'pingoAccent_v1';
 var ACCENT_PRESETS = [
     {key: 'purple', label: 'Tím', light: {accent: '#6d5bf5', accentDark: '#5a48e0', accentSoft: '#efecff', accentRgb: '109, 91, 245'}, dark: {accent: '#7c6cf7', accentDark: '#6a5aeb', accentSoft: '#251f3d', accentRgb: '124, 108, 247'}},

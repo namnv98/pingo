@@ -6,15 +6,8 @@ function fetchJson(path, withAuth) {
     });
 }
 
-// ===== Quả chuông thông báo (kiểu Microsoft Teams) =====
-// LƯU THẬT trong Postgres (bảng notifications, xem NotificationRegistry) -- colony tự tạo dòng
-// "mention"/"reply"/"reaction" LUÔN, không điều kiện online/offline (xem ChatSessionManager
-// #notifyReplyAndMentions/handleReaction bên colony). Client ở đây CHỈ đọc lại + đánh dấu đã đọc qua
-// API thật của herald (GET/PUT /notifications) -- KHÔNG tự dựng object thông báo từ WS frame nữa
-// (bản trước làm vậy: mất khi F5, và không có id DB thật nên "đánh dấu đã đọc" không lưu lại được).
-// Bù việc phải chờ HTTP round-trip, badge số đếm vẫn TĂNG NGAY khi 1 frame sống bay tới có vẻ liên
-// quan tới mình (xem maybeBumpNotifBadge) -- nội dung CHI TIẾT/chuẩn thì đồng bộ lại thật khi mở popup.
-var notifications = []; // cache hiển thị gần nhất từ GET /notifications, mới nhất trước
+// Quả chuông thông báo: dữ liệu THẬT lấy qua API herald (GET/PUT /notifications), không tự dựng từ WS frame nữa (bản trước làm vậy mất khi F5, không có id DB nên đánh dấu đã đọc không lưu được); badge vẫn tăng ngay khi có frame liên quan, nội dung đồng bộ lại khi mở popup.
+var notifications = []; // cache từ GET /notifications, mới nhất trước
 var notifUnreadCount = 0;
 
 function updateNotifBadge() {
@@ -54,29 +47,18 @@ function renderNotifMenu() {
         item.querySelector('.notifItemTime').innerText = relativeTime(n.ts);
         item.onclick = function () {
             closeNotifMenu();
-            // openConversation() (KHÔNG phải selectConversation() trần) -- conversation trong noti có
-            // thể CHƯA TỪNG được mở trong phiên này (đúng lý do noti tồn tại: server tự lưu bất kể
-            // client có đang xem hay không, xem ChatSessionManager#notifyReplyAndMentions bên colony),
-            // nên chưa có card nào trong conversations{} cả -- selectConversation/jumpToMessage đều
-            // âm thầm return ngay dòng đầu nếu thiếu card (bug thật đã gặp: bấm noti không mở gì cả).
-            // openConversation tự ensureConversationCard trước, cùng đường đúng như bấm 1 mục trong
-            // sidebar (xem buildConvListItem) -- label/subtitle tính lại từ lastConvList nếu có sẵn.
+            // Dùng openConversation() chứ không phải selectConversation() trần -- conversation của noti có thể chưa từng mở nên chưa có card, selectConversation/jumpToMessage âm thầm return nếu thiếu card (bug thật đã gặp).
             var conv = lastConvList.filter(function (c) { return c.conversationId === n.conversationId; })[0];
             openConversation(n.conversationId, conv && conversationLabel(conv), conv && membersSubtitle(conv));
             if (isNarrowViewport()) document.getElementById('layout').classList.add('mobileChatOpen');
-            // messageTs (giờ tin GỐC thật sự được gửi) chứ KHÔNG phải n.ts (giờ SỰ KIỆN xảy ra --
-            // với reaction có thể lệch xa: react vào 1 tin rất cũ) -- dùng nhầm n.ts làm mốc "seek"
-            // khi tin chưa có sẵn trong khung chat sẽ tìm sai hẳn quanh "bây giờ" thay vì quanh lúc
-            // tin gốc, luôn báo "không tìm thấy tin gốc" dù tin còn nguyên (bug thật đã gặp). Dữ liệu
-            // noti cũ (trước khi có cột message_ts) không có field này -- rơi về n.ts, tốt hơn null.
+            // Dùng messageTs (giờ tin gốc) chứ không phải n.ts (giờ sự kiện, có thể lệch xa với reaction) -- seek sai mốc từng gây "không tìm thấy tin gốc" dù tin còn (bug thật đã gặp); noti cũ thiếu field này thì rơi về n.ts.
             if (n.messageId) jumpToMessage(n.conversationId, n.messageId, n.messageTs != null ? n.messageTs : n.ts);
         };
         listEl.appendChild(item);
     });
 }
 
-// GET /notifications thật (herald) -- gọi lúc vào app (enterApp) + mỗi lần mở popup, đủ mới cho 1
-// demo (không cần polling/WS riêng cho việc này).
+// Gọi lúc vào app + mỗi lần mở popup -- đủ mới mà không cần polling/WS riêng cho notifications.
 function loadNotifications() {
     return fetch(HERALD_API_BASE + '/notifications?limit=30', {headers: {'Authorization': 'Bearer ' + authToken}})
         .then(function (res) {
@@ -100,14 +82,11 @@ function toggleNotifMenu(e) {
     var opening = !menu.classList.contains('show');
     menu.classList.toggle('show');
     if (!opening) return;
-    // Đồng bộ lại DANH SÁCH THẬT trước (không dùng cache cũ) -- những gì maybeBumpNotifBadge mới
-    // tăng tạm ở badge đã kịp có dòng DB thật ở đây rồi (colony ghi ngay lúc persist tin/reaction).
+    // Đồng bộ lại danh sách thật trước khi dùng (không dùng cache cũ, badge tạm có thể đã lệch).
     loadNotifications().then(function () {
         var unread = notifications.filter(function (n) { return !n.read; });
         if (!unread.length) return;
-        // Mở ra là coi như đã xem hết -- giống chuông Teams/Messenger, không cần bấm từng cái. Đánh
-        // dấu THẬT qua PUT (mỗi noti 1 lần gọi -- herald chưa có endpoint đánh dấu hàng loạt, chấp
-        // nhận được vì tối đa 30 dòng/lần mở).
+        // Mở popup là coi như đã xem hết -- đánh dấu qua PUT từng noti (herald chưa có endpoint đánh dấu hàng loạt).
         unread.forEach(function (n) {
             n.read = true;
             fetch(HERALD_API_BASE + '/notifications?id=' + encodeURIComponent(n.id), {method: 'PUT', headers: {'Authorization': 'Bearer ' + authToken}})
@@ -128,13 +107,7 @@ document.addEventListener('click', closeNotifMenu);
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeNotifMenu(); });
 renderNotifMenu();
 
-// Đồng bộ lại badge NGAY khi có tín hiệu 1 MESSAGE/REACTION từ NGƯỜI KHÁC có thể vừa sinh ra thông
-// báo cho mình -- hỏi THẲNG server (loadNotifications, nguồn dữ liệu thật) thay vì tự đoán ở client
-// (bản trước đoán bằng cách "tin này của mình" qua 1 Set client-side (myMessageIds) hoặc regex khớp
-// "@username" -- đoán SAI/THIẾU đúng lúc quan trọng nhất: reaction/mention vào tin ở 1 conversation
-// CHƯA TỪNG mở trong phiên này thì client không hề biết gì về tin đó để mà đoán, badge im re dù DB
-// đã có dòng thật -- bug thật đã gặp 2 lần). Debounce nhẹ (không hỏi lại nếu đã có 1 lượt đang chờ)
-// vì server LUÔN biết chính xác, gọi dồn nhiều tin/reaction liên tiếp về vẫn chỉ cần 1 lượt hỏi cuối.
+// Hỏi thẳng server (loadNotifications) thay vì tự đoán ở client -- đoán qua Set/regex từng sai khi tin thuộc conversation chưa mở (bug thật đã gặp); debounce vì gọi dồn nhiều event chỉ cần 1 lượt hỏi cuối.
 var notifRefreshTimer = null;
 function refreshNotifBadgeSoon() {
     if (notifRefreshTimer) return;
@@ -144,22 +117,10 @@ function refreshNotifBadgeSoon() {
     }, 500);
 }
 
-// Cỡ 1 trang -- dùng CHUNG cho cả 2 hướng phân trang: "cuộn lên xem tin cũ hơn" (before, xem
-// maybeLoadOlder) VÀ "đoạn chưa đọc, cuộn xuống xem tiếp" (after, xem maybeLoadNewer). Cố tình
-// KHÔNG nạp hết toàn bộ đoạn chưa đọc trong 1 lần mở lại dù có bao nhiêu tin chưa đọc đi nữa -- đúng
-// yêu cầu "lazy load", tin chưa đọc cũng phải nạp dần theo từng trang khi cuộn tới, không phải 1 cục
-// to ngay lúc mở (trước đây từng nạp hẳn 100 tin chưa đọc 1 lần, coi như "hết" chỉ là cái trần cao
-// hơn -- không đúng tinh thần lazy load nếu thật sự có nhiều tin chưa đọc).
+// Cỡ 1 trang, dùng chung cho cả 2 hướng phân trang (before/after) -- cố tình không nạp hết đoạn chưa đọc 1 lần, phải lazy-load dần theo từng trang kể cả lúc mở lại.
 var HISTORY_PAGE_SIZE = 30;
 
-// Load lịch sử tin nhắn (GET /messages trên colony, không phải harbor — xem MessageHistoryRegistry)
-// ngay sau khi SUBSCRIBE_OK, tránh gọi lặp nếu SUBSCRIBE_OK lỡ tới nhiều lần cho cùng 1 conversation.
-// KHÔNG còn nạp trắng "N tin mới nhất" như trước -- mở lại 1 conversation ĐàẤ từng đọc sẽ cuộn tới
-// ĐÚNG chỗ lần trước dừng lại (con trỏ đã đọc, xem GET /read-cursor), không phải luôn nhảy xuống
-// cuối -- đúng yêu cầu "khi vào thì ở tin đã đọc lần cuối chứ không phải mới nhất".
-// Trả về Promise resolve khi đã NẠP + VẼ XONG HẲN trang mặc định (không chỉ "đã bắt đầu gọi") --
-// cache lại trên entry.historyLoadPromise để gọi lặp (vd jumpToMessage gọi lại ngay sau
-// selectConversation cũng vừa gọi) chỉ ĐỢI CHUNG 1 lần fetch, không bắn thêm request trùng.
+// Load lịch sử (GET /messages trên colony) ngay sau SUBSCRIBE_OK -- cuộn tới đúng con trỏ đã đọc lần trước (không còn luôn nhảy xuống tin mới nhất); cache Promise trên entry.historyLoadPromise để gọi lặp chỉ đợi chung 1 fetch.
 function loadHistory(conversationId) {
     var entry = ensureConversationCard(conversationId, 'Conversation');
     if (entry.historyLoadPromise) return entry.historyLoadPromise;
@@ -168,38 +129,22 @@ function loadHistory(conversationId) {
     entry.historyLoadPromise = fetchJson('/read-cursor?conversationId=' + encodeURIComponent(conversationId), true)
         .then(function (res) {
             var cursor = res && res.data;
-            // Chưa từng đọc tin nào trong conversation này (mới toanh, hoặc mở lần đầu) -- nạp trang
-            // mới nhất, neo đáy, giống hành vi cũ.
             return cursor ? loadAroundReadCursor(conversationId, cursor) : loadLatestPage(conversationId);
         })
         .catch(function (err) {
             console.warn('không load được lịch sử cho ' + conversationId, err);
             logToConversation(conversationId, '(không load được lịch sử: ' + err.message + ')');
-            // Lỡ hỏng giữa chừng (vd mất mạng ngay lúc đang nạp đoạn "before") vẫn phải TRẢ VỀ true
-            // cho những cờ tạm này -- nếu không, mọi tin SỐNG tới sau đó qua WS (không liên quan gì
-            // tới lần load lỗi này nữa) sẽ mãi mãi không cuộn/không gửi READ được, vì các cờ đang kẹt
-            // ở trạng thái "giữa batch" từ lần load hỏng.
+            // Vẫn phải reset các cờ này dù load lỗi giữa chừng, nếu không tin sống tới qua WS sau đó sẽ mãi kẹt không cuộn/không gửi READ được.
             entry.suppressAutoScroll = false;
             entry.skipReadTracking = false;
         });
     return entry.historyLoadPromise;
 }
 
-// Áp lại vị trí cuộn "đúng lẽ ra phải ở đâu" (đáy, hoặc vạch "Tin nhắn mới") -- TÁCH RIÊNG khỏi lúc
-// tính ra nó (loadLatestPage/loadAroundReadCursor) vì card có thể đang display:none (conversation
-// chưa từng được mở, chỉ mới subscribe ngầm -- xem CSS ".conv") lúc lịch sử tải xong: mọi phép đo
-// hình học (scrollHeight, offsetTop) đều tính ra 0 trên 1 phần tử không có layout, gán scrollTop lúc
-// đó là vô nghĩa. entry.scrollAnchor lưu lại Ý ĐỊNH, gọi lại đúng hàm này lần đầu conversation THẬT
-// SỰ hiện ra (xem selectConversation) để áp dụng lại với layout thật.
+// Tách riêng khỏi lúc tính scrollAnchor vì card có thể đang display:none khi lịch sử tải xong (mọi phép đo hình học tính ra 0) -- gọi lại hàm này khi conversation thật sự hiện ra (xem selectConversation).
 function applyScrollAnchor(entry) {
     if (!entry.scrollAnchor) return;
-    // CẢ 2 loại anchor đều cuộn thẳng xuống ĐÁY THẬT (scrollHeight) -- vạch "Tin nhắn mới" (type
-    // 'divider') vẫn chèn vào DOM để ĐÁNH DẤU ranh giới đã đọc/chưa đọc (context), nhưng KHÔNG còn cố
-    // đẩy nó ra sát đáy khung nhìn để giấu hẳn đoạn chưa đọc xuống dưới màn hình nữa (bản trước cố ý
-    // làm vậy -- xem lịch sử sửa đổi -- nhưng hoá ra phản trực giác: tin ĐÃ đọc từ lâu chiếm hết màn
-    // hình, tin MỚI/chưa đọc lại biến mất hẳn phải tự cuộn tay mới thấy). Giờ tin mới nhất (dù đã đọc
-    // hay chưa) luôn nằm trong tầm nhìn ngay khi mở, giống mọi app chat khác -- vạch chỉ còn tác dụng
-    // NGỮ CẢNH (biết đâu là ranh giới), không còn quyết định vị trí cuộn.
+    // Luôn cuộn xuống đáy thật -- vạch "Tin nhắn mới" chỉ còn tác dụng ngữ cảnh, không còn được đẩy sát đáy để "giấu" đoạn chưa đọc như bản trước (phản trực giác: tin mới bị che khuất).
     entry.logEl.scrollTop = entry.logEl.scrollHeight;
 }
 
@@ -220,20 +165,12 @@ function loadLatestPage(conversationId) {
         });
 }
 
-// Nạp 2 đoạn quanh con trỏ đã đọc: (1) 1 trang NGAY TRƯỚC/tại con trỏ (context, chắc chắn đã đọc rồi
-// -- entry.skipReadTracking=true, không cần quan sát lại), rồi (2) CHỈ 1 TRANG ĐẦU của phần CHƯA đọc
-// từ ngay sau con trỏ (cùng cỡ HISTORY_PAGE_SIZE -- KHÔNG nạp hết toàn bộ đoạn chưa đọc dù có bao
-// nhiêu tin đi nữa, đúng tinh thần lazy load), phần còn lại nạp dần lúc cuộn xuống gần đáy (xem
-// maybeLoadNewer). Chèn 1 vạch "Tin nhắn mới" ngay trước tin chưa đọc đầu tiên, rồi cuộn sao cho vạch
-// đó nằm sát đáy khung nhìn -- đúng chỗ người dùng dừng lại lần trước, không phải tin mới nhất.
+// Nạp 1 trang trước/tại con trỏ (context, đã đọc) rồi 1 trang đầu của phần chưa đọc (phần còn lại nạp dần qua maybeLoadNewer) -- chèn vạch "Tin nhắn mới" và cuộn tới đó, đúng chỗ dừng lần trước.
 function loadAroundReadCursor(conversationId, cursor) {
     var entry = conversations[conversationId];
     entry.suppressAutoScroll = true;
     entry.skipReadTracking = true;
-    // Khởi tạo số "chưa đọc" từ ĐÚNG con số server đã COUNT bằng SQL (cursor.unreadCount) -- không
-    // đợi lazy-load nạp xong mới biết, và không bị chặn ở cỡ 1 trang lazy-load như trước đây (xem
-    // updateJumpBadge). Các batch append bên dưới (afterMessages, cả batch sau qua maybeLoadNewer)
-    // sẽ KHÔNG cộng thêm nữa vì đang suppressAutoScroll=true (xem appendMessageBubble).
+    // totalUnreadCount lấy từ cursor.unreadCount (server COUNT thật) -- không bị giới hạn bởi cỡ 1 trang lazy-load.
     entry.totalUnreadCount = cursor.unreadCount || 0;
     return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&before=' + (cursor.lastReadTs + 1))
         .then(function (beforeMessages) {
@@ -261,12 +198,9 @@ function loadAroundReadCursor(conversationId, cursor) {
             if (dividerEl) {
                 entry.stickToBottom = false;
                 entry.scrollAnchor = {type: 'divider', el: dividerEl};
-                // Hiện nút "xuống cuối" + chấm đỏ NGAY -- entry.totalUnreadCount đã được set từ
-                // cursor.unreadCount ở đầu hàm, updateJumpBadge() ở đây chỉ cần vẽ lại cho khớp.
                 updateJumpBadge(entry);
                 if (entry.jumpBtnEl) entry.jumpBtnEl.classList.add('show');
             } else {
-                // Không có tin nào chưa đọc -- đã bắt kịp hết, neo đáy như bình thường.
                 entry.stickToBottom = true;
                 entry.scrollAnchor = {type: 'bottom'};
             }
@@ -274,9 +208,7 @@ function loadAroundReadCursor(conversationId, cursor) {
         });
 }
 
-// Cuộn gần tới ĐỈNH log -- tải thêm 1 trang tin CŨ hơn nữa (phân trang lùi dần, "lazy load" thật sự:
-// không nạp cả lịch sử conversation cùng lúc). Chèn LÊN ĐẦU log, giữ nguyên đúng vị trí đang xem
-// (xem prependOlderMessages) -- không giật màn hình lên/xuống lúc đang nạp.
+// Cuộn gần đỉnh log thì tải thêm 1 trang cũ hơn, chèn lên đầu mà giữ nguyên vị trí đang xem (xem prependOlderMessages).
 function maybeLoadOlder(conversationId) {
     var entry = conversations[conversationId];
     if (!entry || entry.loadingOlder || !entry.hasMoreOlder || entry.oldestLoadedTs == null) return;
@@ -291,10 +223,7 @@ function maybeLoadOlder(conversationId) {
         .finally(function () { entry.loadingOlder = false; });
 }
 
-// Cuộn gần tới ĐÁY log lúc vẫn còn phần "chưa đọc" chưa kịp nạp hết lúc mở conversation (đoạn sau
-// con trỏ còn nhiều hơn 1 trang, xem loadAroundReadCursor) -- nạp tiếp XUÔI theo thời gian, TỪNG
-// TRANG một (đúng tinh thần lazy load, không nạp hết 1 lần), append bình thường vào cuối (giống hệt
-// tin sống tới qua WS, kể cả việc tự cuộn theo/gắn quan sát đọc -- xem appendMessageBubble).
+// Cuộn gần đáy mà vẫn còn phần chưa đọc chưa nạp hết (xem loadAroundReadCursor) thì nạp tiếp từng trang, append như tin sống qua WS (dùng chung appendMessageBubble).
 function maybeLoadNewer(conversationId) {
     var entry = conversations[conversationId];
     if (!entry || entry.loadingNewer || !entry.hasMoreNewer || entry.newestLoadedTs == null) return;
@@ -302,23 +231,15 @@ function maybeLoadNewer(conversationId) {
     fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&after=' + entry.newestLoadedTs)
         .then(function (messages) {
             entry.hasMoreNewer = messages.length === HISTORY_PAGE_SIZE;
-            // suppressAutoScroll: nạp thêm (dù chiều nào, lên hay xuống) là hành động NGẦM, KHÔNG
-            // được phép đụng tới vị trí đang xem -- kể cả khi entry.stickToBottom đang true (chỉ vì
-            // trước đó cuộn gần chạm đáy của những gì ĐÃ CÓ, không có nghĩa là "cứ có thêm thì tự theo
-            // xuống"). Khác appendMessageBubble bình thường (dùng cho tin SỐNG thật sự mới tới qua WS
-            // lúc đang neo đáy -- đó vẫn tự cuộn theo, hợp lý vì đúng nghĩa "đang xem trực tiếp").
+            // Nạp lazy-load là hành động ngầm, không được đụng vị trí đang xem -- khác tin sống qua WS (vẫn tự cuộn theo khi đang neo đáy).
             entry.suppressAutoScroll = true;
             messages.forEach(function (m) {
                 appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
             });
             entry.suppressAutoScroll = false;
-            // Sau khi âm thầm nối thêm vào cuối, phần "đã xem" trước đó KHÔNG còn thật sự là đáy nữa
-            // (nội dung mới nằm dưới, ngoài màn hình) -- tính lại đúng thực tế thay vì giữ nguyên cờ
-            // cũ, để tin SỐNG kế tiếp không bị hiểu lầm "đang neo đáy" mà tự động kéo màn hình xuống.
+            // Tính lại stickToBottom theo thực tế -- nội dung mới vừa nối vào cuối có thể đã đẩy vị trí "đã xem" ra khỏi đáy.
             entry.stickToBottom = isNearBottom(entry.logEl);
-            // entry.totalUnreadCount KHÔNG đổi ở batch này (suppressAutoScroll=true suốt forEach ở
-            // trên -- đúng ý: đây là phần vốn đã nằm trong con số server đếm lúc mở lại, xem
-            // loadAroundReadCursor, không phải tin mới phát sinh) -- chỉ cần vẽ lại badge cho chắc.
+            // totalUnreadCount không đổi ở đây (đã tính trong cursor.unreadCount lúc mở lại) -- chỉ vẽ lại badge cho chắc.
             updateJumpBadge(entry);
             if (!entry.stickToBottom && entry.jumpBtnEl) entry.jumpBtnEl.classList.add('show');
         })
@@ -326,12 +247,7 @@ function maybeLoadNewer(conversationId) {
         .finally(function () { entry.loadingNewer = false; });
 }
 
-// Chèn 1 trang tin CŨ hơn LÊN ĐẦU log (xem maybeLoadOlder) -- KHÔNG dùng appendMessageBubble (nó luôn
-// gắn vào CUỐI log + cập nhật entry.lastMessageMeta/lastGroupRow/lastDividerDateKey đại diện cho DÒNG
-// CUỐI CÙNG/mới nhất, sẽ sai hoàn toàn nếu dùng để chèn lên đầu). Gộp nhóm/vạch ngày tính RIÊNG trong
-// phạm vi batch này (không nối tiếp trạng thái gộp nhóm của nội dung đã render phía dưới -- chấp nhận
-// 1 đường nối không gộp tuyệt đối giữa 2 trang, đổi lại đơn giản hơn nhiều). Tin ở đây LUÔN cũ hơn con
-// trỏ đã đọc ban đầu nên chắc chắn đã đọc từ trước -- không cần gắn IntersectionObserver.
+// Không dùng appendMessageBubble ở đây -- nó cập nhật state "dòng cuối cùng" nên sẽ sai nếu dùng để chèn lên đầu; gộp nhóm/vạch ngày tính riêng cho batch này, và không cần IntersectionObserver vì tin ở đây chắc chắn đã đọc từ trước.
 function prependOlderMessages(conversationId, messagesDesc) {
     var entry = conversations[conversationId];
     var messages = messagesDesc.slice().reverse(); // cũ nhất trước -- đúng thứ tự chèn lên đầu log
@@ -339,12 +255,7 @@ function prependOlderMessages(conversationId, messagesDesc) {
     var batchState = {lastGroupRow: null};
     var localDividerKey = null;
     var rowsInfo = [];
-    // Theo dõi RIÊNG cho batch này -- ảnh/video trong đoạn vừa chèn LÊN ĐẦU có thể tải xong (đổi từ
-    // cao 0px sang cao thật) SAU KHI đã canh lại scrollTop lần đầu (xem cuối hàm) -- lúc đó phải bù
-    // THÊM đúng phần chênh lệch mới phát sinh, không thì nội dung đang xem (nằm dưới đoạn vừa chèn)
-    // bị đẩy trôi xuống mất, y hệt bug ảnh/video từng gặp ở appendMessageBubble nhưng theo hướng
-    // ngược lại (chèn lên đầu, không phải nối vào cuối). Khởi tạo SAU khi chèn xong (xem bên dưới) --
-    // gán vào 1 biến let-hoisted ở đây để closure onMediaReady của TỪNG dòng cùng dùng chung.
+    // Ảnh/video trong batch vừa chèn có thể đổi chiều cao sau khi đã canh scrollTop lần đầu -- phải bù thêm phần chênh lệch khi đó, không thì nội dung đang xem bị trôi (bug từng gặp, tương tự appendMessageBubble nhưng ngược hướng).
     var lastKnownScrollHeight;
     messages.forEach(function (m) {
         var mine = m.fromUserId === myUserId;
@@ -393,8 +304,7 @@ function prependOlderMessages(conversationId, messagesDesc) {
         rowsInfo.push({row: row, mine: mine, id: m.id, reactions: m.reactions, deleted: m.deleted});
     });
 
-    // Neo lại đúng vị trí đang xem sau khi chèn thêm nội dung PHÍA TRÊN (không thì scrollTop giữ
-    // nguyên số cũ sẽ khiến toàn bộ nội dung "nhảy" xuống dưới đúng bằng chiều cao batch vừa chèn).
+    // Neo lại vị trí đang xem sau khi chèn nội dung phía trên (không thì scrollTop giữ nguyên sẽ khiến nội dung "nhảy" xuống).
     var prevScrollHeight = entry.logEl.scrollHeight;
     entry.logEl.insertBefore(frag, entry.logEl.firstChild);
     lastKnownScrollHeight = entry.logEl.scrollHeight;
@@ -414,11 +324,7 @@ function prependOlderMessages(conversationId, messagesDesc) {
     entry.oldestLoadedTs = messages[0].ts; // messages đã đảo -- phần tử đầu là CŨ NHẤT trong trang vừa nạp
 }
 
-// Gọi POST /conversations (hall) để tạo conversation MỚI (dùng chung cho cả DM lẫn group, không
-// còn suy tất định/lazy-create qua SUBSCRIBE nữa — xem ARCHITECTURE.md mục 12, giống cách
-// Slack (conversations.create)/Discord (POST /users/@me/channels) bắt buộc gọi API tạo trước khi
-// gửi tin được). Server tự thêm mình vào members, tự publish để harbor wake-subscribe hộ (kể cả
-// chính mình) — không cần tự gửi SUBSCRIBE gì cả sau khi tạo xong.
+// Tạo conversation qua POST /conversations (dùng chung DM/group, không lazy-create qua SUBSCRIBE nữa -- xem ARCHITECTURE.md mục 12); server tự thêm members + publish wake-subscribe, không cần tự gửi SUBSCRIBE.
 function createConversation(memberUserIds, name) {
     return fetch(HISTORY_API_BASE + '/conversations', {
         method: 'POST',
@@ -432,8 +338,7 @@ function createConversation(memberUserIds, name) {
     });
 }
 
-// Bấm 1 cái tên trong tab "Nhắn 1-1" là gửi đi ngay -- không còn bước nhập/xác nhận riêng, không
-// ai cần gõ tay 1 UUID nữa (xem renderUserPickers).
+// Bấm 1 tên trong tab "Nhắn 1-1" là gửi ngay, không cần bước xác nhận hay gõ tay UUID (xem renderUserPickers).
 function startDm(peerUserId) {
     createConversation([peerUserId])
         .then(function (data) {
@@ -472,12 +377,10 @@ function startGroup() {
 }
 
 function connect() {
-    // Chưa đăng nhập (xem enterApp/showLoginForm) -- không tự mở WebSocket. No-op an toàn cho mọi
-    // nơi còn lỡ gọi connect() (vd ws.onclose auto-retry bên dưới) thay vì phải sửa từng nơi gọi.
+    // Chưa đăng nhập thì không tự mở WebSocket -- no-op an toàn cho mọi nơi lỡ gọi lại connect() (vd auto-retry ở onclose).
     if (!identityConfirmed) return;
 
-    // Đang trỏ tới NodePort của harbor trên cụm k3s local (xem harbor/helm/templates/services.yaml).
-    // Nếu chạy local bằng "mvn exec:java" thay vì k3s thì đổi lại thành ws://localhost:8888/connect
+    // NodePort của harbor trên cụm k3s local (xem harbor/helm/templates/services.yaml) -- chạy bằng "mvn exec:java" thay vì k3s thì đổi thành ws://localhost:8888/connect.
     ws = new WebSocket("ws://localhost:31003/connect");
 
     ws.onopen = function () {
@@ -504,9 +407,7 @@ function connect() {
         console.log(frame);
         switch (frame.type) {
             case "AUTH_OK":
-                // frame.serverId = ten pod harbor dang phuc vu session nay (giong host_id trong
-                // frame "hello" cua Slack that, xem app.slack.com.har) -- tien debug khi co nhieu
-                // pod harbor, biet ngay dang noi chuyen voi pod nao ma khong can vao k8s check.
+                // frame.serverId = pod harbor đang phục vụ session này -- tiện debug khi có nhiều pod mà không cần vào k8s check.
                 setStatus('đã xác thực', 'ok');
                 document.getElementById('podBadge').innerText = frame.serverId ? 'pod ' + frame.serverId : '';
                 break;
@@ -520,7 +421,7 @@ function connect() {
             case "SUBSCRIBE_OK":
                 logToConversation(frame.conversationId, '✓ subscribe thành công');
                 loadHistory(frame.conversationId);
-                refreshConversationList(); // vd vừa tạo conversation mới -- cập nhật ngay vào danh sách
+                refreshConversationList();
                 break;
             case "SUBSCRIBE_ERROR":
                 logToConversation(frame.conversationId, '✗ subscribe lỗi: ' + frame.reason);
@@ -535,20 +436,8 @@ function connect() {
             case "MESSAGE":
                 countReceived++;
                 document.getElementById('countReceived').innerText = countReceived;
-                // Tin SỐNG cho 1 conversation CHƯA TỪNG được mở trong phiên này (chưa ai gọi
-                // loadHistory -- entry.historyLoadPromise chưa có, kể cả card vừa được tạo ngay bởi
-                // CHÍNH tin này) KHÔNG được vẽ tay thẳng vào đây -- nó sẽ nằm sai chỗ: đứng NGAY ĐẦU
-                // log (vì lúc này log đang rỗng), rồi khi user thật sự mở conversation đó sau này,
-                // loadHistory() nạp về các tin CŨ HƠN và chỉ biết append XUỐNG DƯỚI cái tin "mới nhất"
-                // đã lỡ vẽ sẵn kia -- đảo ngược hẳn thứ tự thời gian (bug thật đã gặp: "tin mới lại ở
-                // trên đầu"). Trường hợp này chỉ cần đảm bảo card tồn tại + kích hoạt loadHistory --
-                // tin đã lưu DB rồi, lần nạp lịch sử đầu tiên sẽ tự thấy nó ở ĐÚNG vị trí theo
-                // timestamp cùng các tin khác, không cần vẽ tay trước.
-                //
-                // READ (đã THỰC SỰ xem) không còn gửi mù ở đây nữa -- appendMessageBubble tự gắn
-                // IntersectionObserver cho tin của người khác, chỉ gửi READ khi tin THẬT SỰ lọt vào
-                // khung nhìn (xem ensureConversationCard, sendReadReceipt) -- kể cả conversation
-                // không đang active/tin nạp từ lịch sử cũng dùng chung 1 cơ chế này.
+                // Tin sống cho conversation chưa từng loadHistory không được vẽ tay ở đây -- sẽ đứng sai chỗ (đầu log rỗng), đảo ngược thứ tự khi loadHistory nạp về sau (bug thật đã gặp); chỉ cần đảm bảo card + kích hoạt loadHistory, nó tự nạp đúng vị trí.
+                // READ chỉ gửi khi tin thật sự lọt vào khung nhìn qua IntersectionObserver trong appendMessageBubble (xem sendReadReceipt), không gửi mù ở đây.
                 var msgEntry = conversations[frame.conversationId];
                 if (msgEntry && msgEntry.historyLoadPromise) {
                     appendMessageBubble(frame.conversationId, frame.fromUserId, frame.body, frame.ts, frame.id);
@@ -562,9 +451,7 @@ function connect() {
                     delete typingTimers[frame.conversationId][frame.fromUserId];
                     renderTypingIndicator(frame.conversationId);
                 }
-                // Vá thẳng "tin/giờ gần nhất" (+ tăng tạm badge "chưa đọc" nếu conversation này KHÔNG
-                // đang mở, xem updateConvListEntryFromMessage) trong sidebar theo tin VỪA nhận, không
-                // tự động chuyển màn hình sang nó (tránh giật focus khi đang gõ ở chỗ khác).
+                // Cập nhật sidebar theo tin vừa nhận nhưng không tự chuyển màn hình sang nó (tránh giật focus khi đang gõ chỗ khác).
                 updateConvListEntryFromMessage(frame.conversationId, frame.fromUserId, frame.body, frame.ts, false);
                 if (frame.fromUserId !== myUserId) refreshNotifBadgeSoon(); // có thể @mention/trả lời mình -- để server tự biết, xem refreshNotifBadgeSoon
                 break;
@@ -572,8 +459,6 @@ function connect() {
                 send({type: "PONG", id: frame.id});
                 break;
             case "PONG":
-                // Phan hoi cho ping minh tu gui (xem setInterval trong ws.onopen) -- khong can lam
-                // gi them, nhan duoc la du biet ket noi con song.
                 break;
             case "TYPING":
                 handleTypingReceived(frame.conversationId, frame.fromUserId);
@@ -599,26 +484,17 @@ function connect() {
                 handlePinReceived(frame.conversationId, frame.id, frame.fromUserId, frame.body && frame.body.pinned);
                 break;
             case "CONVERSATION_ADDED":
-                // Vừa được thêm vào 1 conversation (DM lần đầu hoặc group mới) — gateway đã tự
-                // subscribe ngầm hộ rồi (không rớt tin), tạo card sẵn nhưng KHÔNG tự chuyển màn hình
-                // sang nó (giữ nguyên conversation đang mở nếu có) -- xuất hiện trong sidebar, tự bấm vào nếu muốn xem.
-                // KHÔNG cần tự đánh dấu unread ở đây -- refreshConversationList() ngay bên dưới gọi
-                // GET /conversations, server tự trả unreadCount ĐÚNG cho conversation vừa thêm này
-                // (0 nếu là chính mình vừa tự mở, xem startDm/startGroup, do markRead tự chạy lúc gửi
-                // tin đầu; >0 nếu có sẵn tin từ trước lúc mình được thêm vào 1 group cũ).
+                // Gateway đã tự subscribe ngầm hộ -- tạo card sẵn nhưng không tự chuyển màn hình sang nó; unreadCount lấy đúng từ refreshConversationList() (GET /conversations) bên dưới, không cần tự đánh dấu ở đây.
                 ensureConversationCard(frame.conversationId, 'Mới: ' + frame.conversationId.substring(0, 8) + '…');
                 loadHistory(frame.conversationId);
                 refreshConversationList();
                 break;
             case "CONVERSATION_DELETED":
-                // Conversation vừa bị xoá hẳn (do chính mình bấm 🗑 -- tab khác của mình cũng nhận
-                // được frame này -- hoặc do 1 thành viên khác xoá). Dọn UI ngay, không cần đợi
-                // refreshConversationList() lần sau mới nhận ra là nó đã biến mất.
+                // Dọn UI ngay khi conversation bị xoá (do mình hoặc thành viên khác), không đợi refreshConversationList() lần sau.
                 removeConversationLocally(frame.conversationId);
                 break;
             case "GOAWAY":
-                // Gateway đang chuẩn bị tắt (scale down/rolling update) — chủ động đóng và
-                // reconnect ngay thay vì đợi phát hiện đứt kết nối qua onclose (nhanh hơn cho user).
+                // Gateway chuẩn bị tắt (scale down/rolling update) -- chủ động đóng + reconnect ngay thay vì đợi onclose phát hiện.
                 setStatus('server đang rút lui, reconnect ngay...', 'pending');
                 ws.close();
                 break;
@@ -627,12 +503,9 @@ function connect() {
 }
 
 // --- init ---
-// (Panel thông tin mặc định ẩn/hiện theo độ rộng màn hình + tự đóng khi resize xuống chế độ drawer
-// đã xử lý ở infoPanelDrawerQuery phía trên, ngay chỗ khai báo infoPanelVisible -- gộp về 1 chỗ thay
-// vì lặp lại y hệt 1 điều kiện matchMedia ở 2 nơi.)
+// (Panel thông tin ẩn/hiện theo độ rộng màn hình đã xử lý ở infoPanelDrawerQuery phía trên, tránh lặp lại điều kiện matchMedia ở 2 nơi.)
 
-// Còn token từ lần đăng nhập trước (localStorage) thì vào thẳng app -- token sai/hết hạn sẽ tự lộ
-// ra qua AUTH_ERROR lúc connect() (xem ws.onmessage), lúc đó mới quay lại form đăng nhập.
+// Còn token từ lần trước thì vào thẳng app -- token sai/hết hạn sẽ tự lộ ra qua AUTH_ERROR lúc connect(), lúc đó mới quay lại form đăng nhập.
 myUserId = localStorage.getItem(STORAGE_ID_KEY) || '';
 myUsername = localStorage.getItem(STORAGE_USERNAME_KEY) || '';
 authToken = localStorage.getItem(STORAGE_TOKEN_KEY) || '';

@@ -1,14 +1,10 @@
-// Xoá MỀM 1 tin CỦA CHÍNH MÌNH -- server tự kiểm tra lại quyền (so from_user_id thật trong DB, xem
-// ChatSessionManager#handleDelete bên colony), nút xoá vốn cũng chỉ hiện với tin "mine" nên đây chỉ
-// là hàng rào phụ phía client, không phải chốt bảo mật thật.
+// Server tự kiểm tra lại quyền xoá (so from_user_id thật trong DB) -- đây chỉ là hàng rào phụ phía client, không phải chốt bảo mật thật.
 function deleteMessage(conversationId, messageId) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     appConfirm('Xoá tin nhắn này? Không thể hoàn tác.', {title: 'Xoá tin nhắn', confirmText: 'Xoá', cancelText: 'Huỷ', danger: true}).then(function(ok){ if(!ok) return; send({type: 'DELETE', id: messageId, conversationId: conversationId}); });
 }
 
-// Thay nội dung 1 dòng tin bằng placeholder "đã bị xoá" -- dùng chung cho cả tin MỚI bị xoá (nhận
-// frame DELETE) lẫn tin xoá TỪ TRƯỚC nạp lại từ lịch sử (GET /messages trả deleted:true). Xoá luôn
-// reaction/nút hành động -- tin đã xoá thì không còn gì để react/xoá thêm nữa.
+// Dùng chung cho cả tin vừa nhận frame DELETE lẫn tin đã xoá nạp lại từ lịch sử (deleted:true).
 function renderDeletedPlaceholder(row) {
     var bubbleEl = row.querySelector('.bubble');
     if (bubbleEl) {
@@ -24,8 +20,7 @@ function renderDeletedPlaceholder(row) {
     delete reactionsByMessageId[row.dataset.messageId];
 }
 
-// Nhận frame DELETE (của mình lẫn người khác, xem javadoc fan-out bên BackendStreamGateway) -- tìm
-// đúng row theo messageId (TOÀN BỘ #chatMain, kể cả card không đang active, giống handleSeenReceived).
+// Frame DELETE có thể của người khác gửi tới (xem javadoc fan-out bên BackendStreamGateway) -- tìm theo messageId trên toàn #chatMain, kể cả conversation không active.
 function handleMessageDeleted(conversationId, messageId) {
     if (!messageId) return;
     var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
@@ -35,8 +30,7 @@ function handleMessageDeleted(conversationId, messageId) {
         var sn = q.querySelector('.reply-quote-snippet');
         if (sn) sn.innerText = 'Tin nh\u1eafn \u0111\u00e3 b\u1ecb xo\u00e1';
     });
-    // Tin đã xoá thì không còn gì để "đọc" nữa -- bớt khỏi chấm đỏ (nếu đang tính là chưa đọc) thay
-    // vì để nguyên 1 số đếm cho 1 tin giờ chẳng còn nội dung gì để xem.
+    // Tin đã xoá thì không còn gì để "đọc" -- bớt khỏi chấm đỏ chưa đọc thay vì giữ nguyên số đếm.
     var entry = conversations[conversationId];
     if (entry && entry.unreadIdSet.delete(messageId)) {
         entry.totalUnreadCount = Math.max(0, (entry.totalUnreadCount || 0) - 1);
@@ -44,8 +38,7 @@ function handleMessageDeleted(conversationId, messageId) {
     }
 }
 
-// Bấm lại ĐÚNG emoji mình đang chọn -- gửi body rỗng để HUỶ (server hiểu "thiếu emoji" = huỷ, xem
-// MessageType#REACTION); chọn emoji khác -- gửi emoji mới, server tự THAY THẾ (không cộng dồn).
+// Server hiểu body rỗng = huỷ reaction, emoji mới = tự thay thế (không cộng dồn) -- xem MessageType#REACTION.
 function sendReaction(conversationId, messageId, emoji) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     var mine = reactionsByMessageId[messageId] && reactionsByMessageId[messageId][myUserId];
@@ -53,9 +46,7 @@ function sendReaction(conversationId, messageId, emoji) {
     send({type: 'REACTION', id: messageId, conversationId: conversationId, body: body});
 }
 
-// Nhận frame REACTION (của mình lẫn người khác, xem javadoc fan-out bên BackendStreamGateway) --
-// cập nhật state cục bộ rồi vẽ lại huy hiệu trên đúng bubble (tìm theo messageId, không quan tâm
-// conversation nào đang mở, giống handleSeenReceived).
+// Nhận frame REACTION (của mình lẫn người khác) -- giống cách handleMessageDeleted xử lý fan-out.
 function handleReactionReceived(messageId, userId, emoji) {
     if (!messageId || !userId) return;
     if (!reactionsByMessageId[messageId]) reactionsByMessageId[messageId] = {};
@@ -67,11 +58,8 @@ function handleReactionReceived(messageId, userId, emoji) {
     renderReactions(messageId);
 }
 
-// rowEl tuỳ chọn -- truyền thẳng khi ĐÃ có sẵn tham chiếu (vd appendMessageBubble, tránh 1 lớp bug
-// đã gặp: gọi querySelector cho 1 node vừa tạo nhưng chưa appendChild vào DOM thì tìm không ra).
-// Không truyền thì tự dò qua document (dùng khi nhận frame REACTION live, không giữ sẵn tham chiếu).
-// Tooltip riêng cho reaction (danh sách ai đã thả) -- 1 phần tử dùng chung, tái định vị mỗi lần
-// hiện, cùng cách làm với reactionPicker (tránh tạo/xoá DOM liên tục mỗi lần hover).
+// renderReactions nhận rowEl tuỳ chọn để truyền thẳng khi node vừa tạo còn chưa appendChild vào DOM (querySelector sẽ không tìm ra).
+// Tooltip dùng 1 phần tử tái định vị mỗi lần hiện, giống reactionPicker (tránh tạo/xoá DOM liên tục mỗi lần hover).
 function ensureReactionTooltip() {
     var tip = document.getElementById('reactionTooltip');
     if (tip) return tip;
@@ -91,8 +79,7 @@ function showReactionTooltip(targetEl, text) {
     var left = Math.max(4, Math.min(window.innerWidth - tipWidth - 4, idealLeft));
     tip.style.left = left + 'px';
     tip.style.top = Math.max(4, rect.top - tip.offsetHeight - 10) + 'px';
-    // Box có thể bị đẩy lệch khỏi vị trí "ngay giữa badge" khi kẹp sát lề màn hình -- mũi tên phải tự
-    // bù lại độ lệch đó để luôn trỏ đúng vào badge, thay vì đứng yên ở giữa box (xem reactionPicker).
+    // Box bị kẹp sát lề màn hình thì lệch khỏi vị trí giữa badge -- mũi tên phải tự bù để luôn trỏ đúng vào badge.
     var arrowLeft = (rect.left + rect.width / 2 - left);
     arrowLeft = Math.max(10, Math.min(tipWidth - 10, arrowLeft));
     tip.style.setProperty('--arrow-left', arrowLeft + 'px');
@@ -117,11 +104,7 @@ function renderReactions(messageId, rowEl) {
         var emoji = mapping[uid];
         (byEmoji[emoji] = byEmoji[emoji] || []).push(uid);
     });
-    // Tách riêng phần ĐỔI DOM (sửa container + toggle has-reactions, cả 2 đều có thể đổi chiều cao
-    // bubble) khỏi phần render, để đo offsetHeight trước/sau + bù scrollTop bằng getBoundingClientRect
-    // (KHÔNG dùng offsetTop: .conv-log không có position:relative nên row.offsetTop không hề cùng hệ
-    // toạ độ với logEl.scrollTop, so sánh 2 cái đó với nhau là sai -- đã tự làm sai y hệt vậy ở 1 lần
-    // sửa trước).
+    // Tách riêng phần đổi DOM để đo offsetHeight trước/sau -- KHÔNG dùng row.offsetTop vì .conv-log không có position:relative nên nó lệch hệ toạ độ với logEl.scrollTop (đã từng sai y hệt vậy).
     function mutate() {
         container.innerHTML = '';
         Object.keys(byEmoji).forEach(function (emoji) {
@@ -133,8 +116,7 @@ function renderReactions(messageId, rowEl) {
             pill.innerHTML = '<span class="emoji"></span>' + (uids.length > 1 ? '<span class="count"></span>' : '');
             var emojiEl = pill.querySelector('.emoji');
             var iconSrc = REACTION_ICON_BY_EMOJI[emoji];
-            // Fallback về ký tự emoji thô cho reaction cũ không khớp bộ icon hiện tại (vd đổi bộ icon
-            // sau khi đã có dữ liệu reaction cũ trong DB) -- không để badge trống trơn.
+            // Fallback về ký tự emoji thô cho reaction cũ không khớp bộ icon hiện tại -- không để badge trống trơn.
             if (iconSrc) emojiEl.innerHTML = '<img src="' + iconSrc + '" width="14" height="14" alt="' + emoji + '">';
             else emojiEl.innerText = emoji;
             if (uids.length > 1) pill.querySelector('.count').innerText = uids.length;
@@ -145,38 +127,23 @@ function renderReactions(messageId, rowEl) {
             pill.onclick = function (e) { e.stopPropagation(); hideReactionTooltip(); sendReaction(conversationId, messageId, emoji); };
             container.appendChild(pill);
         });
-        // Chỉ có ý nghĩa cho bong bóng DM (.bubble-wrap không tồn tại ở tin nhóm phẳng) -- badge đè
-        // lên góc bubble cần chừa khoảng trống bên dưới để không đè lên giờ/seen-status, xem CSS
-        // .has-reactions -- bật cờ này cũng đổi padding-bottom của bubble (xem CSS), tức bubble có
-        // thể phình cao hơn, đúng lý do cần bọc withScrollAnchored/cuộn bù ở dưới.
+        // Bật has-reactions đổi padding-bottom của bubble (xem CSS) nên bubble có thể phình cao hơn -- đây là lý do cần bù scroll ở dưới.
         if (wrapEl) wrapEl.classList.toggle('has-reactions', Object.keys(byEmoji).length > 0);
     }
     if (!logEl) {
         mutate();
         return;
     }
-    // Đo TRƯỚC/SAU (row.offsetHeight) rồi bù scrollTop NGAY LẬP TỨC (gán tức thời, KHÔNG
-    // smoothScrollToBottom/behavior:'smooth') -- đây là BÙ LỆCH do bubble phình vài px vì reaction,
-    // không phải "tin mới thật sự tới" (chỗ ĐÓ mới nên animate, xem appendMessageBubble). Animate 1
-    // quãng ngắn thế này nhìn như giật/nháy chứ không mượt, đúng lý do applyScrollAnchor/
-    // composeResizeObserver cũng cố tình gán tức thời thay vì animate (xem comment 2 hàm đó).
+    // Bù scrollTop gán TỨC THỜI (không animate) -- đây là bù lệch do bubble phình vài px, khác với tin mới thật sự tới (chỗ đó mới nên animate, xem appendMessageBubble).
     var before = row.offsetHeight;
     mutate();
     var delta = row.offsetHeight - before;
     if (delta === 0) return;
     if (entry.stickToBottom) {
-        // Đang neo đáy -- GÁN THẲNG bằng scrollHeight (trình duyệt tự kẹp về max hợp lệ), KHÔNG cộng
-        // dồn += delta như nhánh dưới. Lý do: khi bubble CO LẠI (bỏ reaction, delta âm), trình duyệt
-        // tự kéo scrollTop về max MỚI ngay khi scrollHeight giảm -- xảy ra TRƯỚC dòng này, sớm hơn cả
-        // lúc code chạy tới đây. Cộng thêm delta (âm) lần nữa thành trừ KÉP, vọt lên quá đà, không
-        // còn thật sự ở đáy (đúng bug "bỏ reaction lúc đang ở cuối cùng bị lỗi"). Gán thẳng
-        // scrollHeight né hẳn vấn đề thứ tự này -- đằng nào cũng luôn muốn kết quả CUỐI CÙNG là đúng
-        // đáy, không cần quan tâm delta dương hay âm.
+        // Gán thẳng scrollHeight thay vì += delta: khi bubble co lại (bỏ reaction), trình duyệt đã tự kéo scrollTop về max mới TRƯỚC dòng này, cộng thêm delta âm sẽ trừ kép và vọt lên quá đà (bug đã gặp).
         logEl.scrollTop = logEl.scrollHeight;
     } else {
-        // Đang cuộn lên xem tin cũ hơn -- CHỈ bù khi row KHÔNG nằm hẳn dưới khung nhìn (đang hiện
-        // HOẶC đã cuộn qua rồi đều bù, xem chat trước); row nằm hẳn dưới khung nhìn (chưa cuộn tới)
-        // thì bỏ qua, bù lúc đó sẽ kéo người dùng lệch khỏi chỗ đang xem vô cớ.
+        // Chỉ bù khi row không nằm hẳn dưới khung nhìn -- row chưa cuộn tới thì bỏ qua, tránh kéo người dùng lệch khỏi chỗ đang xem.
         var logRect = logEl.getBoundingClientRect();
         var rowRect = row.getBoundingClientRect();
         if (rowRect.top < logRect.bottom) logEl.scrollTop += delta;
@@ -319,11 +286,7 @@ function jumpToMessage(conversationId, targetMessageId, targetTs) {
         selectConversation(conversationId);
         entry = conversations[conversationId];
     }
-    // Đợi trang mặc định (loadHistory, do selectConversation ở trên vừa gọi/đang gọi dở) NẠP + VẼ
-    // XONG HẲN trước khi quyết định gì cả -- không thì đường "seek" riêng bên dưới chạy SONG SONG với
-    // loadHistory, ai render xong SAU sẽ ghi đè DOM của người xong TRƯỚC (logEl.innerHTML = ''),
-    // scroll/tô sáng tính trên 1 DOM sắp bị xoá là vô nghĩa -- bug thật đã gặp: bấm noti mở đúng
-    // conversation nhưng vị trí cuộn/tin hiện ra sai lung tung tuỳ ai xong trước ai xong sau.
+    // Phải đợi loadHistory vẽ xong hẳn rồi mới seek -- chạy song song thì ai xong sau ghi đè DOM (logEl.innerHTML='') của người xong trước, gây bug scroll/tô sáng sai lung tung (đã gặp thật).
     Promise.resolve(loadHistory(conversationId)).then(function () {
         performJumpToMessage(conversationId, targetMessageId, targetTs);
     });
@@ -399,11 +362,7 @@ function performJumpToMessage(conversationId, targetMessageId, targetTs) {
     }).finally(function(){ entry._seeking = false; });
 }
 
-// Tô màu các cụm "@ai_đó" ngay trong nội dung tin -- thuần hiển thị (không tra cứu/link thật tới
-// user nào), giống cách mention hiện màu xanh trong ảnh tham khảo. Link http(s) trong tin KHÔNG kèm
-// ảnh -- biến thành <a> bấm được. PHẢI escape HTML trước khi chèn BẤT KỲ thẻ nào (nội dung tin đến
-// từ người dùng khác qua mạng) -- chỉ chèn thẻ span/a của CHÍNH mình sau khi đã escape, không bao giờ
-// tin trực tiếp text thô vào innerHTML.
+// PHẢI escape HTML trước khi chèn bất kỳ thẻ nào -- nội dung tin đến từ người dùng khác qua mạng, không bao giờ tin trực tiếp text thô vào innerHTML.
 function renderMessageText(el, text) {
     var escaped = text
         .replace(/&/g, '&amp;')
@@ -421,16 +380,7 @@ function renderMessageText(el, text) {
     el.innerHTML = html;
 }
 
-// Nhận dạng tin nhắn CHỈ chứa đúng 1 link (không kèm chữ nào khác) -- kiểu này thay vì hiện chữ
-// thô, vẽ 1 thẻ preview nhúng (ảnh + tiêu đề + mô tả + domain) như Messenger/Telegram/Zalo.
-//
-// CHẤP CẢ link viết tắt không có scheme ("youtube.com/x", "t.me/abc") -- người dùng dán link kiểu này
-// rất nhiều, bản cũ chỉ nhận https?:// nên dán "youtube.com" vào là KHÔNG có gì hiện cả (báo lỗi thật).
-// Trả về URL ĐÃ chuẩn hoá có https:// để dùng thẳng làm href + tham số ?url= cho hall.
-//
-// Điều kiện chặt để không biến chữ thường thành link: cả dòng phải là 1 chuỗi không khoảng trắng,
-// TLD chỉ gồm chữ cái 2-24 ký tự (loại "3.14", "1.2.3.4", "ok."), có scheme thì chỉ http(s).
-// Bản server (LinkPreviewService#soleUrl) GIỮNG ĐÚNG luật này -- 2 bên lệch nhau là colony không enrich.
+// Regex phải khớp ĐÚNG luật bên server (LinkPreviewService#soleUrl) -- lệch nhau là colony không enrich; chấp cả domain trần không scheme vì user hay dán kiểu đó (bản cũ chỉ nhận https?:// từng bị báo lỗi thật).
 var SOLE_URL_RE = /^https?:\/\/\S+$/i;
 var BARE_DOMAIN_RE = /^(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:\/\S*)?$/i;
 
@@ -441,7 +391,6 @@ function extractSoleUrl(text) {
     if (BARE_DOMAIN_RE.test(trimmed)) {
         try {
             var abs = new URL('https://' + trimmed);
-            // hostname() bắt mỗi nhãn hợp lệ + TLD có dấu chấm; thử cả URL() để chắc không phải chuỗi lạ.
             if (abs.hostname.indexOf('.') > 0) return abs.href;
         } catch (e) {
             return null;
@@ -451,25 +400,17 @@ function extractSoleUrl(text) {
     return null;
 }
 
-// Domain thuần từ URL (bỏ "www.") -- dùng làm nhãn nhỏ đầu thẻ preview.
 function hostnameOf(url) {
     try { return new URL(url).hostname.replace(/^www\./, ''); }
     catch (e) { return url; }
 }
 
-// Cache kết quả preview theo URL -- 1 tab chỉ fetch 1 lần cho cùng 1 link, dù link xuất hiện ở nhiều
-// tin khác nhau (tránh spam hall mỗi lần load lại lịch sử có cùng link đó).
-//
-// KHÔNG còn chỉ in-memory như bản đầu: seed từ localStorage (có TTL) lúc khởi động, ghi ngược lại mỗi
-// lần fetch xong. Bản in-memory không sống qua reload, nghĩa là MỖI lần mở trang, toàn bộ tin CŨ chưa
-// có body.preview lại nở card gây giật layout lần nữa. Đây là đường cho TIN CŨ -- đường chính cho TIN
-// MỚI là body.preview (client gắn lúc gửi, colony enrich cho tin nào thiếu), vẽ đồng bộ, không fetch gì.
+// Cache preview theo URL, seed từ localStorage (TTL) lúc khởi động -- để tin CŨ (chưa có body.preview) không phải fetch lại/giật layout mỗi lần reload trang.
 var LINK_PREVIEW_CACHE_KEY = 'pingoLinkPreviewCache';
 var LINK_PREVIEW_CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
 var LINK_PREVIEW_CACHE_MAX = 300;
 
-// Đọc cache bền: trả map {url: {meta, at}} -- tự loại phần tử hết TTL. localStorage bị chặn (chế độ
-// riêng tư, quota) thì coi như rỗng, KHÔNG được ném lỗi làm sập cả script.
+// localStorage bị chặn (chế độ riêng tư, quota) thì coi như rỗng -- KHÔNG được ném lỗi làm sập cả script.
 function readLinkPreviewStore() {
     try {
         var raw = localStorage.getItem(LINK_PREVIEW_CACHE_KEY);
@@ -488,8 +429,7 @@ function readLinkPreviewStore() {
     }
 }
 
-// Ghi cache bền -- cắt còn LINK_PREVIEW_CACHE_MAX phần tử mới nhất (at = thời điểm fetch) để không phình
-// localStorage vô hạn. Lỗi quota cũng nuốt luôn: cache chỉ là tối ưu, mất thì fetch lại.
+// Cắt còn LINK_PREVIEW_CACHE_MAX phần tử mới nhất để không phình localStorage vô hạn; lỗi quota nuốt luôn vì cache chỉ là tối ưu, mất thì fetch lại.
 function writeLinkPreviewStore(cache, at) {
     try {
         var now = Date.now();
@@ -500,13 +440,10 @@ function writeLinkPreviewStore(cache, at) {
             .forEach(function (url) { trimmed[url] = {meta: cache[url], exp: now + LINK_PREVIEW_CACHE_TTL_MS, at: at[url] || now}; });
         localStorage.setItem(LINK_PREVIEW_CACHE_KEY, JSON.stringify(trimmed));
     } catch (e) {
-        // bỏ qua -- xem javadoc
     }
 }
 
-// 2 map in-memory song song: {url: meta} (shape KHÔNG đổi so với bản đầu -- meta chỉ có đúng 4 field
-// title/description/image/domain, nên gắn thẳng vào body.preview gửi lên server là sạch sẽ) và {url:
-// timestampFetch} riêng cho việc cắt TTL. Gộp `at` vào trong meta sẽ rò rỉ field thừa xuống DB body.
+// 2 map song song thay vì gộp chung: `at` (timestamp fetch) không được lẫn vào meta vì meta gắn thẳng vào body.preview gửi lên server -- gộp sẽ rò rỉ field thừa xuống DB.
 var linkPreviewCache = {};
 var linkPreviewCacheAt = {};
 (function seedLinkPreviewCache() {
@@ -517,8 +454,7 @@ var linkPreviewCacheAt = {};
     });
 })();
 
-// Tự fetch HTML của 1 trang bất kỳ từ trình duyệt BỊ CHẶN bởi CORS (trang khác origin) -- phải qua
-// hall GET /link-preview (backend tự fetch + parse og:, không phụ thuộc bên thứ 3 nào).
+// Fetch HTML của trang khác origin bị CORS chặn từ trình duyệt -- phải qua hall GET /link-preview (backend tự fetch + parse og:).
 function fetchLinkPreviewMeta(url) {
     if (linkPreviewCache[url]) return Promise.resolve(linkPreviewCache[url]);
     return fetch(HISTORY_API_BASE + '/link-preview?url=' + encodeURIComponent(url))
@@ -527,9 +463,7 @@ function fetchLinkPreviewMeta(url) {
             return res.json();
         })
         .then(function (json) {
-            // hall LUÔN trả {"data": <preview>} hoặc {"data": null} (xem LinkPreviewRegistry) -- null
-            // nghĩa là "không có preview", KHÔNG phải lỗi. Bản cũ phải viết `json.data || json` để đoán
-            // shape vì nhánh lỗi trả {"domain":...} trần; giờ chỉ còn 1 dạng.
+            // hall LUÔN trả {"data": preview|null} (xem LinkPreviewRegistry) -- null nghĩa là "không có preview", KHÔNG phải lỗi.
             var data = json ? json.data : null;
             if (!data) return null;
             var result = {
@@ -538,8 +472,7 @@ function fetchLinkPreviewMeta(url) {
                 image: data.image || null,
                 domain: data.domain || hostnameOf(url)
             };
-            // Không có gì để vẽ (chỉ mỗi domain) thì coi như KHÔNG có preview, đừng cache kết quả vô
-            // dụng -- để lần sau còn thử lại, và để caller rơi đúng về nhánh chữ link trần.
+            // Không có gì để vẽ (chỉ mỗi domain) thì đừng cache -- để lần sau còn thử lại.
             if (!result.title && !result.description && !result.image) return null;
             linkPreviewCache[url] = result;
             linkPreviewCacheAt[url] = Date.now();
@@ -548,18 +481,8 @@ function fetchLinkPreviewMeta(url) {
         });
 }
 
-// Dựng card preview HOÀN CHỈNH từ metadata đã biết -- dùng cho CẢ 2 đường: vẽ đồng bộ khi body.preview
-// có sẵn (tin mới), và tô vào skeleton khi fetch xong (tin cũ). Cùng 1 hàm để 2 đường ra ĐÚNG 1 hình
-// dạng/kích thước, không mỗi nơi dựng 1 kiểu rồi lệch nhau.
-// meta.image có thể lỗi lúc tải (og:image hết hạn / chặn hotlink -- rất hay gặp với CDN mạng xã hội):
-// thay bằng khối chữ domain GIỮ NGUYÊN 150px, KHÔNG remove() -- xoá đi sẽ làm card co lại 150px và
-// đẩy mọi tin bên dưới trôi theo, đúng cái bug đang sửa ở đây.
-// onImageSettled (tuỳ chọn): gọi lại SAU KHI <img> (nếu có) tải xong/lỗi -- ẢNH LÀ THỨ DUY NHẤT trong
-// card còn đổi kích thước sau khi card đã lên DOM (ảnh là replaced element, width:100% CSS không tự
-// biết trước tỉ lệ thật cho tới khi decode xong, khác hẳn text/domain đã có kích thước cố định ngay).
-// Caller (renderLinkPreview*) dùng đúng callback này để canh lại nút react/xoá (positionMsgActions),
-// giống hệt cách onMediaReady đang làm cho ảnh/video đính kèm thường -- không có ảnh thì gọi NGAY vì
-// không còn gì phải đợi.
+// Dùng chung cho cả vẽ đồng bộ (tin mới có sẵn body.preview) lẫn tô vào skeleton (tin cũ fetch xong) để ra đúng 1 hình dạng.
+// meta.image lỗi lúc tải (og:image hết hạn/chặn hotlink) -- thay bằng khối chữ domain GIỮ NGUYÊN 150px, KHÔNG remove(), tránh card co lại kéo tin bên dưới trôi theo (bug đã gặp).
 function buildLinkPreviewCard(url, meta, onImageSettled) {
     var card = document.createElement('a');
     card.className = 'linkPreviewCard';
@@ -600,27 +523,17 @@ function buildLinkPreviewCard(url, meta, onImageSettled) {
         info.appendChild(desc);
     }
     card.appendChild(info);
-    // Không có ảnh -- không còn gì tải bất đồng bộ nữa, gọi callback NGAY (không thì caller đợi mãi).
+    // Không có ảnh thì không còn gì tải bất đồng bộ -- gọi callback NGAY, không caller sẽ đợi mãi.
     if (!meta.image && onImageSettled) onImageSettled();
     return card;
 }
 
-// Vẽ card preview ĐỒNG BỘ cho tin ĐÃ CÓ sẵn metadata trong body (tin mới: client gắn lúc gửi, hoặc
-// colony đã enrich -- xem ChatSessionManager#enrichLinkPreview). Không fetch, không skeleton -- NHƯNG
-// <img> bên trong (nếu meta.image có) vẫn tải bất đồng bộ như mọi ảnh khác, nên vẫn cần onMediaReady
-// (xem renderMessageContent) để canh lại nút react/xoá SAU KHI ảnh có kích thước thật, giống hệt cách
-// đã làm cho ảnh/video đính kèm thường -- không thì nút vẫn có thể lệch/đè lên card lúc ảnh vừa "nở".
+// Không fetch/skeleton vì metadata đã có sẵn trong body -- nhưng <img> preview vẫn tải bất đồng bộ nên vẫn cần onMediaReady để canh lại nút react/xoá sau khi ảnh có kích thước thật.
 function renderLinkPreviewSync(el, url, meta, onMediaReady) {
     el.appendChild(buildLinkPreviewCard(url, meta, onMediaReady));
 }
 
-// Vẽ 1 tin chỉ-toàn-link CHƯA có metadata (tin CŨ gửi trước khi có body.preview): skeleton giữ đúng
-// footprint card thật (min-height khớp ảnh 150 + 3 cụm chữ) để phần co/dãn còn lại rất nhỏ, và MỌI
-// lần đổi chiều cao đều được bù scrollTop bằng withScrollAnchored() -- không đẩy tin đang xem đi đâu.
-// onMediaReady: gọi lại SAU MỖI lần đổi kích thước (skeleton -> card thật/chữ link trần, VÀ sau khi
-// <img> trong card thật tải xong) để canh lại nút react/xoá (positionMsgActions) -- thiếu bước này là
-// đúng nguyên nhân nút bị đè lên nội dung khi skeleton (cao cố định, rộng gần như co lại bằng 0 vì
-// %-width bên trong chưa có gì để tính) đổi thành card/chữ thật (kích thước khác hẳn).
+// Tin CŨ chưa có body.preview: hiện skeleton giữ đúng footprint rồi fetch -- mọi lần đổi kích thước phải gọi lại onMediaReady để canh nút react/xoá, thiếu bước này là nguyên nhân nút bị đè lên nội dung.
 function renderLinkPreview(el, url, onMediaReady) {
     var card = document.createElement('a');
     card.className = 'linkPreviewCard skeleton';
@@ -640,38 +553,27 @@ function renderLinkPreview(el, url, onMediaReady) {
     card.appendChild(skelLines);
     el.appendChild(card);
 
-    // Bọc mọi lần đổi DOM bên dưới qua withScrollAnchored: đo chiều cao bubble TRƯỚC và SAU, chênh lệch
-    // bao nhiêu thì cộng bấy nhiêu vào scrollTop của log nếu bubble nằm PHÍA TRÊN đỉnh khung nhìn
-    // (xem hàm đó). Không có lớp này thì skeleton -> card thật (hoặc -> chữ link trần khi fetch fail)
-    // vẫn đẩy nội dung đang đọc trôi đi, dù skeleton đã gần đúng cỡ.
+    // Mọi lần đổi DOM bên dưới bọc qua withScrollAnchored -- không thì skeleton -> card thật vẫn đẩy nội dung đang đọc trôi đi dù skeleton đã gần đúng cỡ.
     var row = el.closest('.bubble-row');
     var logEl = row ? row.closest('.conv-log') : null;
 
     var toPlainText = function () {
         withScrollAnchored(row, logEl, function () {
             el.classList.remove('media-only');
-            // Bỏ width cố định đã gán cho card preview (xem renderMessageContent) -- chữ link trần tự
-            // co theo nội dung như mọi tin chữ khác, không giữ nguyên khổ rộng 320px/68% của card.
+            // Bỏ width cố định đã gán cho card preview -- chữ link trần tự co theo nội dung như mọi tin chữ khác.
             el.style.width = '';
             el.innerHTML = '';
             renderMessageText(el, url);
         });
-        // Chữ link trần lên xong là đã ĐÚNG kích thước cuối (text tĩnh, không còn gì tải thêm) -- canh
-        // lại nút NGAY, không đợi gì cả.
         if (onMediaReady) onMediaReady();
     };
 
     fetchLinkPreviewMeta(url).then(function (meta) {
-        // fetchLinkPreviewMeta trả null khi trang không khai báo og: HOẶC lỗi mạng -- trong cả 2
-        // trường hợp đều THẲNG THẮN bỏ hẳn thẻ preview (không để khung skeleton treo mãi ở đó), trở về
-        // đúng cách vẽ tin chữ link bình thường (bấm được, chỉ không có thẻ nhúng).
+        // null khi trang không khai báo og: hoặc lỗi mạng -- cả 2 trường hợp đều bỏ hẳn thẻ preview, không để skeleton treo mãi.
         if (!meta) { toPlainText(); return; }
         withScrollAnchored(row, logEl, function () {
             el.replaceChild(buildLinkPreviewCard(url, meta, onMediaReady), card);
         });
-        // Card thật (chữ domain/tiêu đề/mô tả) đã có kích thước ổn định ngay -- canh lại 1 lần ở đây;
-        // buildLinkPreviewCard sẽ tự gọi onMediaReady LẦN NỮA sau khi <img> bên trong tải xong (nếu có
-        // ảnh), đúng lúc card "nở" thêm lần cuối.
         if (onMediaReady) onMediaReady();
     }).catch(function (err) {
         console.warn('không tải được preview cho link', url, err);
@@ -679,12 +581,7 @@ function renderLinkPreview(el, url, onMediaReady) {
     });
 }
 
-// Bù scrollTop khi 1 bubble ĐỔI CHIỀU CAO (link preview tô vào skeleton, hoặc co về chữ link trần) --
-// `.conv-log { overflow-anchor: none }` (xem CSS) đã chủ động tắt cơ chế tự bù của trình duyệt, nên
-// phần này JS PHẢI tự làm, giống hệt việc prependOlderMessages/onMediaReady đang làm cho ảnh/video.
-// CHỈ bù khi bubble nằm hẳn PHÍA TRÊN đỉnh khung nhìn: đó mới là trường hợp nội dung đang đọc bị đẩy
-// trôi. Bubble đang hiện trong khung nhìn thì để nguyên -- người dùng thấy card tự "nở" ngay trước mắt,
-// đúng như các app khác; bubble nằm dưới khung nhìn thì càng không liên quan.
+// `.conv-log { overflow-anchor: none }` (CSS) tắt cơ chế tự bù của trình duyệt nên JS phải tự bù -- chỉ bù khi bubble nằm hẳn phía trên đỉnh khung nhìn (nội dung đang đọc bị đẩy trôi), bubble đang hiện trong khung nhìn thì để tự "nở".
 function withScrollAnchored(row, logEl, mutate) {
     if (!row || !logEl) { mutate(); return; }
     var before = row.offsetHeight;
@@ -696,10 +593,7 @@ function withScrollAnchored(row, logEl, mutate) {
     if (rowRect.bottom <= logRect.top + 1) logEl.scrollTop += delta;
 }
 
-// Popup xem ảnh/video full-size (tạo 1 LẦN, tái dùng cho mọi lần bấm -- giống #reactionPicker) --
-// KHÔNG nhúng <video> thật ngay trong bong bóng nữa (bé, dễ bấm nhầm giữa cuộn trang/mở popup, dở
-// hơn hẳn 1 "trình xem" đàng hoàng) -- media thật (ảnh gốc, hoặc <video controls autoplay>) chỉ dựng
-// lúc THẬT SỰ mở popup, xem openMediaLightbox.
+// Media thật (ảnh gốc / <video controls autoplay>) chỉ dựng lúc THẬT SỰ mở popup (xem openMediaLightbox) -- không nhúng <video> ngay trong bong bóng vì bé, dễ bấm nhầm giữa cuộn trang/mở popup.
 function ensureMediaLightbox() {
     var lightbox = document.getElementById('mediaLightbox');
     if (lightbox) return lightbox;
@@ -714,16 +608,13 @@ function ensureMediaLightbox() {
     lightbox.querySelector('.lightboxClose').onclick = function (e) { e.stopPropagation(); closeMediaLightbox(); };
     lightbox.querySelector('.lightboxPrev').onclick = function (e) { e.stopPropagation(); lightboxGoTo(-1); };
     lightbox.querySelector('.lightboxNext').onclick = function (e) { e.stopPropagation(); lightboxGoTo(1); };
-    // Bấm ra NGOÀI media (đúng vào nền tối) mới đóng -- bấm trúng chính ảnh/video (video còn có
-    // controls riêng cần thao tác) không được vô tình đóng mất popup đang xem.
+    // Chỉ bấm đúng nền tối mới đóng -- bấm trúng video (có controls riêng) không được vô tình đóng popup.
     lightbox.onclick = function (e) { if (e.target === lightbox) closeMediaLightbox(); };
     document.body.appendChild(lightbox);
     return lightbox;
 }
 
-// Danh sách file của tin ĐANG MỞ trong lightbox + vị trí hiện tại -- cho phép bấm mũi tên/phím ← →
-// xem lần lượt hết các file trong CÙNG 1 tin nhiều file (xem uploadAndSendFiles/getMessageFiles).
-// Tin chỉ có 1 file thì mảng này chỉ có đúng 1 phần tử, nút prev/next tự ẩn (renderLightboxCurrent).
+// File của tin đang mở trong lightbox + vị trí hiện tại, cho phép bấm mũi tên/phím ← → lướt qua các file cùng tin.
 var lightboxFiles = [];
 var lightboxIndex = 0;
 
@@ -731,7 +622,7 @@ function openMediaLightbox(files, startIndex) {
     lightboxFiles = files;
     lightboxIndex = startIndex || 0;
     ensureMediaLightbox().classList.add('show');
-    document.body.style.overflow = 'hidden'; // chặn cuộn nền trong lúc đang xem full-size
+    document.body.style.overflow = 'hidden';
     renderLightboxCurrent();
 }
 
@@ -743,12 +634,7 @@ function renderLightboxCurrent() {
     var isVideo = (f.fileMime || '').indexOf('video/') === 0;
     var media = document.createElement(isVideo ? 'video' : 'img');
     media.className = 'lightboxMedia';
-    // Chừa sẵn khung ĐÚNG PIXEL trước khi ảnh/video thật tải xong (xem fitWithinBox -- gán thẳng
-    // width/height bằng pixel tuyệt đối, KHÔNG dùng CSS aspect-ratio, cùng lý do đã đổi ở
-    // renderMessageContent) -- không thì popup mở ra RỖNG/co lại rất nhỏ rồi mới "nẩy" bung to đúng
-    // kích cỡ lúc ảnh/video tải xong. 92vw/88vh đọc TRỰC TIẾP từ viewport hiện tại (khớp đúng giới hạn
-    // max-width/max-height khai trong CSS .lightboxMedia) vì đây là giới hạn theo % viewport, không
-    // phải hằng số cố định như trong bong bóng chat.
+    // Chừa sẵn khung đúng pixel trước khi tải xong (xem fitWithinBox) -- 92vw/88vh đọc trực tiếp từ viewport vì giới hạn CSS .lightboxMedia là theo % viewport, không phải hằng số cố định như trong bong bóng chat.
     if (f.width && f.height) {
         var maxW = window.innerWidth * 0.92;
         var maxH = window.innerHeight * 0.88;
@@ -809,14 +695,7 @@ function posterUrlFor(f) {
     return isVideo && f.fileId ? FILE_SERVER_BASE + '/v2/api/thumbnail?id=' + encodeURIComponent(f.fileId) + '&size=400x400' : null;
 }
 
-// Tính ĐÚNG width/height bằng PIXEL (không phải chỉ tỷ lệ) sẽ hiện ra sau khi scale kích thước thật
-// (w×h) vừa khít trong khung giới hạn maxW×maxH, giữ nguyên tỷ lệ, KHÔNG phóng to quá kích thước gốc
-// (scale tối đa = 1). Dùng số PIXEL TUYỆT ĐỐI này gán thẳng vào style.width/height của <img> (KHÔNG
-// dùng CSS aspect-ratio nữa) -- đây là kỹ thuật y hệt thuộc tính width/height kinh điển của HTML
-// <img> (chuẩn từ những ngày đầu web, luôn được mọi engine hỗ trợ nhất quán 100%, không phụ thuộc
-// cách mỗi trình duyệt/phiên bản diễn giải riêng thuộc tính CSS aspect-ratio cho phần tử "replaced" --
-// đã thử aspect-ratio trước đó vẫn còn báo bị "nẩy" ở máy thật dù test riêng không tái hiện được, nên
-// chuyển hẳn sang cách chắc chắn tuyệt đối này để loại trừ hoàn toàn nghi ngờ).
+// Trả pixel tuyệt đối (không CSS aspect-ratio) để gán thẳng style.width/height -- aspect-ratio từng bị báo "nẩy" thật ở máy khách dù không tái hiện được lúc test, nên chuyển hẳn sang cách chắc chắn này.
 function fitWithinBox(w, h, maxW, maxH) {
     var scale = Math.min(maxW / w, maxH / h, 1);
     return {width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale))};
@@ -824,32 +703,20 @@ function fitWithinBox(w, h, maxW, maxH) {
 var MSG_MEDIA_MAX_W = 280;
 var MSG_MEDIA_MAX_H = 320;
 
-// Vẽ nội dung 1 tin vào .bubble -- ảnh/video (1 file: body.fileUrl shape cũ HOẶC body.files[0]; NHIỀU
-// file gộp 1 tin: body.files, xem uploadAndSendFiles/getMessageFiles) hoặc chữ thường (mọi tin cũ/
-// không đính kèm gì). onMediaReady (tuỳ chọn) gọi lại SAU KHI (TẤT CẢ, nếu nhiều file) ảnh/video tải
-// xong kích thước thật -- cần cho bong bóng DM canh lại nút react (xem buildDmBubbleRow).
+// onMediaReady (tuỳ chọn) gọi lại sau khi ảnh/video tải xong kích thước thật -- cần cho bong bóng DM canh lại nút react (xem buildDmBubbleRow).
 function renderMessageContent(el, body, onMediaReady) {
     el.innerHTML = '';
     var files = getMessageFiles(body);
     if (files.length === 1) {
         var f = files[0];
         var isVideo = (f.fileMime || '').indexOf('video/') === 0;
-        // Ảnh đại diện video (khung hình giây thứ 5, xem get-thumbnail.lua) -- video trong bong bóng
-        // giờ CHỈ hiện đúng cái này (1 <img>, không phải <video> thật) + nút ▶ nổi giữa, xem CSS
-        // .playOverlay. Nhờ vậy dùng LẠI được nguyên logic tải ảnh (onload luôn chắc chắn fire) --
-        // không còn cần "tự preload poster bằng 1 Image() riêng" như trước nữa (đó là workaround
-        // riêng cho việc <video poster> không tự tải metadata, giờ không nhúng <video> nữa thì hết bug).
+        // Video trong bong bóng chỉ hiện ảnh đại diện (poster, xem get-thumbnail.lua) + nút ▶ nổi giữa, không nhúng <video> thật -- nhờ vậy dùng lại nguyên logic tải ảnh (onload luôn chắc chắn fire).
         var posterUrl = posterUrlFor(f);
         var wrap = document.createElement('div');
         wrap.className = 'msg-media-wrap';
         var thumb = document.createElement('img');
         thumb.className = 'msg-media';
-        // Biết trước kích thước thật (xem getMediaDimensions/uploadOneFile) -- gán THẲNG width/height
-        // bằng PIXEL tuyệt đối (xem fitWithinBox), KHÔNG phải CSS aspect-ratio -- chừa sẵn ĐÚNG khung
-        // ngay lập tức, không đợi poster video/ảnh tải xong mới biết cao rộng bao nhiêu (trước đây
-        // <img> chưa tải xong cao 0px, khiến cả bong bóng xẹp lại và nút ▶ trồi ra ngoài lơ lửng xấu
-        // xí, xem CSS .msg-media). Tin CŨ (gửi từ trước khi có width/height) rơi về min-width/height
-        // cố định trong CSS thay vì hoàn toàn không có gì.
+        // Gán thẳng width/height pixel (xem fitWithinBox) ngay lập tức -- trước đây <img> chưa tải xong cao 0px khiến bong bóng xẹp lại và nút ▶ trồi ra ngoài lơ lửng (bug đã gặp).
         if (f.width && f.height) {
             var fitted = fitWithinBox(f.width, f.height, MSG_MEDIA_MAX_W, MSG_MEDIA_MAX_H);
             thumb.style.width = fitted.width + 'px';
@@ -867,16 +734,13 @@ function renderMessageContent(el, body, onMediaReady) {
             playBtn.innerHTML = ICON.play;
             wrap.appendChild(playBtn);
         }
-        // Bấm vào (ảnh HAY video) đều mở popup xem full-size riêng -- xem openMediaLightbox.
         wrap.onclick = function (e) {
             e.stopPropagation();
             openMediaLightbox(files, 0);
         };
         el.appendChild(wrap);
-        // media-only (không kèm chữ) -- bỏ nền/đệm của bubble, để ảnh/video tự nó là "bong bóng"
-        // (đúng kiểu Messenger/Zalo hiện ảnh, không có khối màu bao quanh vô nghĩa).
+        // media-only: bỏ nền/đệm của bubble để ảnh/video tự nó là "bong bóng", kiểu Messenger/Zalo.
         el.classList.toggle('media-only', !body.message);
-        // Ảnh/video kèm chú thích (tuỳ chọn, giống Messenger/Zalo cho gõ thêm vài chữ khi gửi ảnh).
         if (body.message) {
             var caption = document.createElement('div');
             caption.className = 'msg-caption';
@@ -884,10 +748,7 @@ function renderMessageContent(el, body, onMediaReady) {
             el.appendChild(caption);
         }
     } else if (files.length > 1) {
-        // NHIỀU file gộp 1 tin -- dạng lưới "album" kiểu Telegram/Messenger: tối đa 4 ô, dư ra bao
-        // nhiêu gộp vào chữ "+N" đè lên ô cuối cùng (xem CSS .msg-media-grid-more). Bấm ô nào cũng mở
-        // lightbox ĐÚNG tại file đó, có thể lướt tiếp qua các file còn lại (kể cả những cái bị gộp
-        // vào "+N") bằng nút prev/next, xem openMediaLightbox.
+        // Lưới "album" kiểu Telegram/Messenger: tối đa 4 ô, dư ra gộp vào chữ "+N" đè lên ô cuối (xem CSS .msg-media-grid-more).
         var VISIBLE_CAP = 4;
         var visibleCount = Math.min(files.length, VISIBLE_CAP);
         var overflowCount = files.length - visibleCount;
@@ -905,8 +766,7 @@ function renderMessageContent(el, body, onMediaReady) {
                 var gPoster = posterUrlFor(gf);
                 var item = document.createElement('div');
                 item.className = 'msg-media-grid-item';
-                // Lẻ số ô hiện + KHÔNG có file nào bị che (không overflow) -- ô cuối dãn hết hàng cho
-                // đỡ trống 1 nửa (vd đúng 3 ảnh: 2 ô hàng đầu + 1 ô cuối rộng cả hàng).
+                // Lẻ số ô + không overflow -- ô cuối dãn hết hàng cho đỡ trống 1 nửa.
                 if (overflowCount === 0 && visibleCount % 2 === 1 && i === visibleCount - 1) {
                     item.classList.add('spanFull');
                 }
@@ -946,28 +806,12 @@ function renderMessageContent(el, body, onMediaReady) {
     } else {
         var soleUrl = extractSoleUrl(messageBodyText(body));
         if (soleUrl) {
-            // Tin CHỈ chứa đúng 1 link, không kèm chữ nào khác -- hiện dạng thẻ nhúng preview
-            // (ảnh + tiêu đề + mô tả + domain) như Messenger/Telegram, KHÔNG phải chữ link trần.
-            // Bỏ luôn cả nền/đệm bubble (media-only) như ảnh/video -- thẻ card tự lo phần nhìn.
             el.classList.add('media-only');
-            // Width cố định cho card preview (px, KHÔNG phải %) được gán ở positionMsgActions -- LÚC
-            // NÀY (renderMessageContent) row còn CHƯA gắn vào DOM (buildDmBubbleRow build xong mới trả
-            // về cho caller appendChild), .bubble-col chưa có containing block thật để đo, xem chú
-            // thích chi tiết ở positionMsgActions.
+            // Width cố định cho card preview được gán ở positionMsgActions -- lúc này row còn CHƯA gắn vào DOM nên .bubble-col chưa có containing block thật để đo.
             var stored = body && body.preview;
             if (stored && (stored.title || stored.description || stored.image)) {
-                // Metadata ĐÃ CÓ SẴN trong body: client gắn lúc gửi (pha compose, xem sendMsg) hoặc
-                // colony enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview). Vẽ ĐỒNG BỘ
-                // -- không fetch, không skeleton -- nên card lên DOM đã đúng kích thước cuối cùng,
-                // không bao giờ "nở" sau mà đẩy các tin khác đi. Đây chính là cách các app khác tránh
-                // giật layout: biết trước hình dạng cuối cùng thay vì fetch lúc render.
-                // "không bao giờ nở sau" chỉ đúng cho phần CHỮ (đã biết trước) -- <img> preview (nếu
-                // meta.image có) vẫn tải bất đồng bộ như mọi ảnh khác, vẫn cần onMediaReady để canh lại
-                // nút react/xoá sau khi ảnh có kích thước thật (xem renderLinkPreviewSync).
                 renderLinkPreviewSync(el, soleUrl, stored, onMediaReady);
             } else {
-                // TIN CŨ (gửi trước khi có body.preview) mới phải fetch lúc render -- có skeleton giữ
-                // chỗ + bù scrollTop để phần co/dãn còn lại không đẩy tin đang xem, xem renderLinkPreview.
                 renderLinkPreview(el, soleUrl, onMediaReady);
             }
         } else {

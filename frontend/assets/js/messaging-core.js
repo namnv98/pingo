@@ -1,7 +1,4 @@
-// PHẢI là UUID thật (không phải chuỗi tuỳ ý như trước) -- id của frame MESSAGE được colony dùng
-// LUÔN làm primary key khi lưu bảng messages (xem ChatSessionManager#persistMessage), và SEEN/
-// REACTION gửi sau này tham chiếu lại ĐÚNG id đó -- id không phải UUID sẽ khiến "seen"/"reactions"
-// không bao giờ khớp lại được sau reload (đã gặp thật, xem lịch sử sửa).
+// PHẢI là UUID thật -- server dùng làm primary key bảng messages, id không phải UUID sẽ khiến seen/reactions mất khớp sau reload (bug thật đã gặp).
 function newId() {
     return crypto.randomUUID();
 }
@@ -10,14 +7,9 @@ function send(frame) {
     ws.send(JSON.stringify(frame));
 }
 
-// Gửi bù READ cho mọi tin đã hiển thị lúc tab còn nền/mất focus (xem pendingReadAcks trong
-// ws.onmessage case MESSAGE) -- gọi mỗi khi tab thực sự quay lại active, không phải chỉ 1 lần lúc nhận.
-// Gửi READ cho 1 tin -- dùng CHUNG cho mọi đường đánh dấu "đã đọc": tin sống tới lúc đang neo đáy
-// (xem ws.onmessage case MESSAGE), tin cũ/mới tự lọt vào khung nhìn qua IntersectionObserver (xem
-// ensureConversationCard), hay cuộn tay xuống xem sau khi bấm nút "xuống cuối". Giữ nguyên quy tắc
-// cũ: tab đang nền/mất focus thì xếp hàng (pendingReadAcks), gửi bù khi tab quay lại active.
+// Gửi READ cho 1 tin (dùng chung cho mọi đường đánh dấu "đã đọc") -- tab đang nền/mất focus thì xếp hàng vào pendingReadAcks, gửi bù khi tab quay lại active.
 function sendReadReceipt(conversationId, messageId) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return; // socket chưa/không còn sống (vd đang reconnect) -- bỏ qua, không phải luồng chính
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (document.visibilityState === 'visible' && document.hasFocus()) {
         send({type: 'READ', id: messageId, conversationId: conversationId});
     } else {
@@ -25,36 +17,23 @@ function sendReadReceipt(conversationId, messageId) {
     }
 }
 
-// Log đang cuộn gần đáy (trong khoảng NEAR_BOTTOM_PX) hay không -- ngưỡng thay vì so bằng tuyệt đối
-// (scrollTop lẻ vài px do làm tròn subpixel gần như luôn khác scrollHeight-clientHeight tuyệt đối).
+// Dùng ngưỡng thay vì so tuyệt đối -- scrollTop lẻ vài px do làm tròn subpixel gần như luôn khác scrollHeight-clientHeight.
 var NEAR_BOTTOM_PX = 64;
 function isNearBottom(logEl) {
     return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < NEAR_BOTTOM_PX;
 }
 
-// Cuộn MƯỢT xuống đáy -- dùng cho các trường hợp "cuộn thấy được" (nút xuống cuối, tin mới tới trong
-// lúc đang neo đáy): behavior:'smooth' chỉ áp dụng ĐÚNG lần gọi này (không đụng CSS scroll-behavior
-// của .conv-log), nên KHÔNG được đổi công thức "logEl.scrollTop = ..." (gán tức thời) ở những chỗ
-// khác như bù chiều cao ô soạn tin (composeResizeObserver) hay neo vị trí lúc mới mở conversation
-// (applyScrollAnchor) -- 2 chỗ đó cần đúng NGAY LẬP TỨC, animate vào sẽ gây giật/lệch vị trí thật.
+// Cuộn mượt xuống đáy cho các trường hợp "cuộn thấy được" -- KHÔNG dùng ở composeResizeObserver/applyScrollAnchor, 2 chỗ đó cần đúng ngay lập tức, animate vào sẽ gây giật/lệch.
 function smoothScrollToBottom(logEl) {
     logEl.scrollTo({top: logEl.scrollHeight, behavior: 'smooth'});
 }
 
-// Số hiện trên chấm đỏ = entry.totalUnreadCount -- KHỞI TẠO từ số CHÍNH XÁC server đếm bằng SQL
-// COUNT lúc mở lại conversation (xem GET /read-cursor, MessageHistoryRegistry#getReadCursor), KHÔNG
-// PHẢI đếm theo số phần tử client đã lazy-load được (đã gặp thật: client chỉ tải dần từng trang 30
-// tin/lần nên số hiện luôn bị chặn ở đúng cỡ 1 trang dù thực tế còn nhiều hơn, "sao con số hiển thị
-// trên chấm max là 30 à??"). Từ số gốc chính xác đó, CHỈ tăng khi có tin SỐNG thật sự mới tới (không
-// phải do lazy-load nạp tiếp phần vốn đã được server đếm rồi, xem appendMessageBubble) và CHỈ giảm
-// đúng lúc 1 tin THẬT SỰ lọt khung nhìn (readObserver) hoặc bị xoá -- entry.unreadIdSet chỉ còn dùng
-// để biết CHÍNH XÁC tin nào đang "chờ observer", không dùng size của nó để hiển thị số nữa.
+// entry.totalUnreadCount khởi tạo từ số CHÍNH XÁC server đếm (GET /read-cursor), không phải số phần tử client đã lazy-load được (bug thật đã gặp: số bị chặn ở cỡ 1 trang).
 function updateJumpBadge(entry) {
     if (!entry.jumpBadgeEl) return;
     var count = entry.totalUnreadCount || 0;
     if (count > 0) {
-        // Hiện ĐÚNG số thật, không rút gọn thành "9+" -- yêu cầu là "hiển thị chính xác có bao nhiêu
-        // tin chưa đọc", rút gọn sẽ trông như bị "kẹt" ở 9+ suốt trong lúc số thật vẫn đang giảm dần.
+        // Hiện đúng số thật, không rút gọn thành "9+" -- yêu cầu hiển thị chính xác số tin chưa đọc.
         entry.jumpBadgeEl.innerText = String(count);
         entry.jumpBadgeEl.classList.add('show');
     } else {
@@ -62,9 +41,7 @@ function updateJumpBadge(entry) {
     }
 }
 
-// Có tin MỚI tới trong lúc người dùng đang cuộn lên xem tin cũ hơn (không neo đáy) -- KHÔNG tự cuộn
-// xuống (sẽ giật mất chỗ đang đọc dở), chỉ hiện nút (tin đó đã được add vào entry.unreadIdSet ở nơi
-// gọi, xem appendMessageBubble) để tự bấm xuống xem khi sẵn sàng (đúng yêu cầu).
+// Có tin mới tới lúc đang cuộn lên xem tin cũ (không neo đáy) -- KHÔNG tự cuộn xuống (sẽ giật mất chỗ đang đọc), chỉ hiện nút.
 function bumpJumpBadge(entry) {
     updateJumpBadge(entry);
     if (entry.jumpBtnEl) entry.jumpBtnEl.classList.add('show');
@@ -90,14 +67,9 @@ function setStatus(text, cls) {
 }
 
 // --- UI cho 1 conversation (card riêng, log + ô gửi riêng) ---
-// Card được chèn thẳng vào #chatMain, mặc định ẩn (CSS ".conv" không có ".active") -- chỉ hiện khi
-// selectConversation() gán class "active", xem CSS. Nhờ vậy nhận tin cho 1 conversation KHÔNG đang
-// mở vẫn ghi log/giữ trạng thái bình thường (không mất tin), chỉ là chưa hiển thị ra màn hình.
+// Card mặc định ẩn (CSS ".conv" không ".active") -- conversation không đang mở vẫn ghi log/giữ trạng thái, chỉ là chưa hiển thị.
 // ===== Hình nền riêng cho từng cuộc trò chuyện =====
-// Lưu THUẦN client-side (localStorage) -- đây là tuỳ biến hiển thị cá nhân (giống Messenger/Zalo,
-// mỗi người tự chọn nền/màu bong bóng riêng cho máy/trình duyệt của mình), KHÔNG phải dữ liệu nghiệp
-// vụ cần đồng bộ qua server/tới người khác trong hội thoại, nên không cần thêm field nào ở body tin
-// nhắn hay API mới.
+// Lưu thuần client-side (localStorage) -- tuỳ biến hiển thị cá nhân, không phải dữ liệu nghiệp vụ cần đồng bộ qua server.
 var BG_STORAGE_KEY = 'pingoConvBackgrounds_v1';
 var BG_PRESET_COLORS = ['#f5f1ea', '#eaf2f6', '#eef7ee', '#fdf1e8', '#f7edf5', '#e9edf7', '#fdecec', '#eef3f0', '#2b2b33', '#1c2b3a'];
 var BG_PRESET_GRADIENTS = [
@@ -108,13 +80,9 @@ var BG_PRESET_GRADIENTS = [
     'linear-gradient(160deg, #2b2540, #4b3f6b)',
     'linear-gradient(160deg, #16323e, #1f5a54)'
 ];
-// Màu bong bóng chat CỦA MÌNH (bên phải, xem .bubble-row.mine) -- #0084ff là màu mặc định gốc (vẫn
-// đứng đầu danh sách để dễ quay lại), còn lại chọn 1 bảng màu đủ đậm để CHỮ TRẮNG lên nổi rõ (tránh
-// người dùng chọn nhầm màu quá nhạt rồi tự làm chữ khó đọc -- dù contrastTextColor() vẫn tự đổi sang
-// chữ đen nếu lỡ có màu nhạt lọt vào, xem applyConversationBubbleColor).
+// #0084ff là màu mặc định gốc (đứng đầu danh sách), còn lại chọn màu đủ đậm để chữ trắng lên nổi rõ.
 var BUBBLE_PRESET_COLORS = ['#0084ff', '#6d5bf5', '#00b894', '#e17055', '#e84393', '#00b8d9', '#2d3436', '#636e72', '#d63031', '#00cec9'];
-// Ảnh tự tải lên lưu dạng data: URI ngay trong localStorage (không có API upload nền riêng ở server)
-// -- giới hạn nhỏ để tránh vượt hạn mức localStorage (thường ~5-10MB/origin, dùng chung với token...).
+// Ảnh tự tải lên lưu dạng data: URI trong localStorage (không có API upload nền ở server) -- giới hạn nhỏ để tránh vượt hạn mức localStorage.
 var MAX_BG_IMAGE_BYTES = 1.5 * 1024 * 1024;
 
 function loadBgMap() {
@@ -124,14 +92,11 @@ function saveBgMap(map) {
     try {
         localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(map));
     } catch (e) {
-        // Tràn hạn mức localStorage (thường do ảnh custom quá lớn/nhiều cuộc trò chuyện) -- bỏ qua
-        // lặng lẽ, nền chỉ là tuỳ biến hiển thị phụ, không đáng chặn cả tính năng vì lỗi ghi cache này.
+        // Tràn hạn mức localStorage -- bỏ qua lặng lẽ, nền chỉ là tuỳ biến phụ, không đáng chặn cả tính năng.
         appAlert('Không lưu được (bộ nhớ trình duyệt đầy) -- thử chọn màu/gradient thay vì ảnh, hoặc xoá bớt tuỳ biến đã đặt ở cuộc trò chuyện khác.', 'Không lưu được');
     }
 }
-// Đọc tuỳ biến của 1 conversation, TỰ NHẬN DIỆN bản ghi cũ (từ trước khi có màu bong bóng -- khi đó
-// map[id] LÀ THẲNG object nền {type, value}, không bọc trong {background, bubbleColor}) để không mất
-// dữ liệu nền đã chọn từ trước khi tính năng này ra đời.
+// Tự nhận diện bản ghi cũ (trước khi có màu bong bóng, map[id] là thẳng object nền {type, value}) để không mất dữ liệu nền đã chọn từ trước.
 function getConversationSettings(conversationId) {
     var raw = loadBgMap()[conversationId];
     if (!raw) return {background: null, bubbleColor: null};
@@ -161,8 +126,7 @@ function setConversationBubbleColor(conversationId, color) {
     saveConversationSettings(conversationId, settings);
 }
 
-// Vẽ nền đã lưu (nếu có) lên ĐÚNG .conv-log của conversation đó -- gọi lúc dựng card
-// (ensureConversationCard) VÀ mỗi lần người dùng đổi lựa chọn trong popup (applyBgChoice).
+// Vẽ nền đã lưu (nếu có) lên .conv-log -- gọi lúc dựng card và mỗi lần đổi lựa chọn trong popup.
 function applyConversationBackground(conversationId, logEl) {
     var bg = getConversationBackground(conversationId);
     logEl.style.backgroundSize = 'cover';
@@ -174,16 +138,12 @@ function applyConversationBackground(conversationId, logEl) {
         logEl.style.backgroundColor = bg.value;
         logEl.style.backgroundImage = '';
     } else {
-        // gradient: bg.value đã là 1 CSS <image> hợp lệ (linear-gradient(...)) -- gán thẳng.
-        // image: bg.value là data: URI -- bọc trong url(...).
         logEl.style.backgroundColor = '';
         logEl.style.backgroundImage = bg.type === 'image' ? 'url(' + bg.value + ')' : bg.value;
     }
 }
 
-// Chọn chữ trắng hay đen tuỳ độ sáng của màu nền (công thức luminance tương đối rút gọn, đủ chính
-// xác để chọn ĐỦ tương phản đọc được -- không cần tính AA ratio đầy đủ) -- người dùng có thể chọn BẤT
-// KỲ màu nào (kể cả màu nhạt) nên không thể LUÔN cố định chữ trắng như bản gốc (#0084ff) được nữa.
+// Chọn chữ trắng/đen tuỳ độ sáng màu nền -- người dùng có thể chọn bất kỳ màu nào nên không thể cố định chữ trắng như mặc định gốc nữa.
 function contrastTextColor(hex) {
     var c = hex.replace('#', '');
     if (c.length === 3) c = c.split('').map(function (ch) { return ch + ch; }).join('');
@@ -192,9 +152,7 @@ function contrastTextColor(hex) {
     return luminance > 0.6 ? '#1b1d29' : '#ffffff';
 }
 
-// Vẽ màu bong bóng "mine" đã lưu (nếu có) -- gán 2 CSS custom property lên CHÍNH .conv (thẻ card),
-// cascade xuống mọi .bubble-row.mine .bubble bên trong (xem CSS var(--my-bubble-bg)) mà không đụng gì
-// tới conversation khác. Không tuỳ biến thì gỡ property đi, rơi về fallback mặc định của var() trong CSS.
+// Gán 2 CSS custom property lên .conv (card), cascade xuống .bubble-row.mine .bubble mà không đụng conversation khác.
 function applyConversationBubbleColor(conversationId, cardEl) {
     var color = getConversationBubbleColor(conversationId);
     if (!color) {
@@ -286,9 +244,7 @@ function ensureBgPicker() {
     return overlay;
 }
 
-// Đánh dấu ✓ đúng swatch khớp với nền/màu bong bóng ĐANG áp cho cuộc trò chuyện đang mở popup -- ảnh
-// tự tải lên không có ô đại diện sẵn trong lưới nên không có gì được đánh dấu trong trường hợp đó
-// (chấp nhận được, không phải lỗi).
+// Đánh dấu swatch khớp với nền/màu bong bóng đang áp -- ảnh tự tải lên không có ô đại diện sẵn nên không được đánh dấu (chấp nhận được).
 function refreshBgPickerSelection() {
     var overlay = document.getElementById('bgPickerOverlay');
     if (!overlay || !bgPickerConversationId) return;
@@ -337,10 +293,7 @@ document.addEventListener('keydown', function (e) {
     if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeBgPicker();
 });
 
-// Quét "@token" trong text KHỚP ĐÚNG username thành viên (không tính chính mình) của conversation
-// này -- cùng quy tắc với popup gợi ý lúc gõ (xem updateMentionSuggest): "@all" (nhóm >=2 người
-// khác) = nhắc hết, còn lại phải khớp NGUYÊN username (tránh dương tính giả kiểu "@nam2" ăn nhầm
-// "@nam"). Trả về mảng userId gửi kèm body.mentionedUserIds cho colony tạo noti (xem sendMsg).
+// Quét "@token" khớp ĐÚNG username thành viên (không tính chính mình) -- "@all" (nhóm >=2 người) = nhắc hết, còn lại phải khớp nguyên username để tránh dương tính giả kiểu "@nam2" ăn nhầm "@nam".
 function computeMentionedUserIds(text, conversationId) {
     var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
     var memberIds = (conv && conv.memberUserIds || []).filter(function (id) { return id !== myUserId; });
@@ -397,19 +350,13 @@ function ensureConversationCard(conversationId, label, subtitle) {
     document.getElementById('chatMain').appendChild(card);
 
     var logEl = card.querySelector('.conv-log');
-    // Hình nền + màu bong bóng chat riêng của cuộc trò chuyện này (lưu ở localStorage -- xem
-    // applyConversationBackground/applyConversationBubbleColor/openBackgroundPicker) -- áp NGAY lúc
-    // dựng card, trước khi tin nhắn đầu tiên kịp render, để không bị "nháy" từ mặc định sang đã chọn.
+    // Áp nền/màu bong bóng NGAY lúc dựng card, trước khi tin nhắn đầu tiên render, để không bị "nháy" từ mặc định sang đã chọn.
     applyConversationBackground(conversationId, logEl);
     applyConversationBubbleColor(conversationId, card);
     card.querySelector('.bgBtn').onclick = function () { openBackgroundPicker(conversationId, logEl, card); };
     var convSendEl = card.querySelector('.conv-send');
     var inputEl = card.querySelector('.composeInput');
-    // Textarea "gương" ẩn, DÙNG RIÊNG để đo chiều cao cần thiết -- xem lý do chi tiết ở autoGrowComposeInput.
-    // rows=1 PHẢI đặt tay -- document.createElement không tự có rows="1" như ô thật (parse từ HTML
-    // template), mặc định HTML là rows=2, khiến scrollHeight đo được LUÔN tính theo tối thiểu 2 dòng dù
-    // chỉ gõ 1 từ (bug thật đã gặp: ô nhập tự cao gấp đôi ngay từ ký tự đầu, xoá hết cũng không co lại
-    // được vì "sàn" 2 dòng đó không đổi theo nội dung).
+    // Textarea "gương" ẩn để đo chiều cao (xem autoGrowComposeInput). rows=1 phải đặt tay -- createElement mặc định rows=2, khiến scrollHeight luôn tính tối thiểu 2 dòng dù chỉ gõ 1 từ (bug thật đã gặp).
     var inputMirrorEl = document.createElement('textarea');
     inputMirrorEl.className = 'composeInput composeInputMirror';
     inputMirrorEl.rows = 1;
@@ -426,18 +373,13 @@ function ensureConversationCard(conversationId, label, subtitle) {
     var sendBtnEl = card.querySelector('.composeSendBtn');
     var previewEl = card.querySelector('.composePreview');
     var previewListEl = card.querySelector('.composePreviewList');
-    // Khối xem trước LINK NGAY TRONG Ô NHẬP (pha compose, đặt SÁT TRÊN logEl để bù scroll như với
-    // composePreview file) -- chèn ngay sau composePreview file, không đè lên vị trí file.
+    // Khối xem trước link ngay trong ô nhập -- chèn ngay sau composePreview file, không đè lên vị trí file.
     var composeLinkPreviewEl = null;
     var composeLinkPreviewState = {url: null, meta: null, declined: false};
     function ensureComposeLinkPreviewEl() {
         if (composeLinkPreviewEl) return composeLinkPreviewEl;
         composeLinkPreviewEl = document.createElement('div');
-        // Chèn NGAY TRƯỚC .composeRow nhưng phải chèn vào ĐÚNG cha của nó là .composeCard (không phải
-        // .conv-send -- .composeRow là con của .composeCard, insertBefore vào .conv-send sẽ ném
-        // NotFoundError và làm chết CẢ handler input, đây chính là bug "dán link không hiện gì").
-        // Vị trí này = ngay sau .composePreview file, và vẫn nằm trong .conv-send nên
-        // composeResizeObserver (observe .conv-send) vẫn bù scrollTop khi khối này hiện/ẩn.
+        // Phải insertBefore vào ĐÚNG cha .composeCard (không phải .conv-send) -- nhầm cha sẽ ném NotFoundError và làm chết cả handler input (bug thật đã gặp: "dán link không hiện gì").
         card.querySelector('.composeCard').insertBefore(composeLinkPreviewEl, card.querySelector('.composeRow'));
         return composeLinkPreviewEl;
     }
@@ -568,31 +510,20 @@ function ensureConversationCard(conversationId, label, subtitle) {
     var jumpBtnEl = card.querySelector('.jumpToBottomBtn');
     var jumpBadgeEl = card.querySelector('.jumpBadge');
 
-    // Nút "xuống cuối" -- bấm mới THẬT SỰ cuộn xuống xem tin mới (không tự cuộn khi tin tới lúc đang
-    // đọc tin cũ hơn ở trên, xem appendMessageBubble/bumpJumpBadge). Cuộn xong rồi thì các tin vừa
-    // hiện ra sẽ tự trôi qua IntersectionObserver bên dưới -> tự gửi READ đúng lúc thật sự nhìn thấy,
-    // không cần code riêng ở đây.
+    // Nút "xuống cuối" -- bấm mới thật sự cuộn xuống xem tin mới; các tin hiện ra sau đó tự trôi qua IntersectionObserver bên dưới nên tự gửi READ, không cần code riêng ở đây.
     jumpBtnEl.onclick = function () {
         entry.stickToBottom = true;
         smoothScrollToBottom(logEl);
-        // KHÔNG tự xoá entry.unreadIdSet/badge ở đây -- nhảy thẳng xuống đáy có thể "lướt qua" 1 số
-        // tin chưa đọc nằm giữa (chưa từng thật sự lọt vào khung nhìn ở bất kỳ thời điểm nào trong cú
-        // nhảy tức thời này), badge phải tiếp tục phản ánh ĐÚNG số còn lại chưa được nhìn thấy thật
-        // sự -- readObserver sẽ tự xoá dần đúng những tin NẰM TRONG khung nhìn ở vị trí cuối cùng.
+        // KHÔNG tự xoá entry.unreadIdSet/badge -- nhảy thẳng xuống đáy có thể "lướt qua" tin chưa đọc nằm giữa, readObserver sẽ tự xoá đúng tin nào thật sự lọt khung nhìn.
         jumpBtnEl.classList.remove('show');
     };
 
-    // stickToBottom: đang neo ở đáy (gần đáy, không cần chính xác tuyệt đối) hay đang cuộn lên xem
-    // tin cũ hơn -- quyết định tin mới có tự cuộn xuống hay chỉ báo (xem appendMessageBubble). Cũng
-    // là nơi bắn "cuộn gần tới đỉnh -> tải thêm tin cũ hơn" (phân trang lùi, xem maybeLoadOlder).
+    // stickToBottom quyết định tin mới có tự cuộn xuống hay chỉ báo (xem appendMessageBubble); cũng là nơi bắn tải thêm tin cũ hơn khi cuộn gần tới đỉnh.
     logEl.addEventListener('scroll', function () {
         var nearBottom = isNearBottom(logEl);
         entry.stickToBottom = nearBottom;
-        // Nút "xuống cuối" hiện MỖI KHI đang cuộn lên (không neo đáy), không chỉ lúc có tin mới tới
-        // -- badge số (nếu có) chỉ là chỉ báo PHỤ thêm vào chứ không phải điều kiện để hiện nút.
         if (nearBottom) {
-            // KHÔNG tự xoá entry.unreadIdSet ở đây -- ẩn cả nút (kéo theo badge con bên trong) là đủ,
-            // để nguyên Set cho readObserver tự xoá đúng từng tin THẬT SỰ đã lọt khung nhìn.
+            // KHÔNG tự xoá entry.unreadIdSet -- ẩn nút là đủ, để nguyên Set cho readObserver tự xoá đúng tin đã lọt khung nhìn.
             jumpBtnEl.classList.remove('show');
             maybeLoadNewer(conversationId);
         } else {
@@ -601,10 +532,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         maybeLoadOlder(conversationId);
     });
 
-    // Đánh dấu "đã đọc" (READ) CHỈ khi tin THỰC SỰ lọt vào khung nhìn (threshold 0.6 = hiện ít nhất
-    // 60% chiều cao) -- đúng yêu cầu "thực sự xem tin nào mới read", khác cách cũ (coi như đã xem chỉ
-    // vì tin tới lúc conversation đang mở, kể cả khi đang cuộn lên xem tin cũ ở trên, ngoài tầm nhìn
-    // thật). root = chính logEl (không phải viewport) vì log là vùng cuộn riêng, không phải cả trang.
+    // Đánh dấu READ chỉ khi tin thực sự lọt khung nhìn (threshold 0.6) -- khác cách cũ coi như đã xem chỉ vì tin tới lúc conversation đang mở. root=logEl vì log là vùng cuộn riêng, không phải cả trang.
     var readObserver = new IntersectionObserver(function (obsEntries) {
         obsEntries.forEach(function (obsEntry) {
             if (!obsEntry.isIntersecting) return;
@@ -613,8 +541,6 @@ function ensureConversationCard(conversationId, label, subtitle) {
             var messageId = row.dataset.messageId;
             var msgConversationId = row.dataset.conversationId;
             if (messageId && msgConversationId) sendReadReceipt(msgConversationId, messageId);
-            // Tin NÀY vừa thật sự lọt khung nhìn -- bớt đúng 1 khỏi số "chưa đọc" hiện trên chấm đỏ,
-            // đồng bộ chính xác dù tin tới từ đợt nạp nào (xem entry.totalUnreadCount/updateJumpBadge).
             if (messageId && entry.unreadIdSet.delete(messageId)) {
                 entry.totalUnreadCount = Math.max(0, (entry.totalUnreadCount || 0) - 1);
                 updateJumpBadge(entry);
@@ -622,81 +548,29 @@ function ensureConversationCard(conversationId, label, subtitle) {
         });
     }, {root: logEl, threshold: 0.6});
 
-    // Chọn ảnh/video xong KHÔNG gửi ngay -- hiện xem trước ngay trong ô nhập, giữ ở đây
-    // (entry.pendingFiles, MẢNG -- gửi nhiều file cùng lúc) tới khi bấm Gửi mới thật sự upload+gửi
-    // (giống Messenger/Zalo/Telegram) -- xem sendMsg() bên dưới. Chọn thêm lần nữa (input file có
-    // "multiple", hoặc bấm nút đính kèm lại) sẽ NỐI THÊM vào danh sách đang chờ, không thay thế --
-    // attachBtn chỉ tự disable khi đã CHẠM TRẦN (MAX_PENDING_FILES), không phải hễ có 1 file là khoá
-    // luôn như bản chỉ-1-file trước đây.
+    // Chọn ảnh/video xong KHÔNG gửi ngay -- giữ trong entry.pendingFiles tới khi bấm Gửi mới thật sự upload (giống Messenger/Zalo/Telegram). Chọn thêm lần nữa sẽ nối thêm vào danh sách, không thay thế.
     var composeCardEl = card.querySelector('.composeCard');
-    // Nút gửi đổi màu XÁM -> TÍM ngay khi có gì đó để gửi (chữ đã gõ, HOẶC đã chọn file dù chưa gõ
-    // caption) -- gọi lại mỗi khi 1 trong 2 điều kiện đó có thể vừa đổi (gõ phím, chọn/bỏ file, gửi
-    // xong reset về rỗng). disabled thật (không chỉ đổi màu) lúc rỗng -- bấm Enter/click lúc đó vốn
-    // đã bị chặn ở sendMsg() rồi, disabled chỉ để tránh việc bấm nhầm cursor "trông như bấm được".
     function updateSendButtonState() {
         var hasContent = inputEl.value.trim().length > 0 || entry.pendingFiles.length > 0;
         sendBtnEl.disabled = !hasContent;
         sendBtnEl.classList.toggle('active', hasContent);
     }
-    // <textarea> KHÔNG tự cao dần theo số dòng như <input> -- phải tự đo lại mỗi lần nội dung đổi.
-    // ĐO QUA BẢN GƯƠNG ẩn (inputMirrorEl, height:auto CỐ ĐỊNH -- xem CSS .composeInputMirror), KHÔNG
-    // đo trực tiếp trên ô nhập thật -- trước đây code đặt height='auto' TRÊN CHÍNH ô nhập thật rồi mới
-    // đo lại scrollHeight (cần bước này để phát hiện lúc XOÁ BỚT dòng, không thì scrollHeight giữ
-    // nguyên chiều cao CŨ lớn hơn thật) -- NHƯNG bước "về auto" đó làm ô nhập thật CO NHỎ LẠI THẬT SỰ
-    // đúng trong khoảnh khắc đo (dù chỉ 1 tick trước khi gán lại chiều cao đúng), và vì .conv-send
-    // (chứa ô nhập) với .conv-log (khung chat) là 2 anh em cùng cha trong 1 flex column, ô nhập co nhỏ
-    // lại tạm thời làm .conv-log tạm thời RỘNG RA -- trình duyệt tự ý clamp lại scrollTop của .conv-log
-    // cho vừa khoảng rộng tạm thời đó (hành vi mặc định không thể tắt, không phải bug của app). Kết quả
-    // là mỗi lần gõ thêm 1 dòng, phần đã bù trước đó bị trình duyệt âm thầm xoá bớt, càng gõ càng lệch
-    // nặng (bug thật đã gặp, xác nhận bằng test có ghi log timeline thật). Đo trên bản gương (đứng
-    // ngoài luồng layout, không nằm cạnh .conv-log) thì ô nhập thật + .conv-log không bao giờ bị đụng
-    // tới trong lúc đo -- chỉ đổi ĐÚNG 1 LẦN duy nhất sang chiều cao CUỐI CÙNG cần có.
+    // Đo qua bản gương ẩn (inputMirrorEl), KHÔNG đo trực tiếp trên ô nhập thật -- đặt height='auto' trên ô thật để đo từng làm .conv-log tạm rộng ra và bị trình duyệt tự clamp scrollTop, gây lệch cộng dồn mỗi lần gõ thêm dòng (bug thật đã gặp).
     function autoGrowComposeInput() {
         inputMirrorEl.style.width = inputEl.clientWidth + 'px';
         inputMirrorEl.value = inputEl.value;
         inputEl.style.height = inputMirrorEl.scrollHeight + 'px';
     }
-    // Bù scrollTop của .conv-log MỖI KHI khối soạn tin (.conv-send) đổi chiều cao -- vì BẤT KỲ lý do
-    // gì (gõ nhiều dòng, hiện/ẩn khối xem trước file khi đính kèm/bỏ đính kèm...), KHÔNG chỉ riêng lúc
-    // gõ chữ. Dùng ResizeObserver (không phải gọi tay ở từng nơi) để không bỏ sót -- đã gặp thật: chỉ
-    // xử lý lúc gõ chữ thì trường hợp đính kèm file (khối xem trước cao thêm ~60px) hay lúc đang cuộn
-    // lên xem tin cũ (trước đó cố tình bỏ qua, tưởng "không đụng vị trí đang đọc" là đủ) vẫn bị che.
-    //
-    // delta > 0 (khối soạn tin CAO LÊN, khung .conv-log hẹp lại) -- CỘNG THÊM delta vào scrollTop để
-    // giữ đúng NỘI DUNG ĐANG NẰM Ở ĐÁY khung nhìn (dù đang neo đáy thật hay chỉ đang xem giữa chừng 1
-    // đoạn lịch sử) tiếp tục hiện đủ, không bị rìa dưới (vừa dịch lên do khối soạn tin phình ra) cắt
-    // mất -- ngược lại (delta < 0, khối soạn tin thấp xuống) thì trừ đúng bấy nhiêu, đối xứng. Đây là
-    // hành vi ĐÚNG cho MỌI trạng thái cuộn (neo đáy hay đang đọc tin cũ), không cần tách 2 nhánh --
-    // khi đang neo đáy, công thức này tự động cho ra kết quả "vẫn ở đúng đáy mới", xem lại chứng minh
-    // toán trong lịch sử sửa.
-    // 0 = "chưa đo được" (card còn display:none, chưa active lần nào) -- lần đo đầu tiên có giá trị
-    // thật chỉ để LẤY MỐC, không được coi là "vừa phình ra" mà trừ nhầm vào vị trí cuộn ban đầu
-    // (applyScrollAnchor đã tính riêng, xem loadHistory).
-    //
-    // BUG THẬT ĐÃ GẶP: mốc "lần đo đầu tiên" này KHÔNG ĐƯỢC lấy từ chính lần ResizeObserver báo đầu
-    // tiên -- card display:none->hiện ra (activate) VÀ lần gõ đầu tiên của người dùng có thể xảy ra
-    // sát nhau tới mức trình duyệt GỘP LUÔN 2 thay đổi kích thước đó thành 1 lần báo DUY NHẤT (đặc
-    // tính coalesce của ResizeObserver -- chỉ báo kích thước CUỐI CÙNG, không báo từng bước trung
-    // gian). Nếu để lần báo gộp đó tự làm mốc (như code cũ), phần "gõ dòng đầu tiên" bị nuốt mất vĩnh
-    // viễn, không bao giờ được bù -- kéo theo scrollTop lệch mãi mãi từ đó về sau (mọi lần bù kế tiếp
-    // đều đúng DELTA nhưng tính trên 1 mốc đã sai sẵn), kể cả thu nhỏ lại cũng không về đúng vị trí gốc
-    // (đã tái hiện + xác nhận bằng CDP thật, không phải artifact test). Xem entry.resetComposeSendBaseline
-    // bên dưới -- selectConversation() gọi hàm đó NGAY SAU KHI card thật sự hiện ra (đo offsetHeight
-    // ĐỒNG BỘ, không đợi ResizeObserver), nên mốc luôn chính xác trước khi người dùng kịp gõ gì.
+    // Bù scrollTop của .conv-log mỗi khi .conv-send đổi chiều cao (gõ nhiều dòng, hiện/ẩn preview file...) qua ResizeObserver để không bỏ sót trường hợp nào (chỉ xử lý lúc gõ chữ từng để sót đính kèm file/cuộn xem tin cũ, bug thật đã gặp).
+    // 0 = "chưa đo được" (card còn display:none) -- lần đo đầu tiên chỉ lấy mốc, không trừ nhầm vào vị trí cuộn ban đầu.
+    // BUG THẬT ĐÃ GẶP: không được lấy mốc từ chính lần ResizeObserver báo đầu tiên -- card hiện ra + gõ phím đầu tiên có thể bị trình duyệt GỘP thành 1 lần báo (coalesce), nuốt mất phần cần bù và làm scrollTop lệch vĩnh viễn; entry.resetComposeSendBaseline bên dưới đo offsetHeight ĐỒNG BỘ ngay sau khi card active để tránh việc này.
     var lastConvSendHeight = 0;
     var composeResizeObserver = new ResizeObserver(function () {
         var newHeight = convSendEl.offsetHeight;
         if (lastConvSendHeight > 0 && newHeight > 0) {
             var delta = newHeight - lastConvSendHeight;
             if (delta !== 0) {
-                // BUG THẬT ĐÃ GẶP (nhánh thứ 2): khi compose CO LẠI (delta < 0) lúc đang neo đáy, ngay
-                // khi .conv-log vừa RỘNG RA (clientHeight tăng theo), trình duyệt tự CLAMP scrollTop
-                // xuống giới hạn mới NGAY LẬP TỨC (ràng buộc vật lý, không tắt được) -- TRƯỚC KHI dòng
-                // này kịp chạy. Cộng thêm delta ÂM lên trên giá trị ĐÃ BỊ CLAMP đó là trừ 2 LẦN, kéo lên
-                // trên đáy thật. Đang neo đáy thì tính lại THẲNG vị trí đáy (scrollHeight-clientHeight)
-                // từ số đo HIỆN TẠI -- luôn ra đúng dù trình duyệt đã tự clamp gì trước đó, không cần
-                // biết chính xác đã bị clamp bao nhiêu. Không neo đáy (đang đọc lịch sử) thì giữ nguyên
-                // cách cộng dồn delta cũ -- giữ ĐÚNG vị trí đang đọc, clamp kép hiếm khi xảy ra ở xa đáy.
+                // BUG THẬT ĐÃ GẶP: khi compose co lại (delta<0) lúc đang neo đáy, trình duyệt đã tự clamp scrollTop trước khi dòng này chạy -- cộng thêm delta âm lên giá trị đã clamp sẽ trừ 2 lần, nên tính lại thẳng vị trí đáy thay vì cộng dồn delta.
                 if (entry.stickToBottom) {
                     logEl.scrollTop = logEl.scrollHeight - logEl.clientHeight;
                 } else {
@@ -707,9 +581,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         lastConvSendHeight = newHeight;
     });
     composeResizeObserver.observe(convSendEl);
-    // Vẽ lại TOÀN BỘ dải xem trước từ entry.pendingFiles (mảng) -- đơn giản hơn tự vá từng thẻ 1 khi
-    // thêm/bớt, số lượng trong demo này luôn nhỏ (tối đa MAX_PENDING_FILES) nên dựng lại cả dải mỗi
-    // lần không tốn kém gì đáng kể.
+    // Vẽ lại toàn bộ dải xem trước mỗi lần -- đơn giản hơn vá từng thẻ, số lượng luôn nhỏ (tối đa MAX_PENDING_FILES) nên không tốn kém.
     function renderPendingFilePreviews() {
         previewListEl.innerHTML = '';
         entry.pendingFiles.forEach(function (item, index) {
@@ -729,8 +601,6 @@ function ensureConversationCard(conversationId, label, subtitle) {
             removeBtn.className = 'composePreviewRemove';
             removeBtn.title = 'Bỏ file này';
             removeBtn.innerText = '✕';
-            // Đóng chặt "index" đúng CỦA LẦN VẼ NÀY qua closure -- removePendingFileAt tự vẽ lại toàn
-            // bộ dải sau khi xoá nên các nút còn lại (được tạo mới hoàn toàn) luôn khớp đúng index hiện tại.
             removeBtn.onclick = function (e) { e.stopPropagation(); removePendingFileAt(index); };
             itemEl.appendChild(removeBtn);
             previewListEl.appendChild(itemEl);
@@ -755,9 +625,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         entry.pendingFiles = [];
         renderPendingFilePreviews();
     }
-    // fileList: FileList thật từ <input type=file multiple> (chọn 1 lần được nhiều file) -- NỐI THÊM
-    // vào entry.pendingFiles đang có (không thay thế), cho phép bấm đính kèm nhiều lần để gộp dần.
-    // Chặn ở CHÍNH XÁC MAX_PENDING_FILES (không cắt bớt âm thầm) -- báo rõ nếu người dùng chọn dư.
+    // Nối thêm vào entry.pendingFiles đang có (không thay thế); chặn ở đúng MAX_PENDING_FILES và báo rõ nếu chọn dư, không cắt bớt âm thầm.
     function stagePendingFiles(fileList) {
         var remaining = MAX_PENDING_FILES - entry.pendingFiles.length;
         if (remaining <= 0) {
@@ -784,12 +652,10 @@ function ensureConversationCard(conversationId, label, subtitle) {
             appAlert('Chỉ thêm được ' + toAdd.length + '/' + files.length + ' file đã chọn (tối đa ' + MAX_PENDING_FILES + ' file trong 1 lần).', 'Vượt giới hạn');
         }
     }
-    // .attachMenu gắn NGAY TRONG card này (khác #reactionPicker/#gifPicker dùng chung 1 phần tử toàn
-    // cục) -- bấm .attachMenuBtn chỉ bật/tắt ĐÚNG cái của card này, đóng mọi popup KHÁC (kể cả .attachMenu
-    // của card khác, nếu lỡ đang mở -- xem closeAttachMenu/openAttachMenuEl).
+    // .attachMenu gắn ngay trong card này (khác #reactionPicker/#gifPicker dùng chung 1 phần tử toàn cục) -- bấm chỉ bật/tắt đúng cái của card này, đóng mọi popup khác đang mở.
     attachMenuBtnEl.onclick = function (e) {
         e.stopPropagation();
-        if (openAttachMenuEl === attachMenuEl) { closeAttachMenu(); return; } // đang mở đúng cái này -- bấm lại để đóng
+        if (openAttachMenuEl === attachMenuEl) { closeAttachMenu(); return; }
         closeReactionPicker();
         closeComposeEmojiPicker();
         closeGifPicker();
@@ -806,10 +672,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         e.stopPropagation(); // không thì document click listener (đóng picker) chạy ngay sau khi vừa mở
         openComposeEmojiPicker(emojiBtnEl, inputEl);
     };
-    // Định vị theo attachMenuBtnEl (nút "+" LUÔN hiển thị), KHÔNG phải theo chính nút bấm bên trong
-    // .attachMenu -- closeAttachMenu() ở trên ẩn .attachMenu (display:none) TRƯỚC KHI popup mới kịp đo
-    // vị trí, mà 1 phần tử nằm trong tổ tiên display:none luôn cho getBoundingClientRect() ra TOÀN SỐ 0
-    // (bug thật đã gặp: popup GIF/sticker bị đẩy lên hẳn góc trên cùng màn hình vì "đo" ra toạ độ (0,0)).
+    // Định vị theo attachMenuBtnEl (luôn hiển thị), không theo nút bên trong .attachMenu -- 1 phần tử trong tổ tiên display:none luôn cho getBoundingClientRect() ra toàn số 0 (bug thật đã gặp).
     stickerTrayBtnEl.onclick = function (e) {
         e.stopPropagation();
         closeAttachMenu();
@@ -821,26 +684,19 @@ function ensureConversationCard(conversationId, label, subtitle) {
         openGifPicker(attachMenuBtnEl, conversationId);
     };
     fileInputEl.addEventListener('change', function () {
-        // Array.prototype.slice.call (KHÔNG chỉ gán thẳng fileInputEl.files) -- .files là 1 FileList
-        // SỐNG gắn liền với chính input, gán .value = '' ngay dòng dưới XOÁ LUÔN cả FileList đó (mảng
-        // trống dài 0 phần tử) vì cùng 1 trạng thái nội bộ -- phải chụp lại thành mảng THƯỜNG (snapshot
-        // độc lập) TRƯỚC khi reset value, không thì stagePendingFiles() luôn nhận về rỗng (đã gặp thật).
+        // .files là FileList SỐNG gắn liền với input -- .value='' xoá luôn nó, nên phải snapshot thành mảng thường trước khi reset (bug thật đã gặp: stagePendingFiles luôn nhận rỗng).
         var files = Array.prototype.slice.call(fileInputEl.files);
-        fileInputEl.value = ''; // cho phép chọn lại ĐÚNG (những) file đó lần nữa (không đổi gì input cũng không bắn lại "change" nếu không reset)
+        fileInputEl.value = ''; // cho phép chọn lại đúng file đó lần nữa
         if (files.length) stagePendingFiles(files);
     });
     var sendMsg = function () {
         var text = inputEl.value.trim();
         if (entry.pendingFiles.length) {
-            // Tin dinh kem file thi phan chu la CAPTION, khong phai "tin chi co 1 link" -- huy khoi
-            // xem truoc link dang hien trong o nhap di cho khoi hieu lam (maybeFetchComposeLinkPreview
-            // cung tu an khi pendingFiles > 0, day chi la don ngay luc bam gui).
+            // Tin đính kèm file thì phần chữ là CAPTION, không phải "tin chỉ có 1 link" -- huỷ khối xem trước link đang hiện cho khỏi hiểu lầm.
             if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
             dismissComposeLinkPreview();
             composeLinkPreviewState.declined = false;
-            // Gửi TẤT CẢ file đã chọn trong CÙNG 1 TIN (body.files = [...], xem uploadAndSendFiles) --
-            // giống Telegram/Messenger gộp cả album vào 1 bong bóng thay vì tách rời từng ảnh/video
-            // thành nhiều tin lẻ. Chú thích gõ kèm (nếu có) gắn CHUNG cho cả tin đó.
+            // Gửi tất cả file đã chọn trong cùng 1 tin (giống Telegram/Messenger gộp album) thay vì tách rời thành nhiều tin lẻ.
             var replyForFiles = pendingReplyTo;
             var files = entry.pendingFiles.map(function (item) { return item.file; });
             clearAllPendingFiles();
@@ -853,19 +709,9 @@ function ensureConversationCard(conversationId, label, subtitle) {
             return;
         }
         if (!text) return;
-        // PHA 3 -- giong Slack `chat.postMessage` gui kem `unfurl`/`pending_slug_urls`: tin chi chua
-        // dung 1 link thi gui KEM `body.preview` da resolve tu luc dang go (pha compose o tren). colony
-        // chi viec Json.encode luu nguyen, moi client -- ke ca echo ve chinh minh -- ve card DONG BO
-        // dung kich thuoc ngay tu dau, khong con "no" sau lam day cac tin khac (bug goc cua task nay).
-        // Chua co meta (bam gui som hon fetch xong, hoac user bam X tu choi) thi CU GUI khong preview:
-        // colony tu enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview), tin van di ngay,
-        // khong bat user doi -- dung tinh than best-effort cua ca 3 pha.
+        // Tin chỉ chứa đúng 1 link thì gửi kèm body.preview đã resolve từ lúc đang gõ, để mọi client (kể cả echo về chính mình) render card đồng bộ đúng kích thước ngay từ đầu, không "nở" sau. Chưa có meta thì cứ gửi không preview -- server tự enrich sau khi persist (xem ChatSessionManager#enrichLinkPreview).
         var body = {message: text};
         if (pendingReplyTo) body.replyTo = pendingReplyTo;
-        // Tự tính SẴN ở client (đã có usernameById/memberUserIds trong tay, khớp @token y hệt cách
-        // gợi ý mention lúc gõ -- xem updateMentionSuggest) rồi gửi kèm cho colony -- đỡ phải thêm 1
-        // bảng tra username↔userId riêng vào đường xử lý tin nóng chỉ để phục vụ 1 noti phụ, xem
-        // ChatSessionManager#notifyReplyAndMentions bên colony.
         var mentionedUserIds = computeMentionedUserIds(text, conversationId);
         if (mentionedUserIds.length) body.mentionedUserIds = mentionedUserIds;
         var soleUrlToSend = extractSoleUrl(text);
@@ -886,17 +732,14 @@ function ensureConversationCard(conversationId, label, subtitle) {
     sendBtnEl.onclick = sendMsg;
 
     // ===== @mention: gõ "@" trong ô nhập hiện popup gợi ý thành viên cuộc trò chuyện này =====
-    // Chèn cùng kiểu với composeLinkPreviewEl/replyBarEl ở dưới (1 khối flex NGAY TRÊN .composeRow,
-    // trong .composeCard) thay vì absolute-position như attachMenu/reactionPicker -- popup này chỉ
-    // xuất hiện/biến mất theo nội dung đang gõ, không neo theo 1 nút bấm cụ thể nào.
+    // Chèn như 1 khối flex ngay trên .composeRow (không absolute-position như attachMenu/reactionPicker) vì popup này không neo theo 1 nút bấm cụ thể.
     var mentionSuggestEl = document.createElement('div');
     mentionSuggestEl.className = 'mentionSuggest';
     card.querySelector('.composeCard').insertBefore(mentionSuggestEl, card.querySelector('.composeRow'));
     var mentionCandidates = []; // [{id, username}, ...] hoặc {id:'all', username:'all', label:'Tất cả mọi người'} -- danh sách ĐANG hiện trong popup, khớp theo thứ tự với các .mentionSuggestItem
     var mentionQueryStart = -1; // vị trí ký tự "@" trong inputEl.value ứng với lượt gợi ý đang mở, -1 = đang đóng
     var mentionSelectedIndex = 0;
-    // Tìm "@xxx" đang gõ dở NGAY TRƯỚC con trỏ -- @ phải đứng đầu dòng/ngay sau khoảng trắng (giống
-    // quy ước mention thật, tránh khớp nhầm email a@b) và không được có khoảng trắng nào sau nó.
+    // @ phải đứng đầu dòng/ngay sau khoảng trắng (tránh khớp nhầm email a@b) và không có khoảng trắng nào sau nó.
     function findMentionQuery() {
         var caret = inputEl.selectionStart;
         var uptoCaret = inputEl.value.slice(0, caret);
@@ -939,8 +782,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         var candidates = memberIds
             .map(function (id) { return {id: id, username: usernameById[id] || id}; })
             .filter(function (u) { return u.username.toLowerCase().indexOf(queryLower) === 0; });
-        // Nhóm (>2 thành viên) mới có "Tất cả mọi người" -- DM chỉ 2 người thì @tên đối phương là đủ,
-        // "mention all" trong DM vô nghĩa.
+        // Chỉ nhóm (>2 thành viên) mới có "Tất cả mọi người" -- DM 2 người thì "mention all" vô nghĩa.
         if (memberIds.length >= 2 && 'all'.indexOf(queryLower) === 0) {
             candidates.unshift({id: 'all', username: 'all', label: 'Tất cả mọi người'});
         }
@@ -961,17 +803,14 @@ function ensureConversationCard(conversationId, label, subtitle) {
             nameEl.innerText = u.label || u.username;
             row.appendChild(avatarEl);
             row.appendChild(nameEl);
-            // mousedown (không phải click) + preventDefault -- giữ nguyên focus/con trỏ trong ô nhập,
-            // không thì textarea bị blur TRƯỚC khi click kịp bắn, làm mất đúng vị trí "@query" cần thay.
+            // mousedown (không phải click) + preventDefault -- giữ focus trong ô nhập, không thì textarea bị blur trước khi click kịp bắn.
             row.onmousedown = function (e) { e.preventDefault(); confirmMentionSelect(i); };
             mentionSuggestEl.appendChild(row);
         });
         mentionSuggestEl.classList.add('show');
         renderMentionSuggestHighlight();
     }
-    // Đăng ký TRƯỚC handler "Enter = gửi" bên dưới -- Enter/Tab/mũi tên khi popup đang mở phải được
-    // bắt Ở ĐÂY (điều hướng/chọn gợi ý) và chặn KHÔNG cho handler gửi tin chạy tiếp
-    // (stopImmediatePropagation), thay vì vừa chọn mention vừa lỡ gửi luôn tin nhắn.
+    // Đăng ký TRƯỚC handler "Enter = gửi" bên dưới -- Enter/Tab/mũi tên khi popup mở phải chặn handler gửi tin chạy tiếp (stopImmediatePropagation), tránh vừa chọn mention vừa lỡ gửi tin.
     inputEl.addEventListener('keydown', function (e) {
         if (mentionQueryStart < 0) return;
         if (e.key === 'ArrowDown') {
@@ -993,23 +832,18 @@ function ensureConversationCard(conversationId, label, subtitle) {
         }
     });
     inputEl.addEventListener('blur', function () {
-        // Trễ 1 nhịp -- click chọn gợi ý dùng mousedown+preventDefault nên KHÔNG tự blur, nhưng vẫn
-        // chừa lưới an toàn cho các cách rời focus khác (Tab ra ngoài, bấm nút khác...).
+        // Trễ 1 nhịp làm lưới an toàn cho các cách rời focus khác (Tab, bấm nút khác...) -- click chọn gợi ý đã tự tránh blur qua mousedown+preventDefault ở trên.
         setTimeout(hideMentionSuggest, 120);
     });
 
-    // Enter = gửi, Shift+Enter = xuống dòng -- đúng quy ước Messenger/Zalo/Slack/Discord. <textarea>
-    // mặc định Enter LUÔN xuống dòng, phải preventDefault() để chặn hành vi đó khi KHÔNG giữ Shift.
+    // Enter = gửi, Shift+Enter = xuống dòng -- <textarea> mặc định Enter luôn xuống dòng nên phải preventDefault() khi không giữ Shift.
     inputEl.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMsg();
         }
     });
-    // Báo "đang gõ" cho các thành viên khác -- throttle (không gửi mỗi keystroke), im lặng bỏ qua
-    // nếu socket chưa sẵn sàng (best-effort, không phải luồng chính).
-    // pase LINK TRAN vao o nhap thi trigger pha slugify moi (giong Slack chat.slugifyUrl/khong goi
-    // la slugifyUrl thi client tu regex) -- khong phai user go tay từng ky tu van spams cap hall
+    // Báo "đang gõ" throttle theo TYPING_THROTTLE_MS (không gửi mỗi keystroke), im lặng bỏ qua nếu socket chưa sẵn sàng (best-effort).
     inputEl.addEventListener('input', function () {
         autoGrowComposeInput();
         updateSendButtonState();
@@ -1022,10 +856,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         send({type: 'TYPING', id: newId(), conversationId: conversationId});
     });
 
-    // stickToBottom mặc định true -- card MỚI tạo (chưa có tin nào) coi như "đang ở đáy", tin đầu
-    // tiên thêm vào (dù nạp lịch sử hay tin sống) tự cuộn xuống bình thường, không cần chờ tính toán
-    // hình học trên 1 log rỗng (scrollHeight/clientHeight đều 0 lúc này, isNearBottom() sẽ luôn đúng
-    // vậy thôi nhưng đặt tường minh cho dễ đọc).
+    // stickToBottom mặc định true -- card mới tạo coi như "đang ở đáy" nên tin đầu tiên tự cuộn xuống bình thường.
     // Reply bar (nằm trong .composeCard, trên .composeRow) -- hiện khi pendingReplyTo != null
     var replyBarEl = document.createElement('div');
     replyBarEl.className = 'replyBar';
@@ -1061,19 +892,14 @@ function ensureConversationCard(conversationId, label, subtitle) {
     };
     entry._setPendingReply = setPendingReply;
     entry.clearPendingReply = clearPendingReply;
-    // Đo lại mốc chiều cao .conv-send NGAY LÚC card thật sự hiện ra (gọi từ selectConversation, sau
-    // classList.add('active')) -- offsetHeight ở đây là phép đo ĐỒNG BỘ (ép layout ngay lập tức), lấy
-    // đúng kích thước THẬT của compose box tại đúng thời điểm này, KHÔNG phụ thuộc lần ResizeObserver
-    // báo đầu tiên (có thể đã gộp lẫn 1 thay đổi thật của người dùng, xem chú thích composeResizeObserver
-    // phía trên) -- cắt đứt hẳn khả năng "gõ dòng đầu tiên bị nuốt mất, không bao giờ được bù".
+    // Đo lại mốc .conv-send NGAY lúc card hiện ra (gọi từ selectConversation) -- offsetHeight đồng bộ ở đây tránh phụ thuộc lần ResizeObserver báo đầu tiên có thể đã gộp mất thay đổi thật (xem composeResizeObserver phía trên).
     entry.resetComposeSendBaseline = function () { lastConvSendHeight = convSendEl.offsetHeight; };
     conversations[conversationId] = entry;
     updateConvHeadPresence(conversationId);
     return entry;
 }
 
-// Dòng hệ thống (sys) -- xác nhận subscribe, thông báo tạo conversation... KHÔNG phải tin nhắn chat
-// thật, xem appendMessageBubble cho tin nhắn thật (bong bóng chat).
+// Dòng hệ thống (sys) -- xác nhận subscribe, thông báo tạo conversation..., không phải tin nhắn chat thật (xem appendMessageBubble cho bong bóng chat).
 function logToConversation(conversationId, text, cssClass) {
     var entry = ensureConversationCard(conversationId, 'Conversation');
     var line = document.createElement('div');
@@ -1083,15 +909,10 @@ function logToConversation(conversationId, text, cssClass) {
     if (entry.stickToBottom !== false) smoothScrollToBottom(entry.logEl);
 }
 
-// Gom nhóm tin liên tiếp CÙNG người gửi + gửi gần nhau (giống Messenger/Slack: bớt lặp avatar/tên,
-// giãn cách hẹp hơn) -- ngưỡng thời gian, không phải "liên tiếp về vị trí DOM" (để không bị vỡ nhóm
-// bởi dòng "sys" xen giữa, vd "✓ subscribe thành công"). Theo dõi qua entry.lastMessageMeta thay vì
-// dò lại DOM (rẻ hơn, không cần đọc lại phần tử cuối cùng mỗi lần).
+// Gom nhóm tin liên tiếp cùng người gửi trong ngưỡng thời gian (không phải "liên tiếp về vị trí DOM", để dòng "sys" xen giữa không làm vỡ nhóm). Theo dõi qua entry.lastMessageMeta thay vì dò lại DOM.
 var GROUP_WINDOW_MS = 5 * 60 * 1000;
 
-// "Hôm nay"/"Hôm qua"/ngày cụ thể -- ngưỡng so theo NGÀY DƯƠNG LỊCH thật (00:00 local), không phải
-// "cách nhau 24 tiếng" (2 tin lúc 23h50 và 00h10 hôm sau CÁCH NHAU 20 phút nhưng vẫn là 2 ngày khác
-// nhau, phải có vạch ngăn).
+// So theo NGÀY DƯƠNG LỊCH thật (00:00 local), không phải "cách nhau 24 tiếng" -- 23h50 và 00h10 hôm sau vẫn là 2 ngày khác nhau, phải có vạch ngăn.
 function formatDateDivider(tsEpochMillis) {
     var d = new Date(tsEpochMillis);
     var now = new Date();
@@ -1104,10 +925,7 @@ function formatDateDivider(tsEpochMillis) {
     return d.toLocaleDateString('vi-VN', opts);
 }
 
-// Chèn 1 vạch ngăn ngày mới vào log NẾU tin này khác ngày với tin gần nhất đã vẽ (hoặc là tin ĐẦU
-// TIÊN của cả conversation) -- trả về true nếu VỪA chèn (để appendMessageBubble biết mà cắt nhóm
-// gộp, xem lời gọi). entry.lastDividerDateKey theo dõi RIÊNG, tách khỏi entry.lastMessageMeta (dùng
-// cho gom nhóm theo cửa sổ thời gian) vì 2 khái niệm "cùng ngày" và "cùng nhóm 5 phút" độc lập nhau.
+// Trả về true nếu vừa chèn vạch ngăn ngày (để appendMessageBubble cắt nhóm gộp). entry.lastDividerDateKey tách riêng khỏi entry.lastMessageMeta vì "cùng ngày" và "cùng nhóm 5 phút" là 2 khái niệm độc lập.
 function maybeInsertDateDivider(entry, tsEpochMillis) {
     var d = new Date(tsEpochMillis);
     var dateKey = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
@@ -1120,41 +938,27 @@ function maybeInsertDateDivider(entry, tsEpochMillis) {
     return true;
 }
 
-// Mọi conversation (DM lẫn nhóm) đều dùng CHUNG 1 kiểu hiển thị: bong bóng chat kiểu Facebook
-// Messenger (buildDmBubbleRow) -- theo đúng yêu cầu: "bỏ giao diện chat nhóm khác chat riêng đi, làm
-// giống chat riêng ấy". Kiểu phẳng (Slack) riêng cho nhóm trước đây đã bị bỏ hoàn toàn.
+// Mọi conversation (DM lẫn nhóm) đều dùng chung 1 kiểu hiển thị bong bóng Messenger (buildDmBubbleRow) -- theo yêu cầu bỏ giao diện chat nhóm kiểu Slack riêng, làm giống chat riêng.
 function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, messageId, seen, reactions, deleted) {
     var entry = ensureConversationCard(conversationId, 'Conversation');
-    // 1 tin có thể tới trùng qua 2 đường (vd đang lazy-load maybeLoadNewer đúng lúc tin đó cũng vừa
-    // được đẩy sống qua WS) -- vẽ trùng row đã xấu, còn khiến entry.totalUnreadCount CỘNG TRÙNG. Bỏ
-    // qua thẳng nếu id này đã render rồi, message không có id (hiếm, coi như luôn vẽ) thì bỏ qua kiểm tra.
+    // Tin có thể tới trùng qua 2 đường (lazy-load đúng lúc tin đó cũng vừa đẩy sống qua WS) -- bỏ qua nếu id đã render rồi, tránh vẽ trùng row và cộng trùng totalUnreadCount.
     if (messageId && entry.renderedMessageIds.has(messageId)) return;
     if (messageId) entry.renderedMessageIds.add(messageId);
     var mine = fromUserId === myUserId;
-    // Vạch ngăn ngày mới ("Hôm nay"/"Hôm qua"/ngày cụ thể) -- thứ hay thiếu khiến list tin trông
-    // "phẳng lì" như 1 khối chữ vô tận, không có mốc thời gian nào để mắt bám vào. Sang ngày mới LUÔN
-    // cắt nhóm (dù cùng người gửi, cách nhau vài giây) -- không ai mong "tiếp tục" 1 nhóm tin từ hôm
-    // qua sang hôm nay, kể cả kỹ thuật gộp theo GROUP_WINDOW_MS có cho phép.
+    // Sang ngày mới LUÔN cắt nhóm (dù cùng người gửi, cách nhau vài giây) -- không ai mong nhóm tin từ hôm qua "tiếp tục" sang hôm nay.
     var dateInserted = maybeInsertDateDivider(entry, tsEpochMillis);
     var prev = entry.lastMessageMeta;
     var grouped = !dateInserted && !!prev && prev.fromUserId === fromUserId && tsEpochMillis >= prev.ts && (tsEpochMillis - prev.ts) < GROUP_WINDOW_MS;
     entry.lastMessageMeta = {fromUserId: fromUserId, ts: tsEpochMillis};
 
-    // Ảnh/video chưa biết chiều cao thật lúc vừa gắn vào DOM (chưa tải xong -- <img>/<video> cao 0px
-    // tới khi có dữ liệu thật), nên scrollTop tính theo scrollHeight ngay lúc đó NGẮN hơn thật --
-    // đã gặp thật: gửi ảnh xong khung chat không tự cuộn xuống, kể cả sau khi reload (coi ảnh như
-    // "vô hình" vì chưa tải xong lúc tính). Phải cuộn lại LẦN NỮA sau khi media báo đã có kích thước
-    // thật (onMediaReady, xem renderMessageContent) -- CHỈ khi đang neo đáy (stickToBottom), không thì
-    // ảnh tải xong xong lúc đang đọc tin cũ hơn phía trên sẽ giật mất chỗ đang xem.
+    // Ảnh/video cao 0px tới khi tải xong nên scrollTop tính lúc gắn DOM bị ngắn hơn thật (bug thật đã gặp: gửi ảnh xong không tự cuộn xuống) -- phải cuộn lại khi media báo có kích thước thật (onMediaReady), chỉ khi đang neo đáy.
     var onMediaReady = function () {
         if (entry.stickToBottom) smoothScrollToBottom(entry.logEl);
         positionMsgActions(row, mine);
     };
 
     var row = buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped, onMediaReady);
-    // Hiệu ứng "nảy" (xem @keyframes messageIn) CHỈ cho tin sống thật sự mới tới -- suppressAutoScroll
-    // chỉ true trong lúc đang nạp HÀNG LOẠT từ lịch sử (loadHistory/maybeLoadOlder/maybeLoadNewer, xem
-    // các chỗ gán cờ này), tin sống qua WS luôn nạp riêng lẻ với cờ false.
+    // Hiệu ứng "nảy" chỉ cho tin sống mới tới -- suppressAutoScroll chỉ true khi đang nạp hàng loạt từ lịch sử.
     if (!entry.suppressAutoScroll) row.classList.add('liveIn');
 
     if (messageId) {
@@ -1175,17 +979,13 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
             var snip = snippetForBody(body);
             var entry2 = conversations[conversationId];
             if (entry2) {
-                // use closure pendingReplyTo via entry reference stored on card
                 var card2 = entry2.el;
-                // find the replyBar via entry
                 var rb = card2.querySelector('.replyBar');
                 if (rb) {
-                    // build replyTo from current message
                     var th1 = replyThumbForBody(body);
                     var rt = {messageId: messageId, fromUserId: fromUserId, snippet: snip};
                     if (th1 && th1.url) { rt.thumbUrl = th1.url; if (th1.isVideo) rt.thumbIsVideo = true; }
                     if (tsEpochMillis) rt.ts = tsEpochMillis;
-                    // call setPendingReply via stored function on entry
                     if (entry2._setPendingReply) entry2._setPendingReply(rt);
                     else { entry2.pendingReplyToRef(rt); rb.querySelector('.replyBarName').innerText = 'Tr\u1ea3 l\u1eddi ' + displayName(fromUserId); rb.querySelector('.replyBarSnippet').innerText = snip; rb.classList.add('show'); }
                     var inp = card2.querySelector('.composeInput');
@@ -1199,7 +999,6 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
             deleteMessage(conversationId, messageId);
         };
     }
-    // render reply quote inside bubble (before media/text)
     if (body && body.replyTo) {
         var bubbleEl2 = row.querySelector('.bubble');
         if (bubbleEl2) bubbleEl2.insertBefore(buildReplyQuoteEl(body.replyTo, conversationId), bubbleEl2.firstChild);
@@ -1209,61 +1008,32 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
 
     entry.logEl.appendChild(row);
 
-    // "Đã đọc" (READ) CHỈ gửi khi tin THỰC SỰ lọt vào khung nhìn (IntersectionObserver, xem
-    // ensureConversationCard) -- áp dụng như nhau cho tin sống VÀ tin nạp lại từ lịch sử (kể cả đoạn
-    // "chưa đọc" nạp lúc mở lại conversation, xem loadHistory): quan sát vẫn hoạt động đúng dù card
-    // đang ẩn (conversation khác đang mở) -- trình duyệt tự báo intersect khi card đó được hiện ra
-    // sau này và tin nằm trong vùng nhìn thấy, không cần code riêng cho "vừa chuyển sang xem".
-    //
-    // KHÔNG dùng cờ "seen" trả về từ API để quyết định có quan sát hay không -- "seen" nghĩa là "CÓ
-    // AI KHÁC người gửi (bất kỳ ai) đã đọc chưa" (xem MessageHistoryRegistry#listMessages), không
-    // phải "CHÍNH MÌNH đã đọc chưa" -- trong nhóm >2 người, 1 tin có thể đã được người khác đọc
-    // (seen=true) dù mình chưa từng thấy nó, dùng "seen" ở đây sẽ bỏ sót không gửi READ của mình.
-    // entry.skipReadTracking: cờ tạm CHỈ bật khi nạp đoạn lịch sử ĐÃ CHẮC CHẮN mình đọc rồi (đoạn
-    // "before" con trỏ đã đọc, xem loadHistory) -- nạp NHỮNG TIN ĐÓ không cần quan sát lại.
-    //
-    // Thêm vào entry.unreadIdSet NGAY (KHÔNG phụ thuộc suppressAutoScroll) -- Set này CHỈ để biết
-    // đang "chờ observer" đúng những tin nào (phục vụ readObserver.observe/unobserve), KHÔNG dùng
-    // size() để hiển thị số nữa (xem updateJumpBadge) -- số hiển thị lấy từ entry.totalUnreadCount,
-    // khởi tạo CHÍNH XÁC từ server (GET /read-cursor) lúc mở lại, xem loadAroundReadCursor.
+    // READ chỉ gửi khi tin thực sự lọt readObserver -- KHÔNG dùng cờ "seen" API để quyết định vì nó nghĩa "có AI KHÁC đã đọc chưa", không phải "chính mình đã đọc chưa" (trong nhóm >2 người seen=true dù mình chưa từng thấy tin). entry.skipReadTracking bật khi nạp đoạn lịch sử đã chắc chắn mình đọc rồi.
     var trackRead = !!(messageId && !deleted && !mine && !entry.skipReadTracking);
     if (trackRead) {
         entry.unreadIdSet.add(messageId);
         entry.readObserver.observe(row);
-        // CHỈ cộng thêm khi đây là tin SỐNG thật sự mới tới (suppressAutoScroll luôn false ở đường
-        // tin sống qua WS) -- lazy-load nạp tiếp phần vốn đã nằm trong entry.totalUnreadCount ban đầu
-        // (server đã đếm luôn phần đó rồi, xem loadAroundReadCursor/maybeLoadNewer) thì KHÔNG được
-        // cộng thêm lần nữa, không thì số sẽ tăng gấp đôi so với thực tế.
+        // Chỉ cộng khi là tin SỐNG mới tới -- lazy-load nạp lại phần đã nằm trong totalUnreadCount ban đầu (server đã đếm rồi) thì không cộng thêm, tránh tăng gấp đôi.
         if (!entry.suppressAutoScroll) entry.totalUnreadCount = (entry.totalUnreadCount || 0) + 1;
     }
 
-    // suppressAutoScroll: đang giữa 1 đợt nạp lịch sử/nạp thêm hàng loạt (xem loadHistory,
-    // maybeLoadNewer) -- vị trí cuộn do CHÍNH nơi gọi tự quyết định (neo vào tin/vạch "chưa đọc", hay
-    // đứng yên tuyệt đối không đụng tới nếu chỉ là nạp ngầm thêm), không để từng dòng tự cuộn theo
-    // kiểu tin SỐNG thường (mine luôn cuộn xuống, theirs cuộn xuống nếu đang neo đáy).
+    // suppressAutoScroll: đang giữa 1 đợt nạp lịch sử hàng loạt -- vị trí cuộn do nơi gọi tự quyết định, không để từng dòng tự cuộn theo kiểu tin sống thường.
     if (!entry.suppressAutoScroll) {
         if (mine) {
-            // Tự gửi thì LUÔN neo xuống đáy để thấy ngay tin vừa gửi -- kể cả đang cuộn lên đọc tin cũ.
             entry.stickToBottom = true;
             smoothScrollToBottom(entry.logEl);
         } else if (entry.stickToBottom) {
             smoothScrollToBottom(entry.logEl);
         } else if (trackRead) {
-            // Tin mới tới trong lúc đang đọc tin cũ hơn -- không tự cuộn (sẽ giật mất chỗ đang xem),
-            // chỉ báo qua nút "xuống cuối" (đã add vào unreadIdSet ở trên), tự bấm mới cuộn xuống xem.
             bumpJumpBadge(entry);
         }
     }
 
-    // PHẢI đo/canh cụm nút SAU khi row đã lên DOM thật (getBoundingClientRect cần layout thật).
+    // Phải đo/canh cụm nút SAU khi row đã lên DOM thật (getBoundingClientRect cần layout thật).
     if (messageId) positionMsgActions(row, mine);
     entry.lastGroupRow = row;
 
-    // PHẢI vẽ reaction SAU khi row đã gắn vào DOM (appendChild ở trên) -- renderReactions tìm phần
-    // tử qua document.querySelector, một node vừa tạo bằng createElement() nhưng CHƯA appendChild
-    // thì chưa nằm trong cây DOM thật, querySelector sẽ không thấy (tìm ra null, âm thầm bỏ qua,
-    // không báo lỗi gì cả) -- đã gặp thật: reaction nạp từ lịch sử (GET /messages) không bao giờ
-    // hiện ra dù dữ liệu trong DB đúng, đúng vì gọi renderReactions() TRƯỚC dòng appendChild này.
+    // Phải vẽ reaction SAU khi appendChild -- renderReactions tìm qua querySelector, node chưa lên DOM thật sẽ tìm ra null và âm thầm bỏ qua (bug thật đã gặp: reaction từ lịch sử không bao giờ hiện ra).
     if (messageId && reactions && reactions.length) {
         reactionsByMessageId[messageId] = {};
         reactions.forEach(function (r) { reactionsByMessageId[messageId][r.userId] = r.emoji; });
@@ -1276,11 +1046,7 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
     }
 }
 
-// Bong bóng chat kiểu Facebook Messenger (bo tròn đều, phẳng, không viền/đổ bóng) -- DÙNG CHUNG cho
-// DM lẫn nhóm: avatar + tên (chỉ "theirs") + nội dung + giờ, avatar/giờ "trôi" xuống đúng dòng cuối
-// cùng của 1 khối gộp liên tiếp cùng người gửi (xem entry.lastGroupRow trong appendMessageBubble).
-// Trả về row CHƯA gắn vào DOM -- appendMessageBubble tự appendChild + gọi positionMsgActions (cần
-// layout thật).
+// Bong bóng kiểu Messenger dùng chung cho DM lẫn nhóm -- avatar/giờ "trôi" xuống dòng cuối cùng của 1 khối gộp (xem entry.lastGroupRow). Trả về row chưa gắn DOM -- caller tự appendChild + positionMsgActions.
 function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped, onMediaReady) {
     var row = document.createElement('div');
     row.className = 'bubble-row ' + (mine ? 'mine' : 'theirs') + (grouped ? ' grouped' : '');
@@ -1302,18 +1068,12 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         var senderColor = avatarColor(fromUserId);
         avatarEl.style.background = senderColor;
         avatarEl.innerText = avatarInitial(name);
-        // Kiểu Messenger: TÊN chỉ hiện ở tin ĐẦU nhóm (trên cùng). Avatar/giờ xử lý chung bên dưới.
-        // Tô màu tên theo avatarColor() (kiểu Discord) -- hữu ích nhất trong nhóm đông người (phân
-        // biệt ai nói gì); với DM chỉ có đúng 1 người "theirs" nên luôn ra cùng 1 màu, vô hại.
+        // Tên chỉ hiện ở tin đầu nhóm. Tô màu tên theo avatarColor() (kiểu Discord) -- hữu ích nhất trong nhóm đông người, với DM vô hại vì chỉ 1 người "theirs".
         if (grouped) nameEl.style.display = 'none'; else { nameEl.innerText = name; nameEl.style.color = senderColor; }
     }
-    // onMediaReady (từ appendMessageBubble) vừa cuộn lại khung chat, vừa canh lại nút react SAU KHI
-    // media tải xong kích thước thật -- không thì nút bị lệch vì bubble còn cao 0px lúc đo.
     renderMessageContent(row.querySelector('.bubble'), body, onMediaReady);
     row.querySelector('.bubble-time-text').innerText = formatTime(tsEpochMillis);
-    // AVATAR + GIỜ chỉ hiện ở tin CUỐI khối gộp (dòng mới nhất) -- vì thêm dần theo thời gian (chưa
-    // biết trước "đây có phải cuối nhóm không" lúc vừa vẽ), mỗi khi có tin mới CÙNG nhóm thì ẩn
-    // avatar/giờ của dòng vừa mất "ngôi mới nhất" đi, để chúng luôn "trôi" xuống đúng dòng cuối cùng.
+    // Avatar/giờ chỉ hiện ở tin cuối khối gộp -- mỗi khi có tin mới cùng nhóm thì ẩn avatar/giờ của dòng vừa mất "ngôi mới nhất", để chúng luôn trôi xuống đúng dòng cuối.
     if (grouped && entry.lastGroupRow) {
         var prevTimeEl = entry.lastGroupRow.querySelector('.bubble-time');
         if (prevTimeEl) prevTimeEl.style.display = 'none';
@@ -1321,42 +1081,21 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
             var prevAvatarEl = entry.lastGroupRow.querySelector('.avatar');
             if (prevAvatarEl) prevAvatarEl.style.visibility = 'hidden';
         }
-        // Dòng TRƯỚC giờ biết là có tin theo sau (chính dòng này) -- bo phẳng góc DƯỚI của nó (xem CSS .has-next).
-        entry.lastGroupRow.classList.add('has-next');
+        entry.lastGroupRow.classList.add('has-next'); // bo phẳng góc dưới vì có tin theo sau (xem CSS .has-next)
     }
     return row;
 }
 
-// Canh cụm nút (.msg-actions -- thả cảm xúc, + xoá nếu là tin của mình) đúng chính giữa chiều cao
-// CỦA BUBBLE (không phải cả .bubble-row) và cách đúng REACT_BTN_GAP_PX so với mép bubble -- CHỈ dùng
-// cho bong bóng DM (nhóm dùng vị trí tĩnh cố định qua CSS .msg-actions, không cần đo). Không dùng CSS
-// tĩnh được vì bubble-col có thể có phần tử khác RỘNG HƠN bubble (tên người gửi dài, giờ+dấu đã xem),
-// canh theo hàng sẽ lệch xa khỏi bubble thật. Đo CHÍNH cụm (offsetWidth) thay vì hằng số cố định --
-// cụm có thể rộng 1 nút (chỉ react) hoặc 2 nút (react + xoá, khi là tin của mình).
+// Canh .msg-actions chính giữa chiều cao CỦA BUBBLE (không phải cả .bubble-row) -- không dùng CSS tĩnh được vì bubble-col có thể có phần tử khác rộng hơn bubble (tên dài, giờ+seen), canh theo hàng sẽ lệch khỏi bubble thật.
 var REACT_BTN_GAP_PX = 10;
-// Khớp .linkPreviewCard{max-width:320px} và .bubble-col{max-width:68%} (xem CSS) -- phải tự nhân tay
-// ở đây thay vì đọc lại từ CSS, xem chú thích trong positionMsgActions.
+// Khớp .linkPreviewCard{max-width:320px} và .bubble-col{max-width:68%} trong CSS -- phải tự nhân tay ở đây, xem positionMsgActions.
 var LINK_PREVIEW_MAX_W = 320;
 var BUBBLE_COL_MAX_RATIO = 0.68;
 function positionMsgActions(row, mine) {
     var actionsEl = row.querySelector('.msg-actions');
     var bubbleEl = row.querySelector('.bubble');
     if (!actionsEl || !bubbleEl) return;
-    // Card preview link (.linkPreviewCard/.skeleton, xem renderMessageContent) dùng width:100% cho
-    // <img>/thanh skeleton bên trong -- % đó chỉ resolve đúng khi CHÍNH .bubble có sẵn 1 width XÁC
-    // ĐỊNH (px). .bubble bình thường tự co theo nội dung (shrink-to-fit, để tin ngắn giữ bubble hẹp) --
-    // nhưng shrink-to-fit + %-width con là vòng lặp kinh điển: trình duyệt không biết trước <img> rộng
-    // bao nhiêu nên tạm coi như 0, khiến card co gần về 0 lúc CHƯA tải ảnh xong rồi "nở" đột ngột lúc
-    // tải xong -- ngược hẳn ý muốn (card preview phải luôn rộng tối đa cho phép, không co theo độ dài
-    // URL, giống Messenger/Telegram). Gán THẲNG 1 width cố định (px) để cắt đứt vòng lặp này.
-    // PHẢI làm Ở ĐÂY (không phải lúc renderMessageContent build card): positionMsgActions là chỗ DUY
-    // NHẤT chắc chắn chạy SAU KHI row đã lên DOM thật -- renderMessageContent chạy lúc row còn
-    // detached (buildDmBubbleRow build xong mới trả cho caller appendChild), getComputedStyle trên
-    // node detached trả về CHUỖI RỖNG (đã kiểm chứng thực tế). Kể cả đo được max-width của .bubble-col
-    // lúc đã gắn DOM, trình duyệt cũng trả nguyên chuỗi "68%" chứ KHÔNG tự resolve ra px cho property
-    // này -- nên tự nhân tay theo rowRect (đã full-width/xác định, xem CSS .bubble-row) thay vì đọc lại
-    // từ CSS. Chỉ tính 1 LẦN (đánh dấu qua dataset) vì hàm này bị gọi lại nhiều lần cho cùng 1 bubble
-    // (lúc mount, rồi lại mỗi khi ảnh/card đổi -- xem onMediaReady trong renderLinkPreview*).
+    // Gán width cố định (px) cho bubble chứa link preview NGAY ĐÂY (row đã lên DOM thật; lúc renderMessageContent build card thì row còn detached nên getComputedStyle trả rỗng) -- phá vòng lặp shrink-to-fit/%-width khiến card co về 0 rồi "nở" đột ngột lúc ảnh tải xong. Chỉ tính 1 lần qua dataset vì hàm này bị gọi lại nhiều lần.
     if (bubbleEl.classList.contains('media-only') && bubbleEl.querySelector('.linkPreviewCard') && !bubbleEl.dataset.linkWidthFixed) {
         var rowWidthNow = row.getBoundingClientRect().width;
         bubbleEl.style.width = Math.min(LINK_PREVIEW_MAX_W, rowWidthNow * BUBBLE_COL_MAX_RATIO) + 'px';
@@ -1375,8 +1114,7 @@ function positionMsgActions(row, mine) {
     }
 }
 
-// Cập nhật hiển thị "đã gửi/đã xem" cho 1 tin CỦA CHÍNH MÌNH -- ✓/✓✓ ngắn gọn cạnh giờ, đúng kiểu
-// Messenger (dùng chung cho cả DM lẫn nhóm, xem buildDmBubbleRow).
+// Cập nhật hiển thị "đã gửi/đã xem" (✓/✓✓) cho 1 tin của chính mình, kiểu Messenger.
 function updateSeenDisplay(row, seen) {
     var seenEl = row.querySelector('.seen-status');
     if (!seenEl) return;
@@ -1384,9 +1122,7 @@ function updateSeenDisplay(row, seen) {
     seenEl.classList.toggle('seen', seen);
 }
 
-// Nhận frame SEEN (ai đó vừa xem 1 tin) -- chỉ có ý nghĩa cho bubble "mine" (tin CHÍNH MÌNH gửi):
-// tìm đúng row theo messageId, đổi ✓ (đã gửi) thành ✓✓ (đã xem). Tìm trong TOÀN BỘ #chatMain (kể cả
-// card không đang active) vì có thể xem lúc đang mở conversation khác.
+// Nhận frame SEEN -- tìm row trong TOÀN BỘ #chatMain (kể cả card không active) vì có thể xem lúc đang mở conversation khác.
 function handleSeenReceived(conversationId, messageId) {
     if (!messageId) return;
     var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
