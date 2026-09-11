@@ -42,7 +42,7 @@ local function create_directory_recursive(directory_path)
     end
 end
 
-local upload_folder = "/home/luklak/v2/"
+local upload_folder = "/home/pingo/v2/"
 local file_path = upload_folder .. file_resp.data.path
 local file_id = file_resp.data.id
 local ok, err1 = create_directory_recursive(file_path)

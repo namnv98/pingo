@@ -22,7 +22,7 @@ local file_name = file_resp.data.id
 local file_path = file_resp.data.path
 local file_mime = file_resp.data.mime
 
-local source_path = "/home/luklak/v2/" .. file_path
+local source_path = "/home/pingo/v2/" .. file_path
 local source_fname = source_path .. file_name
 
 -- make sure the file exists

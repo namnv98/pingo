@@ -778,7 +778,36 @@ function renderConvSection(container, title, icon, list) {
     container.appendChild(section);
 }
 
-// Tách DM/Nhóm thành 2 khối kiểu Slack "Direct messages"/"Channels" -- map đúng 1-1 với model dữ liệu thật.
+// Gắn sao 1 cuộc trò chuyện -- thuần tuỳ biến RIÊNG của người xem (giống getConversationBackground),
+// không phải dữ liệu chung của cả cuộc trò chuyện nên không cần lưu server/đồng bộ giữa các thành
+// viên, lưu thẳng localStorage là đủ (mất khi đổi trình duyệt/máy, chấp nhận được).
+var STARRED_STORAGE_KEY = 'pingoStarredConversations_v1';
+function loadStarredSet() {
+    try { return JSON.parse(localStorage.getItem(STARRED_STORAGE_KEY)) || {}; } catch (e) { return {}; }
+}
+function isConversationStarred(conversationId) {
+    return !!loadStarredSet()[conversationId];
+}
+function setConversationStarred(conversationId, starred) {
+    var set = loadStarredSet();
+    if (starred) set[conversationId] = true; else delete set[conversationId];
+    try { localStorage.setItem(STARRED_STORAGE_KEY, JSON.stringify(set)); } catch (e) { /* gắn sao chỉ là tiện ích phụ -- bỏ qua lặng lẽ nếu localStorage đầy */ }
+}
+// Gọi từ .starBtn trong conv-head (xem ensureConversationCard) -- cập nhật cả nút vừa bấm lẫn vẽ lại sidebar.
+function toggleConversationStarred(conversationId) {
+    var starred = !isConversationStarred(conversationId);
+    setConversationStarred(conversationId, starred);
+    var entry = conversations[conversationId];
+    if (entry) {
+        var btn = entry.el.querySelector('.starBtn');
+        btn.classList.toggle('active', starred);
+        btn.title = starred ? 'Bỏ gắn sao' : 'Gắn sao';
+    }
+    renderConversationList(lastConvList);
+}
+
+// Chỉ tách 2 khối: "Đã gắn sao" (nổi lên đầu) và phần còn lại (KHÔNG còn tách riêng DM/Nhóm nữa --
+// gộp chung 1 danh sách, đúng thứ tự hoạt động gần đây như server trả về).
 // Ô tìm kiếm luôn hiện sẵn, thay nút kính lúp cũ vốn không làm gì (đã bỏ, cùng kiểu "nút chết" ở ô nhập tin).
 var conversationSearchTerm = '';
 function renderConversationList(list) {
@@ -791,13 +820,12 @@ function renderConversationList(list) {
     hintEl.innerText = term
         ? 'Không tìm thấy hội thoại nào khớp "' + conversationSearchTerm.trim() + '".'
         : 'Chưa có cuộc hội thoại nào — tạo mới ở trên, hoặc chờ ai đó nhắn cho bạn.';
-    var dms = [], groups = [];
+    var starred = [], rest = [];
     filtered.forEach(function (conv) {
-        var others = conv.memberUserIds.filter(function (id) { return id !== myUserId; });
-        (others.length === 1 ? dms : groups).push(conv);
+        (isConversationStarred(conv.conversationId) ? starred : rest).push(conv);
     });
-    renderConvSection(container, 'Nhắn tin trực tiếp', ICON.mail, dms);
-    renderConvSection(container, 'Nhóm', ICON.users, groups);
+    renderConvSection(container, 'Đã gắn sao', ICON.star, starred);
+    rest.forEach(function (conv) { container.appendChild(buildConvListItem(conv)); });
 }
 document.getElementById('conversationSearchInput').addEventListener('input', function (e) {
     conversationSearchTerm = e.target.value;

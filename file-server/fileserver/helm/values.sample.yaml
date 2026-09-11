@@ -1,6 +1,6 @@
 static01:
   imageId: nnv98/legofile:1.1,1
-  uploadFolder: /home/luklak/v2/
+  uploadFolder: /home/pingo/v2/
   upload:
     max: 20m
   ingress:

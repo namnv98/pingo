@@ -432,6 +432,11 @@
         .conv-head .headRight { display: flex; align-items: center; gap: 2px; flex: none; }
         .conv-head .headRight button.icon { border-color: transparent; background: none; padding: 6px 8px; font-size: 13px; }
         .conv-head .headRight button.icon:hover { background: var(--canvas); border-color: var(--line); }
+        /* Đã gắn sao -- tô đặc icon (fill, không chỉ viền) màu vàng, đúng ngôn ngữ "star" quen thuộc
+           (Gmail/GitHub...). svg gốc (ICON.star) khai fill="none" trên chính thẻ <svg> -- polygon con
+           không tự có fill riêng nên kế thừa fill tính toán từ CSS này bình thường (không phải attribute). */
+        .starBtn.active { color: #f5a623; }
+        .starBtn.active svg { fill: currentColor; }
         .conv-head .badge { font-weight: 400; color: var(--ink-faint); font-size: 11px; font-family: ui-monospace, monospace; white-space: nowrap; margin-right: 4px; }
         .conv-head .titleBlock { min-width: 0; }
         /* Group không đặt tên riêng -- convLabel = nối tên TẤT CẢ thành viên (conversationLabel()) --

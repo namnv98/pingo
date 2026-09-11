@@ -319,7 +319,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<div class="subtitle"></div><div class="online-status"></div></div></div>' +
         '<div class="headRight">' +
         '<span class="badge">' + conversationId.substring(0, 8) + '…</span>' +
-        '<button class="icon" disabled title="Demo chưa hỗ trợ ghim">' + ICON.star + '</button>' +
+        '<button class="icon starBtn" title="Gắn sao">' + ICON.star + '</button>' +
         '<button class="icon renameBtn" title="Đổi tên riêng">' + ICON.edit + '</button>' +
         '<button class="icon bgBtn" title="Đổi hình nền &amp; màu chat">' + ICON.image + '</button>' +
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
@@ -346,6 +346,10 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '</div></div>';
     card.querySelector('.renameBtn').onclick = function () { renameConversation(conversationId); };
     card.querySelector('.deleteBtn').onclick = function () { deleteConversation(conversationId); };
+    var starBtnEl = card.querySelector('.starBtn');
+    starBtnEl.classList.toggle('active', isConversationStarred(conversationId));
+    starBtnEl.title = isConversationStarred(conversationId) ? 'Bỏ gắn sao' : 'Gắn sao';
+    starBtnEl.onclick = function () { toggleConversationStarred(conversationId); };
     card.querySelector('.subtitle').innerText = subtitle || '';
     document.getElementById('chatMain').appendChild(card);
 
