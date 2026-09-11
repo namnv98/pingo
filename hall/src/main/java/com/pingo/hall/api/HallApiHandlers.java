@@ -391,13 +391,22 @@ public class HallApiHandlers {
   }
 
   /**
-   * {@code DELETE /conversations?conversationId=<uuid>} — xoá HẲN 1 conversation cho MỌI thành
-   * viên (không phải "rời khỏi" chỉ riêng mình): xoá messages, notifications, tên riêng (nếu có),
-   * rồi conversation_members liên quan tới conversationId đó, theo đúng thứ tự (dọn dữ liệu phụ
-   * thuộc trước). Chỉ thành viên hiện tại mới xoá được (403 nếu không phải, 404 nếu conversationId
-   * không tồn tại/đã bị xoá).
+   * {@code DELETE /conversations?conversationId=<uuid>} — xoá 1 conversation cho MỌI thành viên
+   * (không phải "rời khỏi" chỉ riêng mình). Chỉ thành viên hiện tại mới xoá được (403 nếu không phải,
+   * 404 nếu conversationId không tồn tại/đã bị xoá).
    *
-   * <p>Không bọc transaction ACID xuyên 4 bảng — các lệnh DELETE tuần tự, cùng mức best-effort với
+   * <p><b>{@code conversation_members} bị xoá THẬT (hard-delete)</b> — đây mới là bước làm
+   * conversation thực sự "biến mất" khỏi mọi nơi (mọi truy vấn — {@code listConversationsForUser},
+   * {@code isMember} — đều xét theo bảng này). {@code messages} chỉ bị XOÁ MỀM (xem
+   * {@link MessageHistoryRegistry#deleteForConversation}), tên/ảnh riêng ({@code conversations} row)
+   * và {@code notifications} vẫn xoá thật như cũ. 5 bảng phụ khác còn lại ({@code message_reads},
+   * {@code message_reactions}, {@code message_pins_shared}, {@code message_pins_private}, {@code
+   * message_links}, {@code files}) CHƯA được dọn ở đây — cố tình để lại (mồ côi tạm thời, vô hại vì
+   * conversation đã "biến mất" theo {@code conversation_members} rồi) cho 1 job dọn dẹp định kỳ RIÊNG
+   * (chưa viết) quét sạch toàn bộ — bao gồm cả {@code messages} đã xoá mềm ở trên — theo
+   * conversationId không còn dòng nào trong {@code conversation_members}.
+   *
+   * <p>Không bọc transaction ACID xuyên các bảng — các lệnh tuần tự, cùng mức best-effort với
    * {@code persistMessage}/{@code publishNotificationCandidates} bên colony (mỗi lệnh tự
    * idempotent, chạy lại an toàn nếu 1 bước giữa chừng lỗi mạng — không rủi ro như INSERT trùng lặp).
    */

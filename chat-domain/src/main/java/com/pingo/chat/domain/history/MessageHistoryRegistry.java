@@ -123,9 +123,23 @@ public class MessageHistoryRegistry {
         .thenApply(io.vertx.sqlclient.RowSet::rowCount));
   }
 
-  /** Xoá TOÀN BỘ tin nhắn của 1 conversationId — xem {@code HallApiHandlers#deleteConversation}. */
+  /**
+   * XOÁ MỀM toàn bộ tin nhắn của 1 conversationId (đặt {@code deleted_at}, tái dùng đúng cơ chế soft-
+   * delete từng tin lẻ đã có sẵn — xem {@link #markDeleted}) — KHÔNG {@code DELETE} thật nữa, xem
+   * {@code HallApiHandlers#deleteConversation}. Trước đây hard-delete thẳng, nhưng chỉ riêng bảng này
+   * — 6 bảng khác cũng tham chiếu conversationId/messageId của conversation đó ({@code message_reads},
+   * {@code message_reactions}, {@code message_pins_shared}, {@code message_pins_private}, {@code
+   * message_links}, {@code files}) và {@code notifications} KHÔNG hề được dọn theo (loose-schema,
+   * không FK/cascade) — thành rác mồ côi vĩnh viễn dù có xoá {@code messages} hard hay không. Đổi
+   * sang xoá mềm ở đây để ít nhất tin nhắn (dữ liệu nhạy cảm nhất) được ẩn khỏi API NGAY (danh sách
+   * thành viên — {@code conversation_members} — vẫn bị xoá THẬT ngay lúc xoá conversation nên
+   * conversation biến mất khỏi mọi nơi truy vấn theo membership) trong lúc chờ 1 job dọn dẹp định kỳ
+   * riêng (chưa viết) quét sạch — bằng hard-DELETE thật — cả 7 bảng nói trên cho những conversationId
+   * không còn dòng nào trong {@code conversation_members} nữa.
+   */
   public CompletionStage<Void> deleteForConversation(UUID conversationId) {
-    return supplier.execute(conn -> conn.preparedQuery("DELETE FROM messages WHERE conversation_id = ?")
+    return supplier.execute(conn -> conn.preparedQuery(
+            "UPDATE messages SET deleted_at = now() WHERE conversation_id = ? AND deleted_at IS NULL")
         .execute(Tuple.of(conversationId))
         .toCompletionStage()
         .thenApply(unused -> null));
