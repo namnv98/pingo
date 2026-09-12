@@ -36,6 +36,3 @@ bin/
 
 ### Mac OS ###
 .DS_Store
-
-### Config override chua secret that (vd Firebase serviceAccountJson) -- KHONG duoc commit, xem herald/src/main/resources/app.local.yaml.example ###
-**/app.local.yaml
