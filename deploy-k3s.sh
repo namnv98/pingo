@@ -1,3 +1,6 @@
+# cd /home/namnv/IdeaProjects/pingo/frontend
+# python3 -m http.server 8000
+
 
 #!/usr/bin/env bash
 
