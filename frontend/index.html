@@ -220,6 +220,10 @@
 <script src="assets/js/messaging-core.js"></script>
 <script src="assets/js/compose-reactions-pins.js"></script>
 <script src="assets/js/messages-render.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js"></script>
+<script src="assets/js/push-notifications.js"></script>
+<!-- history-ws.js CUỐI CÙNG -- nó tự gọi enterApp() ngay lúc load nếu còn token (xem cuối file), phải chạy sau khi mọi hàm enterApp() cần (initPushNotifications, v.v.) đã được định nghĩa. -->
 <script src="assets/js/history-ws.js"></script>
 </body>
 </html>

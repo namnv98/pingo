@@ -792,6 +792,7 @@ function enterApp() {
     refreshUserList();
     refreshConversationList();
     loadNotifications(); // đồng bộ badge chuông thông báo ngay lúc vào app (xem history-ws.js)
+    initPushNotifications(); // xin quyền + đăng ký token FCM của thiết bị này (xem push-notifications.js)
     connect();
 }
 

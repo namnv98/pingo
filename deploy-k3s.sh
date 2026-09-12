@@ -55,11 +55,16 @@
 #
 #   NAMESPACE=default
 #   IMAGE_TAG=local
+#   FIREBASE_SERVICE_ACCOUNT_FILE=   (optional -- duong dan LOCAL toi file service-account JSON tai
+#                                      tu Firebase Console, xem herald/helm/templates/deployment.yml
+#                                      + HeraldAppModule#resolveFirebaseServiceAccountJson. Khong set
+#                                      thi bo qua, push FCM o che do no-op, KHONG loi.)
 #
 # Example:
 #
 #   IMAGE_TAG=dev ./deploy-k3s.sh
 #   NAMESPACE=pingo IMAGE_TAG=local ./deploy-k3s.sh
+#   FIREBASE_SERVICE_ACCOUNT_FILE=/home/me/Downloads/app-firebase-adminsdk.json ./deploy-k3s.sh
 #
 # One-time local registry setup:
 #
@@ -834,6 +839,40 @@ ensure_postgres() {
 
 
 # ============================================================================
+# 12b. FIREBASE SECRET (OPTIONAL -- push FCM that, xem herald/helm/templates/deployment.yml)
+#
+# Tao/cap nhat k8s Secret "herald-firebase" tu file service-account JSON tren MAY LOCAL cua ban
+# (KHONG commit file do vao git) neu FIREBASE_SERVICE_ACCOUNT_FILE duoc set va ton tai. Bo qua
+# (khong loi) neu khong set/khong ton tai -- pod herald van len binh thuong nho volume Secret
+# "optional: true", PushService tu chuyen sang che do no-op (xem
+# HeraldAppModule#resolveFirebaseServiceAccountJson).
+# ============================================================================
+
+ensure_firebase_secret() {
+
+  if [ -z "${FIREBASE_SERVICE_ACCOUNT_FILE:-}" ]; then
+    log "FIREBASE_SERVICE_ACCOUNT_FILE khong duoc set -- bo qua Secret herald-firebase (push FCM se o che do no-op)."
+    return
+  fi
+
+  if [ ! -f "$FIREBASE_SERVICE_ACCOUNT_FILE" ]; then
+    warn "FIREBASE_SERVICE_ACCOUNT_FILE=${FIREBASE_SERVICE_ACCOUNT_FILE} khong ton tai -- bo qua Secret herald-firebase."
+    return
+  fi
+
+  log "Tao/cap nhat Secret herald-firebase tu ${FIREBASE_SERVICE_ACCOUNT_FILE} (namespace=${NAMESPACE})..."
+
+  # create --dry-run=client -o yaml | apply -f - : idempotent, chay lai nhieu lan khong loi
+  # "already exists" nhu "kubectl create" thuan, cung tu cap nhat neu file JSON doi.
+  kubectl create secret generic herald-firebase \
+    -n "$NAMESPACE" \
+    --from-file=serviceAccountJson.json="$FIREBASE_SERVICE_ACCOUNT_FILE" \
+    --dry-run=client -o yaml \
+    | kubectl apply -f -
+}
+
+
+# ============================================================================
 # 13. DEPLOY HELM
 #
 # Each module:
@@ -1097,6 +1136,7 @@ fi
 if [ "$DO_DEPLOY" -eq 1 ]; then
   ensure_hazelcast_cluster
   ensure_postgres
+  ensure_firebase_secret
   deploy_helm
   print_summary
 fi

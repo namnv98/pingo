@@ -28,6 +28,14 @@ spec:
         - name: hazelcast-files-cfm
           configMap:
             name: hazelcast-files-cfm
+        # Secret Firebase Admin SDK (push FCM that, xem HeraldAppModule#resolveFirebaseServiceAccountJson)
+        # -- "optional: true" de pod van len binh thuong khi chua tao Secret nay (PushService tu
+        # chuyen sang che do no-op), tao bang:
+        #   kubectl create secret generic herald-firebase --from-file=serviceAccountJson.json=<file-tai-tu-Firebase-Console>
+        - name: firebase-secret
+          secret:
+            secretName: herald-firebase
+            optional: true
 #      imagePullSecrets:
 #        - name: {{ .Values.global.dockerImagePullSecret }}
       containers:
@@ -39,6 +47,9 @@ spec:
               mountPath: /config
             - name: hazelcast-files-cfm
               mountPath: /hazelcast-files
+            - name: firebase-secret
+              mountPath: /secrets/firebase
+              readOnly: true
           env:
             - name: CONFIG_FILE
               value: /config/app.yaml

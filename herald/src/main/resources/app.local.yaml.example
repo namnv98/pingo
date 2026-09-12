@@ -1,0 +1,50 @@
+# Copy file nay thanh "app.local.yaml" (cung thu muc, da gitignore -- xem .gitignore) roi dien
+# firebase.serviceAccountJson that vao ban COPY do, KHONG dien vao app.yaml (file dang track git).
+#
+# Cach lay serviceAccountJson: Firebase Console -> project cua ban -> bieu tuong banh rang
+# "Project settings" -> tab "Service accounts" -> nut "Generate new private key" -> tai ve 1 file
+# JSON. Dan NGUYEN VAN noi dung file JSON do vao duoi day (dung block scalar "|" nhu mau, giu
+# nguyen indentation) thay cho serviceAccountJson: "" ben duoi.
+#
+# Chay herald voi file nay bang bien moi truong CONFIG_FILE (xem HeraldBoot.CONFIG_FILE_ENV), vi du:
+#   CONFIG_FILE=$(pwd)/herald/src/main/resources/app.local.yaml mvn -pl herald exec:java
+# hoac set CONFIG_FILE trong Run/Debug configuration cua IntelliJ cho main class HeraldBoot.
+hazelcast:
+  file: herald/src/main/resources/hazelcast-local.xml
+  props: { }
+publicHttp:
+  tags: public
+  port: 8090
+  path:
+  headers:
+    content-type: application/json
+  printStackTrace: false
+authTokenSecret: pingo-local-dev-auth-secret
+
+database:
+  parsedUri:
+    databaseType: postgres
+    scheme: steady
+    addresses:
+      - localhost:31005
+    path: pingo
+    user: pingo
+    password: pingo-local-dev
+    params:
+      maxSize: 8
+      maxWaitQueueSize: 256
+
+firebase:
+  serviceAccountJson: |
+    {
+      "type": "service_account",
+      "project_id": "...",
+      "private_key_id": "...",
+      "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+      "client_email": "...",
+      "client_id": "...",
+      "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+      "token_uri": "https://oauth2.googleapis.com/token",
+      "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+      "client_x509_cert_url": "..."
+    }

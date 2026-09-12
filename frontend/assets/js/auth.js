@@ -62,6 +62,7 @@ function register() { doAuth('/register'); }
 function logout() {
     identityConfirmed = false; // truoc khi close() de ws.onclose khong tu retry
     if (ws) { ws.close(); ws = null; }
+    unregisterPushToken(); // TRƯỚC clearAuth() -- cần authToken còn hợp lệ để gọi DELETE /push-tokens (xem push-notifications.js)
     clearAuth();
     conversations = {};
     activeConversationId = null;

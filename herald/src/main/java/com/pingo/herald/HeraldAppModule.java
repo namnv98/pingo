@@ -28,7 +28,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @AllArgsConstructor
 public class HeraldAppModule extends AbstractModule {
 
@@ -80,17 +82,29 @@ public class HeraldAppModule extends AbstractModule {
   }
 
   /**
-   * Credentials Firebase Admin SDK đọc từ {@code config.getFirebase().getServiceAccountJson()}
-   * (nguyên văn nội dung file JSON service account, xem javadoc {@code LegoConfig1.FirebaseConfig})
-   * — cùng cách config khác của herald (app.yaml/ConfigMap). Thiếu/rỗng giá trị này KHÔNG làm crash
-   * herald — {@link PushService} tự chuyển sang chế độ no-op (notifications vẫn lưu DB/đọc qua
-   * {@code GET /notifications} bình thường, chỉ riêng bước gửi push thật bị bỏ qua + log rõ).
+   * File secret Firebase Admin SDK khi chạy trên k3s -- mount qua k8s Secret {@code herald-firebase}
+   * (xem herald/helm/templates/deployment.yml, volume "firebase-secret", {@code optional: true} nên
+   * THIẾU secret KHÔNG làm crash pod, chỉ file không tồn tại). Dùng file thay vì nhét JSON vào
+   * ConfigMap (biến {@code config.getFirebase().getServiceAccountJson()} bên dưới) vì JSON chứa
+   * dấu nháy kép + PEM nhiều dòng rất dễ vỡ escape lúc nhúng vào YAML/env var -- đọc thẳng file
+   * mount tránh hẳn vấn đề đó.
+   */
+  private static final String FIREBASE_SERVICE_ACCOUNT_FILE = "/secrets/firebase/serviceAccountJson.json";
+
+  /**
+   * Credentials Firebase Admin SDK -- ưu tiên đọc file mount {@link #FIREBASE_SERVICE_ACCOUNT_FILE}
+   * (cách dùng lúc chạy trên k3s, xem javadoc field đó); không có file thì fallback về
+   * {@code config.getFirebase().getServiceAccountJson()} (nguyên văn nội dung JSON đặt thẳng trong
+   * config -- dùng lúc chạy local bằng {@code mvn exec:java} với {@code app.local.yaml} riêng,
+   * KHÔNG commit, xem app.yaml). Thiếu/rỗng cả 2 nguồn KHÔNG làm crash herald -- {@link PushService}
+   * tự chuyển sang chế độ no-op (notifications vẫn lưu DB/đọc qua {@code GET /notifications} bình
+   * thường, chỉ riêng bước gửi push thật bị bỏ qua + log rõ).
    */
   @SneakyThrows
   @Provides
   @Singleton
   private PushService pushService(PushTokenRegistry pushTokens) {
-    var serviceAccountJson = config.getFirebase() == null ? null : config.getFirebase().getServiceAccountJson();
+    var serviceAccountJson = resolveFirebaseServiceAccountJson();
     if (serviceAccountJson == null || serviceAccountJson.isBlank()) {
       return PushService.disabled(pushTokens);
     }
@@ -99,6 +113,18 @@ public class HeraldAppModule extends AbstractModule {
     var firebaseApp = FirebaseApp.initializeApp(options);
     var executor = new FirebaseMessageExecutor(FirebaseMessaging.getInstance(firebaseApp));
     return new PushService(executor, pushTokens);
+  }
+
+  private String resolveFirebaseServiceAccountJson() {
+    var file = new java.io.File(FIREBASE_SERVICE_ACCOUNT_FILE);
+    if (file.isFile()) {
+      try {
+        return java.nio.file.Files.readString(file.toPath(), StandardCharsets.UTF_8);
+      } catch (java.io.IOException e) {
+        log.warn("failed to read firebase service account file at {} -- falling back to inline config", FIREBASE_SERVICE_ACCOUNT_FILE, e);
+      }
+    }
+    return config.getFirebase() == null ? null : config.getFirebase().getServiceAccountJson();
   }
 
   @Provides
