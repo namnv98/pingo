@@ -192,6 +192,16 @@ function buildReplyQuoteEl(replyTo, conversationId) {
     q.onclick = function(e){ e.stopPropagation(); jumpToMessage(conversationId, replyTo.messageId, replyTo.ts); };
     return q;
 }
+// Badge "Đã chuyển tiếp" -- cùng khuôn buildReplyQuoteEl() ở trên (insertBefore vào đầu .bubble),
+// nhưng KHÔNG click-to-jump được (không đảm bảo tin gốc còn tồn tại/mình còn quyền xem conversation
+// gốc, khác reply luôn cùng 1 conversation với chính nó).
+function buildForwardedBadgeEl(forwardedFrom) {
+    var b = document.createElement('div');
+    b.className = 'forwarded-badge';
+    b.innerHTML = '<i class="fa-solid fa-share-from-square"></i><span></span>';
+    b.querySelector('span').innerText = 'Đã chuyển tiếp';
+    return b;
+}
 function ensureAppModal(){
     var ov = document.getElementById('appModalOverlay');
     if (ov) return ov;

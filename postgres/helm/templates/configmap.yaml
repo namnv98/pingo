@@ -18,6 +18,10 @@ data:
     -- xem REAL_TIME_MESSAGING.md) -- chua co code nao dung toi trong dot nay, nhung them index
     -- ngay tu dau gan nhu khong ton chi phi gi, tranh phai them sau tren bang da co du lieu.
     CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members (user_id);
+    -- Tat/bat thong bao rieng cua TUNG thanh vien cho 1 conversation (khac name/avatar o duoi -- 2
+    -- cot do dung chung cho MOI thanh vien, con muted la state rieng tu cua chinh dong nay). Doc lai
+    -- o ChatSessionManager#createNotification/#publishNotificationCandidates de chan notification/push.
+    ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT false;
 
     -- Ten rieng (tuy chon) cho 1 conversation, dung chung cho MOI thanh vien (khac ban dau chi luu
     -- localStorage rieng tung trinh duyet) -- xem ConversationMembershipRegistry#upsertName,

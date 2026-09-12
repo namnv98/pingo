@@ -169,6 +169,153 @@ function closeSearchModal() {
     if (overlay) overlay.classList.remove('show');
 }
 
+// --- modal "Chuyển tiếp tin nhắn" -- cùng khuôn ensureSearchModal() ở trên, list lấy thẳng từ
+// lastConvList đã có sẵn trong bộ nhớ (không cần fetch lại GET /conversations).
+function ensureForwardModal() {
+    var overlay = document.getElementById('forwardModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'forwardModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal forwardModal">' +
+        '<div class="bgPickerHead"><span>Chuyển tiếp tin nhắn</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="forwardModalPreview"></div>' +
+        '<div class="forwardModalList"></div>' +
+        '</div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeForwardModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeForwardModal(); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('forwardModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeForwardModal();
+});
+
+function openForwardModal(sourceConversationId, messageId, body, fromUserId) {
+    var overlay = ensureForwardModal();
+    var previewEl = overlay.querySelector('.forwardModalPreview');
+    previewEl.innerHTML = '<span class="forwardModalPreviewLabel">Đang chuyển tiếp</span><span class="forwardModalPreviewSnippet"></span>';
+    previewEl.querySelector('.forwardModalPreviewSnippet').innerText = snippetForBody(body);
+    var listEl = overlay.querySelector('.forwardModalList');
+    listEl.innerHTML = '';
+    lastConvList.forEach(function (conv) {
+        var row = document.createElement('div');
+        row.className = 'conv-list-item forwardModalRow';
+        row.innerHTML = '<span class="avatar-wrap"><span class="avatar"></span></span>' +
+            '<span class="info"><div class="convTopRow"><span class="label"></span></div></span>';
+        applyAvatar(row.querySelector('.avatar'), conversationAvatar(conv));
+        row.querySelector('.label').innerText = conversationLabel(conv);
+        row.onclick = function () {
+            var forwardedBody = {
+                message: body && body.message,
+                files: body && body.files,
+                forwardedFrom: {messageId: messageId, fromUserId: fromUserId, conversationId: sourceConversationId}
+            };
+            sendChatMessage(conv.conversationId, forwardedBody);
+            closeForwardModal();
+        };
+        listEl.appendChild(row);
+    });
+    overlay.classList.add('show');
+}
+
+function closeForwardModal() {
+    var overlay = document.getElementById('forwardModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
+// --- modal "Thêm thành viên" -- cùng khuôn UX với picker "Tạo group" (#newConvPanel groupTab ở
+// auth.js: ô tìm theo tên phía trên, list avatar+checkbox ở giữa, chân hiện "đã chọn N" + nút xác
+// nhận) thay vì tự nghĩ layout riêng -- tái dùng buildUserRow()/knownUsers đã có sẵn.
+function ensureAddMemberModal() {
+    var overlay = document.getElementById('addMemberModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'addMemberModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal addMemberModal">' +
+        '<div class="bgPickerHead"><span>Thêm thành viên</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="addMemberSearchWrap"><span class="addMemberSearchIcon"></span>' +
+        '<input type="text" class="addMemberSearchInput" placeholder="Tìm người theo tên..."></div>' +
+        '<div class="userList addMemberModalList"></div>' +
+        '<div class="addMemberModalFoot">' +
+        '<span class="addMemberModalCount">chưa chọn ai</span>' +
+        '<button type="button" class="appModalBtn primary addMemberModalConfirmBtn" disabled>Thêm</button>' +
+        '</div></div></div>';
+    overlay.querySelector('.addMemberSearchIcon').innerHTML = ICON.search;
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeAddMemberModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeAddMemberModal(); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('addMemberModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeAddMemberModal();
+});
+
+function openAddMemberModal(conv) {
+    var overlay = ensureAddMemberModal();
+    var listEl = overlay.querySelector('.addMemberModalList');
+    var searchInputEl = overlay.querySelector('.addMemberSearchInput');
+    var countEl = overlay.querySelector('.addMemberModalCount');
+    var confirmBtnEl = overlay.querySelector('.addMemberModalConfirmBtn');
+    var selected = [];
+    function syncFoot() {
+        confirmBtnEl.disabled = selected.length === 0;
+        confirmBtnEl.innerText = selected.length === 0 ? 'Thêm' : 'Thêm (' + selected.length + ')';
+        countEl.innerText = selected.length === 0 ? 'chưa chọn ai' : 'đã chọn ' + selected.length + ' người';
+    }
+    function renderList() {
+        var query = searchInputEl.value.trim().toLowerCase();
+        listEl.innerHTML = '';
+        knownUsers
+            .filter(function (u) { return u.id !== myUserId && conv.memberUserIds.indexOf(u.id) === -1; })
+            .filter(function (u) { return !query || u.username.toLowerCase().indexOf(query) !== -1; })
+            .forEach(function (u) {
+                var row = buildUserRow(u, true);
+                if (selected.indexOf(u.id) !== -1) row.classList.add('selected');
+                row.onclick = function () {
+                    var idx = selected.indexOf(u.id);
+                    if (idx === -1) selected.push(u.id); else selected.splice(idx, 1);
+                    row.classList.toggle('selected', idx === -1);
+                    syncFoot();
+                };
+                listEl.appendChild(row);
+            });
+    }
+    searchInputEl.value = '';
+    searchInputEl.oninput = renderList;
+    renderList();
+    syncFoot();
+    confirmBtnEl.onclick = function () {
+        fetch(HISTORY_API_BASE + '/conversations/members?conversationId=' + encodeURIComponent(conv.conversationId), {
+            method: 'POST',
+            headers: {'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json'},
+            body: JSON.stringify({memberUserIds: selected})
+        })
+            .then(function (res) {
+                if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+                closeAddMemberModal();
+                refreshConversationList();
+            })
+            .catch(function (err) {
+                appAlert('thêm thành viên lỗi: ' + err.message, 'Lỗi');
+            });
+    };
+    overlay.classList.add('show');
+    searchInputEl.focus();
+}
+
+function closeAddMemberModal() {
+    var overlay = document.getElementById('addMemberModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
 function runGlobalSearch(term) {
     fetchJson('/messages/search?q=' + encodeURIComponent(term), true)
         .then(function (results) {
@@ -415,6 +562,12 @@ function renderInfoPanel(conversationId) {
     document.getElementById('infoConvIdValue').innerText = conv.conversationId.substring(0, 8) + '…';
     document.getElementById('infoTypeValue').innerText = isGroupConv ? 'Nhóm' : 'Nhắn tin trực tiếp';
     document.getElementById('infoActivityValue').innerText = relativeTime(conv.lastMessageAt);
+    // Thêm thành viên: cho phép cả với DM (2 người) -- thêm 1 người thứ 3 vào biến nó thành group
+    // tự nhiên, đúng với việc isGroupConv chỉ suy từ SỐ LƯỢNG thành viên, không có cột "type" riêng.
+    var addMemberBtnEl = document.getElementById('infoAddMemberBtn');
+    addMemberBtnEl.style.display = '';
+    addMemberBtnEl.innerHTML = ICON.plus || '+';
+    addMemberBtnEl.onclick = function (e) { e.stopPropagation(); openAddMemberModal(conv); };
 
     var sorted = conv.memberUserIds.slice().sort(function (a, b) {
         var aOnline = a === myUserId || !!onlineUserIds[a];
@@ -436,7 +589,8 @@ function renderInfoPanel(conversationId) {
         var row = document.createElement('div');
         row.className = 'infoMemberRow';
         row.innerHTML = '<span class="avatar-wrap"><span class="avatar"></span><span class="status-dot' + (online ? ' online' : '') + '"></span></span><span class="name"></span>' +
-            '<span class="roleBadge ' + (online ? 'online">Online' : 'offline">Offline') + '</span>';
+            '<span class="roleBadge ' + (online ? 'online">Online' : 'offline">Offline') + '</span>' +
+            (isGroupConv && !isMe ? '<button type="button" class="icon infoMemberRemoveBtn fa-solid fa-xmark" title="Xoá khỏi nhóm"></button>' : '');
         var memberImageUrl = userAvatarUrl(id);
         applyAvatar(row.querySelector('.avatar'), memberImageUrl ? {imageUrl: memberImageUrl} : {color: avatarColor(id), initial: avatarInitial(displayName(id))});
         var nameEl = row.querySelector('.name');
@@ -447,6 +601,8 @@ function renderInfoPanel(conversationId) {
             you.innerText = ' (bạn)';
             nameEl.appendChild(you);
         }
+        var removeBtnEl = row.querySelector('.infoMemberRemoveBtn');
+        if (removeBtnEl) removeBtnEl.onclick = function (e) { e.stopPropagation(); removeConversationMember(conv.conversationId, id); };
         listEl.appendChild(row);
     });
 }
@@ -782,6 +938,45 @@ function deleteConversation(conversationId) {
     });
 }
 
+// Tự rời nhóm -- khác deleteConversation (xoá cho MỌI thành viên), ở đây chỉ chính mình biến mất
+// khỏi conversation, các thành viên khác không bị ảnh hưởng. Dùng chung endpoint với "kick" (server
+// không phân biệt), chỉ khác userId truyền lên là CHÍNH mình.
+function leaveConversation(conversationId) {
+    var entry = conversations[conversationId];
+    var label = entry ? entry.label : conversationId.substring(0, 8) + '…';
+    appConfirm('Rời khỏi "' + label + '"? Bạn sẽ không còn thấy cuộc trò chuyện này nữa.', {title: 'Rời nhóm', confirmText: 'Rời nhóm', cancelText: 'Huỷ', danger: true}).then(function (ok) { if (!ok) return;
+    fetch(HISTORY_API_BASE + '/conversations/members?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(myUserId), {
+        method: 'DELETE',
+        headers: {'Authorization': 'Bearer ' + authToken}
+    })
+        .then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            removeConversationLocally(conversationId);
+        })
+        .catch(function (err) {
+            appAlert('rời nhóm lỗi: ' + err.message, 'Lỗi');
+        });
+    });
+}
+
+// Kick 1 thành viên KHÁC ra khỏi nhóm (không phải tự rời -- xem leaveConversation) -- gọi từ nút
+// "✕" trên từng row trong #infoMemberList (renderInfoPanel).
+function removeConversationMember(conversationId, userId) {
+    appConfirm('Xoá "' + displayName(userId) + '" khỏi nhóm này?', {title: 'Xoá thành viên', confirmText: 'Xoá', cancelText: 'Huỷ', danger: true}).then(function (ok) { if (!ok) return;
+    fetch(HISTORY_API_BASE + '/conversations/members?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(userId), {
+        method: 'DELETE',
+        headers: {'Authorization': 'Bearer ' + authToken}
+    })
+        .then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            refreshConversationList();
+        })
+        .catch(function (err) {
+            appAlert('xoá thành viên lỗi: ' + err.message, 'Lỗi');
+        });
+    });
+}
+
 // Dùng chung cho cả 2 đường: tự mình xoá (sau khi server xác nhận) và người khác xoá (nhận qua WS CONVERSATION_DELETED) -- không gọi thêm API ở đây.
 function removeConversationLocally(conversationId) {
     var entry = conversations[conversationId];
@@ -829,12 +1024,13 @@ function buildConvListItem(conv) {
     item.className = 'conv-list-item' + (conv.conversationId === activeConversationId ? ' active' : '') + (isUnread ? ' unread' : '');
     item.innerHTML =
         '<span class="avatar-wrap"><span class="avatar"></span><span class="status-dot"></span></span>' +
-        '<span class="info"><div class="convTopRow"><span class="label"></span><span class="time"></span></div><div class="meta"></div></span>' +
+        '<span class="info"><div class="convTopRow"><span class="label"></span><i class="convMutedIcon fa-solid fa-bell-slash" style="display:none"></i><span class="time"></span></div><div class="meta"></div></span>' +
         '<span class="unreadBadge"></span>';
     var avatarEl = item.querySelector('.avatar');
     applyAvatar(avatarEl, avatar);
     item.querySelector('.status-dot').classList.toggle('online', isOnline);
     item.querySelector('.label').innerText = label;
+    item.querySelector('.convMutedIcon').style.display = conv.muted ? '' : 'none';
     item.querySelector('.time').innerText = relativeTime(conv.lastMessageAt);
     var metaEl = item.querySelector('.meta');
     var preview = conversationLastMessagePreview(conv);
@@ -877,6 +1073,14 @@ function buildConvListItem(conv) {
         }
         var subtitleEl = entry.el.querySelector('.subtitle');
         if (subtitleEl && subtitleEl.innerText !== subtitle) subtitleEl.innerText = subtitle;
+        // Đồng bộ mute (server-authoritative, có thể đổi từ tab/thiết bị khác) + hiện/ẩn "Rời nhóm" (chỉ group, không DM).
+        var muteBtnEl2 = entry.el.querySelector('.muteBtn');
+        if (muteBtnEl2) {
+            muteBtnEl2.classList.toggle('active', !!conv.muted);
+            muteBtnEl2.title = conv.muted ? 'Bật lại thông báo' : 'Tắt thông báo';
+        }
+        var leaveBtnEl2 = entry.el.querySelector('.leaveBtn');
+        if (leaveBtnEl2) leaveBtnEl2.style.display = others.length > 1 ? '' : 'none';
     }
     return item;
 }
@@ -917,6 +1121,26 @@ function toggleConversationStarred(conversationId) {
         btn.title = starred ? 'Bỏ gắn sao' : 'Gắn sao';
     }
     renderConversationList(lastConvList);
+}
+
+// Tắt/bật thông báo riêng 1 conversation -- KHÁC gắn sao (thuần localStorage): phải đồng bộ đa
+// thiết bị + chặn được notification/push ở server (xem ChatSessionManager#createNotification/
+// #publishNotificationCandidates), nên gọi server-authoritative qua PUT /conversations/mute thay
+// vì lưu localStorage. Gọi từ .muteBtn trong conv-head (xem ensureConversationCard).
+function toggleConversationMuted(conversationId) {
+    var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
+    var newMuted = !(conv && conv.muted);
+    fetch(HISTORY_API_BASE + '/conversations/mute?conversationId=' + encodeURIComponent(conversationId) + '&muted=' + newMuted, {
+        method: 'PUT',
+        headers: {'Authorization': 'Bearer ' + authToken}
+    })
+        .then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            refreshConversationList();
+        })
+        .catch(function (err) {
+            appAlert('đổi trạng thái thông báo lỗi: ' + err.message, 'Lỗi');
+        });
 }
 
 // Chỉ tách 2 khối: "Đã gắn sao" (nổi lên đầu) và phần còn lại (KHÔNG còn tách riêng DM/Nhóm nữa --

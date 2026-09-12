@@ -420,8 +420,10 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<span class="badge">' + conversationId.substring(0, 8) + '…</span>' +
         '<button class="icon searchToggleBtn" title="Tìm trong đoạn chat">' + ICON.search + '</button>' +
         '<button class="icon starBtn" title="Gắn sao">' + ICON.star + '</button>' +
+        '<button class="icon muteBtn fa-solid fa-bell-slash" title="Tắt thông báo"></button>' +
         '<button class="icon renameBtn" title="Đổi tên riêng">' + ICON.edit + '</button>' +
         '<button class="icon bgBtn" title="Đổi hình nền &amp; màu chat">' + ICON.image + '</button>' +
+        '<button class="icon leaveBtn fa-solid fa-right-from-bracket" title="Rời nhóm" style="display:none"></button>' +
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
         '<button class="icon infoBtn" title="Ẩn/hiện panel thông tin" onclick="toggleInfoPanel()">' + ICON.info + '</button>' +
         '</div></div>' +
@@ -453,10 +455,13 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '</div></div>';
     card.querySelector('.renameBtn').onclick = function () { renameConversation(conversationId); };
     card.querySelector('.deleteBtn').onclick = function () { deleteConversation(conversationId); };
+    card.querySelector('.leaveBtn').onclick = function () { leaveConversation(conversationId); };
     var starBtnEl = card.querySelector('.starBtn');
     starBtnEl.classList.toggle('active', isConversationStarred(conversationId));
     starBtnEl.title = isConversationStarred(conversationId) ? 'Bỏ gắn sao' : 'Gắn sao';
     starBtnEl.onclick = function () { toggleConversationStarred(conversationId); };
+    var muteBtnEl = card.querySelector('.muteBtn');
+    muteBtnEl.onclick = function () { toggleConversationMuted(conversationId); };
     card.querySelector('.subtitle').innerText = subtitle || '';
     document.getElementById('chatMain').appendChild(card);
 
@@ -1186,10 +1191,19 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
             e.stopPropagation();
             deleteMessage(conversationId, messageId);
         };
+        var forwardBtn2 = row.querySelector('.forwardBtn');
+        if (forwardBtn2) forwardBtn2.onclick = function (e) {
+            e.stopPropagation();
+            openForwardModal(conversationId, messageId, body, fromUserId);
+        };
     }
     if (body && body.replyTo) {
         var bubbleEl2 = row.querySelector('.bubble');
         if (bubbleEl2) bubbleEl2.insertBefore(buildReplyQuoteEl(body.replyTo, conversationId), bubbleEl2.firstChild);
+    }
+    if (body && body.forwardedFrom) {
+        var bubbleEl3 = row.querySelector('.bubble');
+        if (bubbleEl3) bubbleEl3.insertBefore(buildForwardedBadgeEl(body.forwardedFrom), bubbleEl3.firstChild);
     }
     if (mine) {
         updateSeenDisplay(row, !!seen);
@@ -1252,6 +1266,7 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         '</div>' +
         '<div class="msg-actions"><button type="button" class="replyBtn fa-solid fa-reply" title="Trả lời"></button><button type="button" class="react-btn fa-solid fa-face-smile" title="Thả cảm xúc"></button>' +
         '<button type="button" class="pinBtn fa-solid fa-thumbtack" title="Ghim tin nhắn"></button>' +
+        '<button type="button" class="forwardBtn fa-solid fa-share-from-square" title="Chuyển tiếp"></button>' +
         (mine ? '<button type="button" class="msgDeleteBtn fa-solid fa-trash" title="Xoá tin nhắn"></button>' : '') +
         '</div>';
     if (!mine) {
@@ -1304,6 +1319,26 @@ function positionMsgActions(row, mine) {
         actionsEl.style.left = ((bubbleRect.right - rowRect.left) + REACT_BTN_GAP_PX) + 'px';
         actionsEl.style.right = 'auto';
     }
+}
+
+// positionMsgActions() tính top/left theo px THEO ĐÚNG LÚC gọi (getBoundingClientRect() của bubble
+// lúc đó) -- ổn khi mới render/hover, nhưng trở nên SAI ngay khi bề rộng .conv-log đổi sau đó (đóng/
+// mở #infoPanel qua toggleInfoPanel, hoặc tự resize cửa sổ trình duyệt): bubble tự co giãn theo CSS
+// (max-width:68% của .bubble-col) nên đổi vị trí/kích thước thật, nhưng .msg-actions vẫn đứng yên ở
+// toạ độ px cũ đã lưu trong inline style -- bug thật đã gặp: "đóng info panel xong nút hành động
+// không bám theo bong bóng nữa". Quan sát #chatMain (đổi kích thước bất kể do info panel hay do
+// chính cửa sổ) bằng 1 ResizeObserver DUY NHẤT thay vì tự bắt riêng từng nguyên nhân, rồi định vị
+// lại toàn bộ .msg-actions đang có trong card ĐANG active (card ẩn không cần, sẽ tự đúng khi
+// selectConversation() sau này, xem positionMsgActions gọi lại lúc đó).
+function repositionActiveMsgActions() {
+    var activeCard = document.querySelector('.conv.active');
+    if (!activeCard) return;
+    activeCard.querySelectorAll('.bubble-row[data-message-id]').forEach(function (row) {
+        positionMsgActions(row, row.classList.contains('mine'));
+    });
+}
+if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(repositionActiveMsgActions).observe(document.getElementById('chatMain'));
 }
 
 // Cập nhật hiển thị "đã gửi/đã xem" (✓/✓✓) cho 1 tin của chính mình, kiểu Messenger.

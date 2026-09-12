@@ -105,6 +105,54 @@ public class ConversationMembershipRegistry {
                 .collect(Collectors.toUnmodifiableSet())));
     }
 
+    /**
+     * Xoá 1 thành viên khỏi conversation — dùng chung cho CẢ "kick người khác" lẫn "tự rời nhóm"
+     * (khác biệt chỉ nằm ở tầng {@code HallApiHandlers}, không phải ở đây: cùng 1 câu DELETE, chỉ
+     * khác {@code userId} truyền vào là của ai). Xem {@code HallApiHandlers#removeConversationMember}.
+     */
+    public CompletionStage<Void> removeMember(UUID conversationId, UUID userId) {
+        return supplier.execute(conn -> conn.preparedQuery(
+                "DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?")
+            .execute(Tuple.of(conversationId, userId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    /**
+     * Bật/tắt thông báo riêng của {@code userId} cho 1 conversation — chỉ ảnh hưởng chính người
+     * đó (khác {@link #upsertName}/{@link #upsertAvatar}, dùng chung cho mọi thành viên), nên
+     * không cần broadcast EventBus nào khi đổi. Xem {@code HallApiHandlers#setConversationMuted},
+     * {@code ChatSessionManager#createNotification}/{@code #publishNotificationCandidates} (nơi
+     * đọc lại để chặn notification/push cho conversation đã mute).
+     */
+    public CompletionStage<Void> setMuted(UUID conversationId, UUID userId, boolean muted) {
+        return supplier.execute(conn -> conn.preparedQuery(
+                "UPDATE conversation_members SET muted = ? WHERE conversation_id = ? AND user_id = ?")
+            .execute(Tuple.of(muted, conversationId, userId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    /** Xem {@code ChatSessionManager#createNotification} — chặn tạo notification reply/mention/reaction cho conversation đã mute. */
+    public CompletionStage<Boolean> isMuted(UUID conversationId, UUID userId) {
+        return supplier.executeReadOnly(conn -> conn.preparedQuery(
+                "SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ? AND muted = true LIMIT 1")
+            .execute(Tuple.of(conversationId, userId))
+            .toCompletionStage()
+            .thenApply(rows -> rows.iterator().hasNext()));
+    }
+
+    /** Xem {@code ChatSessionManager#publishNotificationCandidates} — lọc bớt candidate trước khi báo herald, tránh tạo/push notification "message" cho ai đã mute conversation này. */
+    public CompletionStage<Set<UUID>> getMutedUserIds(UUID conversationId) {
+        return supplier.executeReadOnly(conn -> conn.preparedQuery(
+                "SELECT user_id FROM conversation_members WHERE conversation_id = ? AND muted = true")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage()
+            .thenApply(rows -> StreamSupport.stream(rows.spliterator(), false)
+                .map(row -> row.getUUID("user_id"))
+                .collect(Collectors.toUnmodifiableSet())));
+    }
+
     /** Xoá TOÀN BỘ membership của 1 conversationId (mọi thành viên) — xem {@code HallApiHandlers#deleteConversation}. */
     public CompletionStage<Void> deleteConversation(UUID conversationId) {
         return supplier.execute(conn -> conn.preparedQuery("DELETE FROM conversation_members WHERE conversation_id = ?")
@@ -203,13 +251,17 @@ public class ConversationMembershipRegistry {
                     + "    ) AS unread_count, "
                     + "    min(cm.created_at) AS conv_created_at, "
                     + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name, "
-                    + "    (SELECT c.avatar_file_id FROM conversations c WHERE c.id = cm.conversation_id) AS conv_avatar_file_id "
+                    + "    (SELECT c.avatar_file_id FROM conversations c WHERE c.id = cm.conversation_id) AS conv_avatar_file_id, "
+                    // Trạng thái mute CỦA RIÊNG userId đang gọi -- không phải cột chung của cm
+                    // (mỗi member có thể mute độc lập), nên phải tra lại theo đúng userId qua
+                    // scalar subquery, giống hệt cách unread_count đã đọc conversation_reads ở trên.
+                    + "    (SELECT muted FROM conversation_members WHERE conversation_id = cm.conversation_id AND user_id = ?) AS my_muted "
                     + "  FROM conversation_members cm "
                     + "  WHERE cm.conversation_id IN (SELECT conversation_id FROM conversation_members WHERE user_id = ?) "
                     + "  GROUP BY cm.conversation_id"
                     + ") t "
                     + "ORDER BY COALESCE(last_message_at, conv_created_at) DESC")
-            .execute(Tuple.of(userId, userId, userId))
+            .execute(Tuple.of(userId, userId, userId, userId))
             .toCompletionStage()
             .thenApply(rows -> {
                 var result = new JsonArray();
@@ -237,7 +289,8 @@ public class ConversationMembershipRegistry {
                             .put("lastMessageFromUserId", lastMessageFromUserId == null ? null : lastMessageFromUserId.toString())
                             .put("lastMessageDeleted", lastMessageDeleted)
                             .put("lastMessageBody", lastMessageDeleted || lastMessageBodyText == null ? null : Json.decodeValue(lastMessageBodyText))
-                            .put("unreadCount", row.getLong("unread_count")));
+                            .put("unreadCount", row.getLong("unread_count"))
+                            .put("muted", Boolean.TRUE.equals(row.getBoolean("my_muted"))));
                 }
                 return result;
             }));

@@ -524,10 +524,16 @@ public class ChatSessionManager {
     var finalFromUserId = fromUserId;
     membership
         .getMembers(conversationId)
+        .thenCompose(
+            members -> membership
+                .getMutedUserIds(conversationId)
+                .thenApply(
+                    mutedUserIds -> members.stream()
+                        .filter(id -> !id.equals(finalFromUserId) && !mutedUserIds.contains(id))
+                        .map(UUID::toString)
+                        .toList()))
         .thenAccept(
-            members -> {
-              var candidateUserIds =
-                  members.stream().filter(id -> !id.equals(finalFromUserId)).map(UUID::toString).toList();
+            candidateUserIds -> {
               if (candidateUserIds.isEmpty()) {
                 return;
               }
@@ -670,12 +676,25 @@ public class ChatSessionManager {
    */
   private void createNotification(
       UUID userId, UUID conversationId, UUID fromUserId, UUID messageId, String type, String bodyPreview, long ts, long messageTs) {
-    notifications
-        .create(UUID.randomUUID(), userId, conversationId, fromUserId, messageId, type, bodyPreview, ts, messageTs)
-        .exceptionally(ex -> {
-          logDbPoolThrottled("failed to persist " + type + " notification for message {}", conversationId, ex);
-          return null;
-        });
+    membership
+        .isMuted(conversationId, userId)
+        .thenAccept(
+            muted -> {
+              if (muted) {
+                return;
+              }
+              notifications
+                  .create(UUID.randomUUID(), userId, conversationId, fromUserId, messageId, type, bodyPreview, ts, messageTs)
+                  .exceptionally(ex -> {
+                    logDbPoolThrottled("failed to persist " + type + " notification for message {}", conversationId, ex);
+                    return null;
+                  });
+            })
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to check mute state for " + type + " notification {}", conversationId, ex);
+              return null;
+            });
   }
 
   /**

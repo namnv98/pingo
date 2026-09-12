@@ -64,6 +64,15 @@ public class HallApiHandlers {
    * client dọn UI ngay (không phải đợi tự phát hiện qua lần load lại danh sách kế tiếp).
    */
   private static final String CONVERSATION_DELETED_ADDRESS = "conversation_deleted";
+  /**
+   * Địa chỉ EventBus broadcast "user X vừa bị xoá khỏi conversation Y" (kick HOẶC tự rời — cùng 1
+   * đường, xem {@code #removeConversationMember}) — CHỈ báo cho đúng user đó (khác {@code
+   * MEMBERSHIP_CHANGED_ADDRESS}, báo cho user MỚI được thêm). Harbor lắng nghe (xem {@code
+   * RoutingVersionSync#onMemberRemoved}), relay {@code CONVERSATION_DELETED} (tái dùng nguyên type
+   * đã có — với người bị remove, hiệu ứng đúng là "conversation biến mất khỏi UI của tôi", không
+   * cần thêm type mới) cho MỌI session sống của đúng user đó.
+   */
+  private static final String MEMBER_REMOVED_ADDRESS = "conversation_member_removed";
 
   private final MessageHistoryRegistry history;
   private final UserRegistry users;
@@ -388,6 +397,136 @@ public class HallApiHandlers {
               return membership.upsertAvatar(finalConversationId, avatarFileId);
             })
         .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())));
+  }
+
+  /**
+   * {@code POST /conversations/members?conversationId=<uuid>} — body JSON {@code {memberUserIds: [...]}}.
+   * Thêm thành viên vào 1 conversation ĐÃ TỒN TẠI (khác {@link #createConversation}, luôn tạo mới)
+   * — chỉ thành viên hiện tại mới thêm được. Tái dùng nguyên {@code membership.addMembers} +
+   * {@link #publishMembershipChanged} như lúc tạo conversation, nên member mới được harbor
+   * wake-subscribe + báo {@code CONVERSATION_ADDED} y hệt.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "conversations/members", type = Type.HTTP)})
+  public CompletionStage<byte[]> addConversationMembers(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var body = parseJsonBody(request);
+    var rawMemberUserIds = body.getJsonArray("memberUserIds");
+    var newMemberUserIds = new LinkedHashSet<UUID>();
+    if (rawMemberUserIds != null) {
+      for (var raw : rawMemberUserIds) {
+        var parsed = UUIDUtils.parseOrDefault(String.valueOf(raw));
+        if (parsed != null) {
+          newMemberUserIds.add(parsed);
+        }
+      }
+    }
+    var finalConversationId = conversationId;
+    return membership
+        .isMember(finalConversationId, userId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return membership.addMembers(finalConversationId, newMemberUserIds);
+            })
+        .thenCompose(
+            newlyAdded -> newlyAdded.isEmpty() ? CompletableFuture.completedFuture((Void) null) : publishMembershipChanged(finalConversationId, newlyAdded))
+        .thenApply(
+            unused ->
+                bytes(
+                    new JsonObject()
+                        .put("conversationId", finalConversationId.toString())
+                        .put("memberUserIds", new JsonArray(new ArrayList<>(newMemberUserIds.stream().map(UUID::toString).toList())))));
+  }
+
+  /**
+   * {@code DELETE /conversations/members?conversationId=<uuid>&userId=<uuid>} — xoá 1 thành viên
+   * khỏi conversation. Dùng chung cho CẢ 2 case: kick người khác ({@code userId} != caller) lẫn tự
+   * rời nhóm ({@code userId} == caller) — server không phân biệt, chỉ khác ý nghĩa phía client.
+   * Caller phải là thành viên HIỆN TẠI (không nhất thiết phải là {@code userId} bị xoá). Nếu xoá
+   * xong conversation không còn thành viên nào, cascade-xoá cả conversation luôn (tái dùng đúng
+   * chuỗi lệnh của {@link #deleteConversation}) — tránh để lại conversation rỗng mồ côi.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "conversations/members", type = Type.HTTP)})
+  public CompletionStage<byte[]> removeConversationMember(IRequest request) {
+    var callerId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    UUID removedUserId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+      removedUserId = UUID.fromString(request.getParam("userId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId/userId");
+    }
+    var finalConversationId = conversationId;
+    var finalRemovedUserId = removedUserId;
+    return membership
+        .isMember(finalConversationId, callerId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return membership
+                  .removeMember(finalConversationId, finalRemovedUserId)
+                  .thenCompose(unused -> membership.getMembers(finalConversationId))
+                  .thenCompose(
+                      remaining -> {
+                        if (!remaining.isEmpty()) {
+                          return CompletableFuture.completedFuture((Void) null);
+                        }
+                        return history
+                            .deleteForConversation(finalConversationId)
+                            .thenCompose(unused -> notifications.deleteForConversation(finalConversationId))
+                            .thenCompose(unused -> membership.clearConversationRow(finalConversationId))
+                            .thenCompose(unused -> membership.deleteConversation(finalConversationId));
+                      });
+            })
+        .thenApply(
+            unused -> {
+              vertx
+                  .eventBus()
+                  .publish(
+                      MEMBER_REMOVED_ADDRESS,
+                      new JsonObject().put("conversationId", finalConversationId.toString()).put("removedUserId", finalRemovedUserId.toString()));
+              return bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("removedUserId", finalRemovedUserId.toString()));
+            });
+  }
+
+  /**
+   * {@code PUT /conversations/mute?conversationId=<uuid>&muted=<true|false>} — bật/tắt thông báo
+   * RIÊNG của chính người gọi cho 1 conversation (không ảnh hưởng thành viên khác, khác {@code
+   * renameConversation}/{@code setConversationAvatar} — dùng chung cho mọi người). Không broadcast
+   * EventBus nào — mute là state riêng tư, không ai khác cần biết.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/mute", type = Type.HTTP)})
+  public CompletionStage<byte[]> setConversationMuted(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var muted = Boolean.parseBoolean(request.getParam("muted"));
+    var finalConversationId = conversationId;
+    return membership
+        .isMember(finalConversationId, userId)
+        .thenCompose(
+            isMember -> {
+              if (!isMember) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              return membership.setMuted(finalConversationId, userId, muted);
+            })
+        .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("muted", muted)));
   }
 
   /**

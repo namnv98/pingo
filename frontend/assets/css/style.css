@@ -323,7 +323,7 @@
         .userList:empty::before { content: 'Không tìm thấy ai khớp'; font-size: 12px; color: var(--ink-faint); font-style: italic; padding: 18px 10px; text-align: center; }
         .userRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; cursor: pointer; transition: background .12s, border-color .12s; border: 1px solid transparent; }
         .userRow:hover { background: var(--canvas); border-color: var(--line); }
-        .userRow.selected { background: var(--accent-soft); border-color: var(--accent); }
+        .userRow.selected { background: var(--accent-soft); }
         .userRow .userRowAvatar { width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 800; }
         .userRow .userName { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .userRow .userCheck { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: transparent; flex: none; background: var(--surface); transition: background .12s, border-color .12s, color .12s; }
@@ -437,6 +437,8 @@
            không tự có fill riêng nên kế thừa fill tính toán từ CSS này bình thường (không phải attribute). */
         .starBtn.active { color: #f5a623; }
         .starBtn.active svg { fill: currentColor; }
+        .muteBtn.active { color: var(--accent); }
+        .convMutedIcon { color: var(--ink-faint); font-size: 11px; margin-right: 2px; }
         .conv-head .badge { font-weight: 400; color: var(--ink-faint); font-size: 11px; font-family: ui-monospace, monospace; white-space: nowrap; margin-right: 4px; }
         .conv-head .titleBlock { min-width: 0; }
         /* Group không đặt tên riêng -- convLabel = nối tên TẤT CẢ thành viên (conversationLabel()) --
@@ -539,6 +541,10 @@
            Tab Files/Pins/Links (section nằm NGOÀI #infoPanelBody) thì NGƯỢC LẠI cần hiện số lượng --
            đây là danh sách đếm được, người dùng cần biết "12 file/3 ghim/5 link" ngay không phải đếm tay. */
         #infoPanelBody .infoSectionTitle { display: none; }
+        /* Ngoại lệ DUY NHẤT: tiêu đề "Thành viên" vẫn cần hiện -- đây là nơi treo nút "Thêm thành
+           viên" (xem renderInfoPanel), không chỉ là tiêu đề suông như các section khác trong tab Info. */
+        #infoPanelBody .infoSectionTitle.infoSectionTitleRow { display: flex; align-items: center; gap: 8px; }
+        .infoSectionTitleRow #infoAddMemberBtn { margin-left: auto; padding: 4px 8px; }
         .infoSectionTitle { padding: 14px 16px 8px; font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; }
         /* Files dùng .mediaGrid (đã tự có padding ngang riêng) nên section cha khỏi lặp lại padding đó. */
         #infoFilesBody .infoSection { padding: 0 0 16px; }
@@ -571,6 +577,9 @@
         .infoMemberRow .roleBadge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #c2c6d2; }
         .infoMemberRow .roleBadge.online { color: var(--ink-soft); }
         .infoMemberRow .roleBadge.online::before { background: #22c55e; }
+        .infoMemberRemoveBtn { flex: none; border: none; background: none; color: var(--ink-faint); padding: 4px 6px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .1s; }
+        .infoMemberRow:hover .infoMemberRemoveBtn { opacity: 1; }
+        .infoMemberRemoveBtn:hover { color: #e5484d; background: var(--canvas); }
 
         /* ---------- log tin nhắn: bong bóng chat kiểu Facebook Messenger, DÙNG CHUNG cho cả DM (1-1)
            và nhóm -- theo đúng yêu cầu: "bỏ giao diện chat nhóm khác chat riêng đi, làm giống chat
@@ -705,6 +714,9 @@
         /* Overlay nền tối cho modal tìm kiếm toàn cục -- cùng khuôn hệt 2 overlay trên. */
         #searchModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
         #searchModalOverlay.show { display: flex; }
+        /* Overlay "Chuyển tiếp tin nhắn" / "Thêm thành viên" -- cùng khuôn hệt #searchModalOverlay ở trên. */
+        #forwardModalOverlay, #addMemberModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
+        #forwardModalOverlay.show, #addMemberModalOverlay.show { display: flex; }
         /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
         #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
         #appModalOverlay.show { display: flex; }
@@ -867,6 +879,31 @@
         .bubble-row.mine .reply-quote { border-left-color: rgba(255,255,255,.6); background: rgba(255,255,255,.16); }
         .bubble-row.mine .reply-quote-name { color: rgba(255,255,255,.95); }
         .bubble-row.mine .reply-quote-snippet { color: rgba(255,255,255,.78); }
+        .forwarded-badge { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-style: italic; color: var(--ink-soft); margin-bottom: 4px; }
+        .bubble-row.mine .forwarded-badge { color: rgba(255,255,255,.78); }
+        .forwardModalPreview { display: flex; gap: 8px; align-items: baseline; padding: 8px 10px; border-radius: 8px; background: var(--canvas); margin-bottom: 10px; }
+        .forwardModalPreviewLabel { font-weight: 700; font-size: 12px; color: var(--ink-soft); flex: none; }
+        .forwardModalPreviewSnippet { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .forwardModalList { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+        .forwardModalRow { cursor: pointer; border-radius: 8px; }
+        .forwardModalRow:hover { background: var(--canvas); }
+        /* Popup "Thêm thành viên" -- cùng ngôn ngữ hình ảnh với picker "Tạo group" (#newConvSearchWrap/
+           .userList/#newConvFoot ở trên), chỉ đổi id vì đây là 1 overlay riêng, không phải panel sidebar. */
+        .addMemberSearchWrap { flex: none; display: flex; align-items: center; gap: 9px; height: 42px; background: var(--canvas); border-radius: var(--radius-md); padding: 0 12px; margin-bottom: 10px; }
+        .addMemberSearchIcon { flex: none; color: var(--ink-faint); display: flex; }
+        .addMemberSearchInput { flex: 1; min-width: 0; border: none !important; background: none; font-size: 13px; font-family: inherit; color: var(--ink); box-shadow: none !important; }
+        .addMemberSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
+        .addMemberSearchInput::placeholder { color: var(--ink-faint); }
+        .addMemberModalList { min-height: 120px; max-height: 320px; }
+        .addMemberModalFoot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; margin-top: 8px; border-top: 1px solid var(--line); }
+        .addMemberModalCount { font-size: 11.5px; color: var(--ink-faint); font-weight: 600; }
+        .addMemberModalConfirmBtn:disabled { opacity: .5; cursor: default; }
+        /* .searchModal .bgPickerBody đặt padding:0 (dồn hết padding riêng cho từng phần con như
+           .searchModalInputWrap/.searchModalResults) -- popup "Thêm thành viên"/"Chuyển tiếp" không
+           có phần con nào tự bù lại khoảng padding đó, khiến list/nút dính sát mép bo góc 16px của
+           modal, trông như bị "cắt". Bù lại padding ở đây (chỉ ghi đè đúng 1 thuộc tính padding,
+           giữ nguyên display:flex/flex-direction/flex/min-height kế thừa từ .searchModal .bgPickerBody). */
+        .addMemberModal .bgPickerBody, .forwardModal .bgPickerBody { padding: 10px 18px 18px; }
         .bubble-row.jump-highlight .bubble { animation: replyFlash 1.2s ease; }
         @keyframes replyFlash { 0%{box-shadow:0 0 0 3px var(--accent-soft);} 100%{box-shadow:none;} }
         /* Tô đúng CHỮ khớp từ khoá tìm kiếm bên trong bubble (xem highlightTermInBubble, messages-render.js)
@@ -903,8 +940,8 @@
            chọn emoji sẽ mất :hover, cả cụm phải giữ hiện CƯỠNG BỨC bằng class này (gắn/gỡ lúc mở/đóng
            popup, xem openReactionPicker/closeReactionPicker) tới khi popup thật sự đóng. */
         .msg-actions.picker-open { opacity: 1; pointer-events: auto; }
-        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
-        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover { background: var(--canvas); }
+        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn, .forwardBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
+        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover, .forwardBtn:hover { background: var(--canvas); }
         /* Xoá luôn tô đỏ (không đợi hover) -- hành động phá huỷ, quy ước iOS/Telegram đánh dấu sẵn
            bằng màu ngay cả lúc chưa tương tác, không phải chỉ đổi màu lúc hover như các nút khác. Đỏ
            nhạt (#ef4444, không phải #dc2626 đậm) -- vẫn đủ nhận ra "nguy hiểm" nhưng đỡ gắt hơn giữa

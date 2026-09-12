@@ -34,6 +34,8 @@ public class RoutingVersionSync extends RoutingVersionTracker {
   private static final String MEMBERSHIP_CHANGED_ADDRESS = "conversation_membership_changed";
   /** Địa chỉ EventBus hall broadcast "conversation X vừa bị xoá hẳn" (xem {@code HallApiHandlers#deleteConversation}). */
   private static final String CONVERSATION_DELETED_ADDRESS = "conversation_deleted";
+  /** Địa chỉ EventBus hall broadcast "user X vừa bị xoá khỏi conversation Y" (kick hoặc tự rời, xem {@code HallApiHandlers#removeConversationMember}). */
+  private static final String MEMBER_REMOVED_ADDRESS = "conversation_member_removed";
   /** Địa chỉ EventBus harbor tự publish (chính pod này hoặc pod khác) lúc 1 user đổi trạng thái online/offline, xem {@code HarborSessionManager#broadcastPresenceChange}. */
   private static final String PRESENCE_ADDRESS = "user_presence_changed";
 
@@ -50,6 +52,7 @@ public class RoutingVersionSync extends RoutingVersionTracker {
     this.relayToClient = relayToClient;
     vertx.eventBus().consumer(MEMBERSHIP_CHANGED_ADDRESS, this::onMembershipChanged);
     vertx.eventBus().consumer(CONVERSATION_DELETED_ADDRESS, this::onConversationDeleted);
+    vertx.eventBus().consumer(MEMBER_REMOVED_ADDRESS, this::onMemberRemoved);
     vertx.eventBus().consumer(PRESENCE_ADDRESS, this::onPresenceChanged);
   }
 
@@ -137,6 +140,42 @@ public class RoutingVersionSync extends RoutingVersionTracker {
     var finalConversationId = conversationId;
     for (var session : sessions.values()) {
       if (!session.subscribedConversationIds().contains(finalConversationId)) {
+        continue;
+      }
+      session.forgetConversation(finalConversationId);
+      relayToClient.accept(
+          session,
+          SocketFrame.builder()
+              .type(MessageType.CONVERSATION_DELETED)
+              .id(UUIDUtils.timeBasedUuidAsString())
+              .conversationId(finalConversationId.toString())
+              .ts(System.currentTimeMillis())
+              .build());
+    }
+  }
+
+  /**
+   * Nhận broadcast "user X vừa bị xoá khỏi conversationId Y" (kick HOẶC tự rời — cùng 1 đường,
+   * xem {@code HallApiHandlers#removeConversationMember}) — CHỈ phản ứng với session của ĐÚNG user
+   * X (khác {@link #onConversationDeleted}, lọc theo ai đang subscribe conversation đó — ở đây
+   * chính X có thể vẫn còn subscribe conversation trên gRPC stream tới lúc bị dọn tự nhiên, không
+   * quan trọng vì UI đã bị dọn). X có thể có nhiều session/tab đang mở, lặp hết. Tái dùng nguyên
+   * {@code MessageType.CONVERSATION_DELETED} — với X, hiệu ứng đúng là "conversation biến mất khỏi
+   * UI của tôi", frontend đã xử lý sẵn type này (xem {@code removeConversationLocally}).
+   */
+  private void onMemberRemoved(Message<JsonObject> message) {
+    var body = message.body();
+    UUID conversationId;
+    UUID removedUserId;
+    try {
+      conversationId = UUID.fromString(body.getString("conversationId"));
+      removedUserId = UUID.fromString(body.getString("removedUserId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      return;
+    }
+    var finalConversationId = conversationId;
+    for (var session : sessions.values()) {
+      if (!removedUserId.equals(session.getUserId())) {
         continue;
       }
       session.forgetConversation(finalConversationId);
