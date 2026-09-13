@@ -1,6 +1,7 @@
 package com.pingo.hall.api;
 
 import com.google.inject.Inject;
+import com.pingo.chat.domain.e2e.E2eKeyRegistry;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -73,6 +74,14 @@ public class HallApiHandlers {
    * cần thêm type mới) cho MỌI session sống của đúng user đó.
    */
   private static final String MEMBER_REMOVED_ADDRESS = "conversation_member_removed";
+  /**
+   * Địa chỉ EventBus broadcast "vừa có 1 tin to-device mới cho user X" (mã hoá đầu cuối -- thiết
+   * lập Olm session/phân phối Megolm session key, xem {@link #queueE2eToDevice}) — CHỈ để relay SỐNG
+   * cho session đang mở của đúng user X (tối ưu tốc độ, không phải đường đảm bảo duy nhất — hàng đợi
+   * DB mới là nguồn thật, xem {@link E2eKeyRegistry#drainToDeviceMessages}). Harbor lắng nghe (thêm
+   * consumer tương tự {@code RoutingVersionSync#onMemberRemoved}), relay {@code MessageType.E2E_TO_DEVICE}.
+   */
+  private static final String E2E_TO_DEVICE_ADDRESS = "e2e_to_device_sent";
 
   private final MessageHistoryRegistry history;
   private final UserRegistry users;
@@ -82,6 +91,7 @@ public class HallApiHandlers {
   private final FileRegistry files;
   private final MessagePinRegistry pins;
   private final MessageLinkRegistry links;
+  private final E2eKeyRegistry e2eKeys;
   private final AtomicBoolean ready;
   private final Vertx vertx;
 
@@ -135,6 +145,23 @@ public class HallApiHandlers {
     var conversationId = UUIDUtils.parseOrDefault(request.getParam("conversationId"));
     var limit = parseLimit(request.getParam("limit"));
     return history.searchMessages(userId, conversationId, query.strip(), limit).thenApply(HallApiHandlers::bytes);
+  }
+
+  /**
+   * {@code GET /messages/edit-history?messageId=<uuid>} -- các bản CŨ của 1 tin đã bị sửa (không
+   * gồm bản hiện tại, xem {@link MessageHistoryRegistry#getEditHistory}), cũ nhất trước. Không kiểm
+   * tra membership riêng ở đây -- cùng mức "loose-schema" như {@link #listMessages} (messageId là
+   * UUID không đoán được, ai đã thấy được tin đó qua GET /messages thì xem được lịch sử sửa của nó).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "messages/edit-history", type = Type.HTTP)})
+  public CompletionStage<byte[]> getEditHistory(IRequest request) {
+    UUID messageId;
+    try {
+      messageId = UUID.fromString(request.getParam("messageId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid messageId");
+    }
+    return history.getEditHistory(messageId).thenApply(HallApiHandlers::bytes);
   }
 
   /**
@@ -327,7 +354,10 @@ public class HallApiHandlers {
         .addMembers(conversationId, members)
         .thenCompose(
             newlyAdded -> {
-              var afterName = name == null || name.isBlank() ? CompletableFuture.completedFuture((Void) null) : membership.upsertName(conversationId, name.strip());
+              // Người tạo LUÔN là owner đầu tiên (xem ConversationMembershipRegistry#setRole) --
+              // thành viên khác thêm qua addMembers giữ role mặc định 'member' của cột (xem schema).
+              var afterRole = membership.setRole(conversationId, creatorId, "owner");
+              var afterName = afterRole.thenCompose(unused -> name == null || name.isBlank() ? CompletableFuture.completedFuture((Void) null) : membership.upsertName(conversationId, name.strip()));
               return afterName.thenCompose(
                   unused -> newlyAdded.isEmpty() ? CompletableFuture.completedFuture((Void) null) : publishMembershipChanged(conversationId, newlyAdded));
             })
@@ -342,9 +372,10 @@ public class HallApiHandlers {
 
   /**
    * {@code PUT /conversations?conversationId=<uuid>} — body JSON {@code {name: "..."}}. Đổi/xoá
-   * tên riêng, dùng chung cho MỌI thành viên (khác bản đầu chỉ lưu localStorage riêng từng trình
-   * duyệt) — áp dụng được cho cả DM lẫn group. Chỉ thành viên hiện tại mới đổi được. {@code name}
-   * rỗng/blank thì XOÁ tên (quay lại tự suy từ danh sách thành viên).
+   * tên riêng, dùng chung cho MỌI thành viên thấy (khác bản đầu chỉ lưu localStorage riêng từng
+   * trình duyệt) — áp dụng được cho cả DM lẫn group, nhưng chỉ AI ĐƯỢC GỌI thì khác nhau: DM (2
+   * người) ai cũng đổi được, GROUP (>2 người) CHỈ owner (xem {@link #requireGroupOwner}). {@code
+   * name} rỗng/blank thì XOÁ tên (quay lại tự suy từ danh sách thành viên).
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations", type = Type.HTTP)})
   public CompletionStage<byte[]> renameConversation(IRequest request) {
@@ -358,23 +389,16 @@ public class HallApiHandlers {
     var body = parseJsonBody(request);
     var name = body.getString("name");
     var finalConversationId = conversationId;
-    return membership
-        .isMember(finalConversationId, userId)
-        .thenCompose(
-            isMember -> {
-              if (!isMember) {
-                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
-              }
-              return membership.upsertName(finalConversationId, name);
-            })
+    return requireGroupOwner(finalConversationId, userId)
+        .thenCompose(unused -> membership.upsertName(finalConversationId, name))
         .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("name", name == null || name.isBlank() ? null : name.strip())));
   }
 
   /**
    * {@code PUT /conversations/avatar?conversationId=<uuid>&avatarFileId=<uuid|rỗng>} — đổi/xoá ảnh
    * đại diện RIÊNG của 1 group (không dùng cho DM — DM hiện avatar thật của người kia, xem
-   * {@code conversationAvatar()} phía client). Chỉ thành viên hiện tại mới đổi được, cùng cách kiểm
-   * tra với {@link #renameConversation}. {@code avatarFileId} rỗng/thiếu = xoá.
+   * {@code conversationAvatar()} phía client). GROUP (>2 người) CHỈ owner mới đổi được (xem
+   * {@link #requireGroupOwner}). {@code avatarFileId} rỗng/thiếu = xoá.
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/avatar", type = Type.HTTP)})
   public CompletionStage<byte[]> setConversationAvatar(IRequest request) {
@@ -387,24 +411,19 @@ public class HallApiHandlers {
     }
     var avatarFileId = parseOptionalUuidParam(request.getParam("avatarFileId"));
     var finalConversationId = conversationId;
-    return membership
-        .isMember(finalConversationId, userId)
-        .thenCompose(
-            isMember -> {
-              if (!isMember) {
-                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
-              }
-              return membership.upsertAvatar(finalConversationId, avatarFileId);
-            })
+    return requireGroupOwner(finalConversationId, userId)
+        .thenCompose(unused -> membership.upsertAvatar(finalConversationId, avatarFileId))
         .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())));
   }
 
   /**
    * {@code POST /conversations/members?conversationId=<uuid>} — body JSON {@code {memberUserIds: [...]}}.
-   * Thêm thành viên vào 1 conversation ĐÃ TỒN TẠI (khác {@link #createConversation}, luôn tạo mới)
-   * — chỉ thành viên hiện tại mới thêm được. Tái dùng nguyên {@code membership.addMembers} +
-   * {@link #publishMembershipChanged} như lúc tạo conversation, nên member mới được harbor
-   * wake-subscribe + báo {@code CONVERSATION_ADDED} y hệt.
+   * Thêm thành viên vào 1 conversation ĐÃ TỒN TẠI (khác {@link #createConversation}, luôn tạo mới).
+   * DM (2 người) thì ai cũng thêm được (thêm 1 người thứ 3 vào biến nó thành group tự nhiên); GROUP
+   * (>2 người) CHỈ owner mới thêm được (xem {@link #requireGroupOwner} — kiểm tra theo SỐ THÀNH VIÊN
+   * HIỆN TẠI, trước khi thêm). Tái dùng nguyên {@code membership.addMembers} + {@link
+   * #publishMembershipChanged} như lúc tạo conversation, nên member mới được harbor wake-subscribe +
+   * báo {@code CONVERSATION_ADDED} y hệt.
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "conversations/members", type = Type.HTTP)})
   public CompletionStage<byte[]> addConversationMembers(IRequest request) {
@@ -427,15 +446,8 @@ public class HallApiHandlers {
       }
     }
     var finalConversationId = conversationId;
-    return membership
-        .isMember(finalConversationId, userId)
-        .thenCompose(
-            isMember -> {
-              if (!isMember) {
-                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
-              }
-              return membership.addMembers(finalConversationId, newMemberUserIds);
-            })
+    return requireGroupOwner(finalConversationId, userId)
+        .thenCompose(unused -> membership.addMembers(finalConversationId, newMemberUserIds))
         .thenCompose(
             newlyAdded -> newlyAdded.isEmpty() ? CompletableFuture.completedFuture((Void) null) : publishMembershipChanged(finalConversationId, newlyAdded))
         .thenApply(
@@ -447,12 +459,16 @@ public class HallApiHandlers {
   }
 
   /**
-   * {@code DELETE /conversations/members?conversationId=<uuid>&userId=<uuid>} — xoá 1 thành viên
-   * khỏi conversation. Dùng chung cho CẢ 2 case: kick người khác ({@code userId} != caller) lẫn tự
-   * rời nhóm ({@code userId} == caller) — server không phân biệt, chỉ khác ý nghĩa phía client.
-   * Caller phải là thành viên HIỆN TẠI (không nhất thiết phải là {@code userId} bị xoá). Nếu xoá
-   * xong conversation không còn thành viên nào, cascade-xoá cả conversation luôn (tái dùng đúng
-   * chuỗi lệnh của {@link #deleteConversation}) — tránh để lại conversation rỗng mồ côi.
+   * {@code DELETE /conversations/members?conversationId=<uuid>&userId=<uuid>&newOwnerUserId=<uuid|tuỳ chọn>}
+   * — xoá 1 thành viên khỏi conversation. Dùng chung cho CẢ 2 case: kick người khác ({@code userId}
+   * != caller — CHỈ owner mới làm được) lẫn tự rời nhóm ({@code userId} == caller — ai cũng làm
+   * được). Nếu xoá xong conversation không còn thành viên nào, cascade-xoá cả conversation luôn
+   * (tái dùng đúng chuỗi lệnh của {@link #deleteConversation}) — tránh để lại conversation rỗng mồ côi.
+   *
+   * <p><b>Không được để nhóm còn thành viên mà KHÔNG CÒN owner nào</b> — xoá/rời đúng owner CUỐI
+   * CÙNG trong khi nhóm còn người khác thì bắt buộc kèm {@code newOwnerUserId} (1 thành viên còn lại
+   * bất kỳ) để tự động thăng làm owner mới NGAY TRƯỚC KHI xoá; thiếu thì trả lỗi {@code CONFLICT}
+   * thay vì âm thầm để nhóm mồ côi. Không owner nào bị ảnh hưởng thì tham số này bỏ qua (không cần).
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "conversations/members", type = Type.HTTP)})
   public CompletionStage<byte[]> removeConversationMember(IRequest request) {
@@ -465,29 +481,47 @@ public class HallApiHandlers {
     } catch (IllegalArgumentException | NullPointerException e) {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId/userId");
     }
+    var newOwnerUserId = UUIDUtils.parseOrDefault(request.getParam("newOwnerUserId"));
     var finalConversationId = conversationId;
     var finalRemovedUserId = removedUserId;
     return membership
-        .isMember(finalConversationId, callerId)
+        .getMemberRoles(finalConversationId)
         .thenCompose(
-            isMember -> {
-              if (!isMember) {
+            roles -> {
+              if (!roles.containsKey(callerId)) {
                 throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
               }
-              return membership
-                  .removeMember(finalConversationId, finalRemovedUserId)
-                  .thenCompose(unused -> membership.getMembers(finalConversationId))
+              if (!roles.containsKey(finalRemovedUserId)) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "member not found");
+              }
+              // Kick người KHÁC (userId != caller) chỉ owner mới làm được -- member thường chỉ được tự rời chính mình.
+              if (!finalRemovedUserId.equals(callerId) && !"owner".equals(roles.get(callerId))) {
+                throw new LegoBusinessException(HallErrorKeys.FORBIDDEN, "chỉ chủ nhóm mới được xoá thành viên khác");
+              }
+              var remainingCount = roles.size() - 1;
+              var wasOnlyOwner =
+                  "owner".equals(roles.get(finalRemovedUserId))
+                      && roles.entrySet().stream().noneMatch(e -> !e.getKey().equals(finalRemovedUserId) && "owner".equals(e.getValue()));
+              CompletionStage<Void> beforeRemove;
+              if (wasOnlyOwner && remainingCount > 0) {
+                if (newOwnerUserId == null || newOwnerUserId.equals(finalRemovedUserId) || !roles.containsKey(newOwnerUserId)) {
+                  throw new LegoBusinessException(HallErrorKeys.CONFLICT, "phải chỉ định 1 thành viên khác làm chủ nhóm trước khi rời/xoá chủ nhóm cuối cùng");
+                }
+                beforeRemove = membership.setRole(finalConversationId, newOwnerUserId, "owner");
+              } else {
+                beforeRemove = CompletableFuture.completedFuture(null);
+              }
+              return beforeRemove
+                  .thenCompose(unused -> membership.removeMember(finalConversationId, finalRemovedUserId))
                   .thenCompose(
-                      remaining -> {
-                        if (!remaining.isEmpty()) {
-                          return CompletableFuture.completedFuture((Void) null);
-                        }
-                        return history
-                            .deleteForConversation(finalConversationId)
-                            .thenCompose(unused -> notifications.deleteForConversation(finalConversationId))
-                            .thenCompose(unused -> membership.clearConversationRow(finalConversationId))
-                            .thenCompose(unused -> membership.deleteConversation(finalConversationId));
-                      });
+                      unused ->
+                          remainingCount == 0
+                              ? history
+                                  .deleteForConversation(finalConversationId)
+                                  .thenCompose(u2 -> notifications.deleteForConversation(finalConversationId))
+                                  .thenCompose(u2 -> membership.clearConversationRow(finalConversationId))
+                                  .thenCompose(u2 -> membership.deleteConversation(finalConversationId))
+                              : CompletableFuture.completedFuture((Void) null));
             })
         .thenApply(
             unused -> {
@@ -498,6 +532,61 @@ public class HallApiHandlers {
                       new JsonObject().put("conversationId", finalConversationId.toString()).put("removedUserId", finalRemovedUserId.toString()));
               return bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("removedUserId", finalRemovedUserId.toString()));
             });
+  }
+
+  /**
+   * {@code PUT /conversations/role?conversationId=<uuid>&userId=<uuid>&role=owner|member} — thăng
+   * ({@code owner})/hạ ({@code member}) 1 thành viên. CHỈ owner hiện tại mới gọi được (kể cả tự hạ
+   * chính mình). Hạ owner CUỐI CÙNG (không còn owner nào khác) xuống member bị chặn ({@code
+   * CONFLICT}) — muốn rút khỏi vai trò owner trong trường hợp đó thì phải thăng người khác làm owner
+   * TRƯỚC, đúng tinh thần "nhóm luôn phải có ít nhất 1 owner" như {@link #removeConversationMember}.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/role", type = Type.HTTP)})
+  public CompletionStage<byte[]> setConversationMemberRole(IRequest request) {
+    var callerId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    UUID targetUserId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+      targetUserId = UUID.fromString(request.getParam("userId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId/userId");
+    }
+    var role = request.getParam("role");
+    if (!"owner".equals(role) && !"member".equals(role)) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "role phải là 'owner' hoặc 'member'");
+    }
+    var finalConversationId = conversationId;
+    var finalTargetUserId = targetUserId;
+    var finalRole = role;
+    return membership
+        .getMemberRoles(finalConversationId)
+        .thenCompose(
+            roles -> {
+              if (!roles.containsKey(callerId)) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              if (!"owner".equals(roles.get(callerId))) {
+                throw new LegoBusinessException(HallErrorKeys.FORBIDDEN, "chỉ chủ nhóm mới đổi được vai trò thành viên");
+              }
+              if (!roles.containsKey(finalTargetUserId)) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "member not found");
+              }
+              var wasOnlyOwner =
+                  "owner".equals(roles.get(finalTargetUserId))
+                      && roles.entrySet().stream().noneMatch(e -> !e.getKey().equals(finalTargetUserId) && "owner".equals(e.getValue()));
+              if ("member".equals(finalRole) && wasOnlyOwner) {
+                throw new LegoBusinessException(HallErrorKeys.CONFLICT, "phải có 1 owner khác trước khi hạ owner cuối cùng xuống member");
+              }
+              return membership.setRole(finalConversationId, finalTargetUserId, finalRole);
+            })
+        .thenApply(
+            unused ->
+                bytes(
+                    new JsonObject()
+                        .put("conversationId", finalConversationId.toString())
+                        .put("userId", finalTargetUserId.toString())
+                        .put("role", finalRole)));
   }
 
   /**
@@ -531,8 +620,10 @@ public class HallApiHandlers {
 
   /**
    * {@code DELETE /conversations?conversationId=<uuid>} — xoá 1 conversation cho MỌI thành viên
-   * (không phải "rời khỏi" chỉ riêng mình). Chỉ thành viên hiện tại mới xoá được (403 nếu không phải,
-   * 404 nếu conversationId không tồn tại/đã bị xoá).
+   * (không phải "rời khỏi" chỉ riêng mình, xem {@link #removeConversationMember}). DM (2 người) ai
+   * cũng xoá được; GROUP (>2 người) CHỈ owner (xem {@link #requireGroupOwner}) — member thường chỉ
+   * được tự rời, muốn "xoá nhóm cho mọi người" phải là owner. 404 nếu conversationId không tồn
+   * tại/đã bị xoá, 403 nếu là group mà không phải owner.
    *
    * <p><b>{@code conversation_members} bị xoá THẬT (hard-delete)</b> — đây mới là bước làm
    * conversation thực sự "biến mất" khỏi mọi nơi (mọi truy vấn — {@code listConversationsForUser},
@@ -559,23 +650,42 @@ public class HallApiHandlers {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
     }
     var finalConversationId = conversationId;
-    return membership
-        .isMember(finalConversationId, userId)
+    return requireGroupOwner(finalConversationId, userId)
         .thenCompose(
-            isMember -> {
-              if (!isMember) {
-                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
-              }
-              return history
-                  .deleteForConversation(finalConversationId)
-                  .thenCompose(unused -> notifications.deleteForConversation(finalConversationId))
-                  .thenCompose(unused -> membership.clearConversationRow(finalConversationId))
-                  .thenCompose(unused -> membership.deleteConversation(finalConversationId));
-            })
+            unused ->
+                history
+                    .deleteForConversation(finalConversationId)
+                    .thenCompose(u2 -> notifications.deleteForConversation(finalConversationId))
+                    .thenCompose(u2 -> membership.clearConversationRow(finalConversationId))
+                    .thenCompose(u2 -> membership.deleteConversation(finalConversationId)))
         .thenApply(
             unused -> {
               vertx.eventBus().publish(CONVERSATION_DELETED_ADDRESS, new JsonObject().put("conversationId", finalConversationId.toString()));
               return bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("deleted", true));
+            });
+  }
+
+  /**
+   * Xác nhận {@code userId} có quyền chỉnh THÔNG TIN CHUNG của conversation -- đổi tên/ảnh, thêm
+   * thành viên, xoá hẳn conversation (KHÔNG dùng cho kick/thăng-hạ role, 2 chỗ đó tự kiểm tra riêng
+   * vì còn phải tính thêm quy tắc "luôn còn ít nhất 1 owner", xem {@link #removeConversationMember}/
+   * {@link #setConversationMemberRole}). Với GROUP (>2 thành viên) CHỈ owner được làm -- member
+   * thường chỉ được tự rời nhóm, không được tác động thông tin chung. Với DM (đúng 2 người) BỎ QUA
+   * owner-gate này -- 2 người ngang hàng, không có khái niệm "quản trị" thật sự, giữ nguyên hành vi
+   * cũ (ai cũng đổi được tên/ảnh chung, hoặc xoá hẳn đoạn chat đó cho cả 2).
+   */
+  private CompletionStage<Void> requireGroupOwner(UUID conversationId, UUID userId) {
+    return membership
+        .getMemberRoles(conversationId)
+        .thenApply(
+            roles -> {
+              if (!roles.containsKey(userId)) {
+                throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "conversation not found");
+              }
+              if (roles.size() > 2 && !"owner".equals(roles.get(userId))) {
+                throw new LegoBusinessException(HallErrorKeys.FORBIDDEN, "chỉ chủ nhóm mới được thay đổi thông tin nhóm");
+              }
+              return null;
             });
   }
 
@@ -777,5 +887,255 @@ public class HallApiHandlers {
     } catch (NumberFormatException e) {
       return null;
     }
+  }
+
+  // ================= Mã hoá đầu cuối (E2E) — xem chat-domain E2eKeyRegistry, frontend/vendor/olm.js =================
+
+  /**
+   * {@code PUT /e2e/keys} — body JSON {@code {deviceId: "...", identityKey: "...", oneTimePrekeys: {keyId: pubkey, ...}}}.
+   * Đăng ký/cập nhật identity key của 1 THIẾT BỊ (client tự sinh {@code deviceId} 1 lần/trình duyệt,
+   * KHÔNG BAO GIỜ đổi -- đúng thuật toán Sesame của Signal: mỗi thiết bị 1 identity riêng, không còn
+   * dùng chung 1 identity/tài khoản như bản trước) + THÊM 1 lô one-time prekey mới (không thay thế
+   * lô cũ, xem {@link E2eKeyRegistry#addOneTimePrekeys}) -- gọi lúc bật E2E lần đầu trên thiết bị
+   * này, và định kỳ khi client thấy {@code GET /e2e/prekey-count} còn ít để top-up. Cả 3 field đều
+   * optional (chỉ gửi cái cần đổi) -- KHÔNG còn khái niệm xung đột/409 nữa, mỗi {@code deviceId} có
+   * hàng riêng trong {@code e2e_devices}, upsert vô hại dù gọi lại bao nhiêu lần.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "e2e/keys", type = Type.HTTP)})
+  public CompletionStage<byte[]> uploadE2eKeys(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var body = parseJsonBody(request);
+    var deviceId = UUIDUtils.parseOrDefault(body.getString("deviceId"));
+    var identityKey = body.getString("identityKey");
+    var rawPrekeys = body.getJsonObject("oneTimePrekeys");
+    var prekeys = new java.util.LinkedHashMap<String, String>();
+    if (rawPrekeys != null) {
+      for (var keyId : rawPrekeys.fieldNames()) {
+        var publicKey = rawPrekeys.getString(keyId);
+        if (publicKey != null && !publicKey.isBlank()) {
+          prekeys.put(keyId, publicKey);
+        }
+      }
+    }
+    if (deviceId == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    }
+    var finalDeviceId = deviceId;
+    var label = body.getString("label");
+    CompletionStage<Void> afterIdentity = identityKey == null || identityKey.isBlank()
+        ? CompletableFuture.completedFuture(null)
+        : e2eKeys.upsertDevice(finalDeviceId, userId, identityKey.strip(), label == null ? null : label.strip());
+    return afterIdentity
+        .thenCompose(unused -> e2eKeys.addOneTimePrekeys(finalDeviceId, prekeys))
+        .thenApply(unused -> bytes(new JsonObject().put("deviceId", finalDeviceId.toString()).put("addedPrekeys", prekeys.size())));
+  }
+
+  /** {@code GET /e2e/devices} — toàn bộ thiết bị mã hoá hiện có của CHÍNH MÌNH, dùng cho màn "Thiết bị của tôi" (xem {@link E2eKeyRegistry#listDevices}). */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/devices", type = Type.HTTP)})
+  public CompletionStage<byte[]> listE2eDevices(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    return e2eKeys.listDevices(userId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
+  }
+
+  /**
+   * {@code DELETE /e2e/devices?deviceId=<uuid>} — gỡ 1 thiết bị mã hoá của CHÍNH MÌNH (vd máy cũ đã
+   * mất/không dùng nữa) -- 404 nếu deviceId không tồn tại hoặc không thuộc về mình (xem
+   * {@link E2eKeyRegistry#deleteDevice}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "e2e/devices", type = Type.HTTP)})
+  public CompletionStage<byte[]> deleteE2eDevice(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var deviceId = UUIDUtils.parseOrDefault(request.getParam("deviceId"));
+    if (deviceId == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    }
+    return e2eKeys.deleteDevice(deviceId, userId).thenApply(ok -> {
+      if (!ok) {
+        throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "device not found");
+      }
+      return bytes(new JsonObject().put("deviceId", deviceId.toString()));
+    });
+  }
+
+  /** {@code GET /e2e/prekey-count?deviceId=<uuid>} — số one-time prekey CÒN LẠI của THIẾT BỊ này, client tự quyết định lúc nào cần top-up thêm (xem {@link #uploadE2eKeys}). */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/prekey-count", type = Type.HTTP)})
+  public CompletionStage<byte[]> countE2ePrekeys(IRequest request) {
+    requireAuthenticatedUserId(request);
+    var deviceId = UUIDUtils.parseOrDefault(request.getParam("deviceId"));
+    if (deviceId == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    }
+    return e2eKeys.countOneTimePrekeys(deviceId).thenApply(count -> bytes(new JsonObject().put("count", count)));
+  }
+
+  /**
+   * {@code GET /e2e/keys/bundle?userId=<uuid>} — trả {@code {devices: [{deviceId, identityKey,
+   * oneTimePrekey}, ...]}} -- MỌI thiết bị hiện có của {@code userId}, mỗi thiết bị đã tự CHIẾM
+   * (xoá) riêng 1 one-time prekey của chính nó (xem {@link E2eKeyRegistry#claimKeyBundlesForUser}).
+   * Người gọi PHẢI mã hoá RIÊNG cho TỪNG phần tử (fan-out per-device, đúng chuẩn Signal/Sesame --
+   * xem {@code e2e-crypto.js}'s {@code e2eEncryptOutgoing}). {@code devices} rỗng (KHÔNG phải 404
+   * như bản trước) nếu {@code userId} chưa từng bật E2E ở bất kỳ thiết bị nào -- không còn "1 identity
+   * hoặc không có gì" nhị phân như trước, "không có thiết bị nào" là 1 trạng thái hợp lệ bình thường.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/keys/bundle", type = Type.HTTP)})
+  public CompletionStage<byte[]> getE2eKeyBundle(IRequest request) {
+    requireAuthenticatedUserId(request);
+    UUID targetUserId;
+    try {
+      targetUserId = UUID.fromString(request.getParam("userId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
+    }
+    return e2eKeys.claimKeyBundlesForUser(targetUserId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
+  }
+
+  /**
+   * {@code GET /e2e/keys/devices?userId=<uuid>} — trả {@code {devices: [{deviceId, identityKey}, ...]}}
+   * -- MỌI thiết bị hiện có của {@code userId}, KHÔNG claim/xoá prekey nào (khác hẳn
+   * {@code GET /e2e/keys/bundle} ở trên) -- dùng để KIỂM TRA có thiết bị nào chưa nhận 1 khoá phiên
+   * Megolm cụ thể hay không mà không tốn prekey chỉ để kiểm tra (xem
+   * {@link E2eKeyRegistry#listDevicesForUser}, frontend's {@code e2eGetOrCreateOutboundGroupSession}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/keys/devices", type = Type.HTTP)})
+  public CompletionStage<byte[]> listE2eKeyDevices(IRequest request) {
+    requireAuthenticatedUserId(request);
+    UUID targetUserId;
+    try {
+      targetUserId = UUID.fromString(request.getParam("userId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
+    }
+    return e2eKeys.listDevicesForUser(targetUserId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
+  }
+
+  /**
+   * {@code PUT /conversations/e2e?conversationId=<uuid>} — bật mã hoá đầu cuối cho 1 conversation.
+   * Cùng quyền với {@link #requireGroupOwner} (GROUP >2 người CHỈ owner, DM ai cũng bật được) --
+   * CHỈ MỘT CHIỀU bật, gọi lại nhiều lần vô hại (idempotent), KHÔNG có endpoint tắt lại (xem
+   * {@code ConversationMembershipRegistry#setEncrypted}). Không broadcast EventBus riêng gì --
+   * client tự phát hiện qua {@code e2eEnabled} ở lần {@code GET /conversations} kế tiếp (đủ nhanh,
+   * bật mã hoá không phải hành động cần phản ứng tức thời như tin nhắn/kick).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/e2e", type = Type.HTTP)})
+  public CompletionStage<byte[]> setConversationEncrypted(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var finalConversationId = conversationId;
+    return requireGroupOwner(finalConversationId, userId)
+        .thenCompose(unused -> membership.setEncrypted(finalConversationId))
+        .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("e2eEnabled", true)));
+  }
+
+  /**
+   * {@code POST /e2e/to-device} — body JSON {@code {deliveries: [{recipientUserId, type, conversationId
+   * (tuỳ chọn), body: {...}}, ...]}}. Gửi hàng loạt tin báo hiệu mã hoá THẲNG cho từng user (thiết
+   * lập Olm session, phân phối/rotate Megolm session key) -- KHÔNG đi qua conversation fan-out
+   * thường (xem javadoc {@link E2eKeyRegistry}). Mỗi delivery vừa PERSIST (nguồn thật, đọc lại lúc
+   * offline qua {@link #drainE2eToDevice}) vừa publish EventBus để relay SỐNG ngay nếu recipient
+   * đang online (xem {@link #E2E_TO_DEVICE_ADDRESS}, harbor's RoutingVersionSync lắng nghe).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "e2e/to-device", type = Type.HTTP)})
+  public CompletionStage<byte[]> queueE2eToDevice(IRequest request) {
+    var senderId = requireAuthenticatedUserId(request);
+    var body = parseJsonBody(request);
+    var rawDeliveries = body.getJsonArray("deliveries");
+    if (rawDeliveries == null || rawDeliveries.isEmpty()) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing deliveries");
+    }
+    var futures = new ArrayList<CompletableFuture<?>>();
+    for (var raw : rawDeliveries) {
+      if (!(raw instanceof JsonObject delivery)) {
+        continue;
+      }
+      var recipientUserId = UUIDUtils.parseOrDefault(delivery.getString("recipientUserId"));
+      var type = delivery.getString("type");
+      var payload = delivery.getJsonObject("body");
+      if (recipientUserId == null || type == null || payload == null) {
+        continue;
+      }
+      var conversationId = UUIDUtils.parseOrDefault(delivery.getString("conversationId"));
+      var id = UUID.randomUUID();
+      var future = e2eKeys
+          .queueToDeviceMessage(id, recipientUserId, senderId, conversationId, type, payload.encode())
+          .thenAccept(unused -> vertx.eventBus().publish(
+              E2E_TO_DEVICE_ADDRESS,
+              new JsonObject()
+                  .put("id", id.toString())
+                  .put("recipientUserId", recipientUserId.toString())
+                  .put("senderUserId", senderId.toString())
+                  .put("conversationId", conversationId == null ? null : conversationId.toString())
+                  .put("type", type)
+                  .put("body", payload)))
+          .toCompletableFuture();
+      futures.add(future);
+    }
+    return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+        .thenApply(unused -> bytes(new JsonObject().put("count", futures.size())));
+  }
+
+  /**
+   * {@code GET /e2e/to-device} — lấy hết + xoá sạch hàng đợi to-device của CHÍNH mình, gọi lúc
+   * connect/login để bù những tin gửi lúc mình offline (xem {@link E2eKeyRegistry#drainToDeviceMessages}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/to-device", type = Type.HTTP)})
+  public CompletionStage<byte[]> drainE2eToDevice(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    return e2eKeys.drainToDeviceMessages(userId).thenApply(HallApiHandlers::bytes);
+  }
+
+  // ================= Liên kết thiết bị mã hoá (KHÔNG quét QR -- gõ tay mã 6 ký tự) =================
+  // Thiết bị MỚI (chưa có Olm.Account cục bộ) xin 1 mã ngắn hạn ở đây, hiển thị cho user gõ tay sang
+  // thiết bị ĐÃ bật E2E; thiết bị đó lấy bundle (identity+one-time key) của thiết bị mới, mã hoá
+  // NGUYÊN Account thật của mình (Olm 1-1 bình thường, tái dùng {@code POST /e2e/to-device} sẵn có
+  // để chuyển gói đó về CHÍNH MÌNH) -- xem frontend's e2eRequestDeviceLink/e2eApproveDeviceLink.
+  // Server CHỈ trung chuyển 2 public key (identity+one-time) ở các endpoint dưới đây, KHÔNG BAO GIỜ
+  // thấy private key/nội dung gói chuyển giao (đi qua hàng đợi to-device đã mã hoá sẵn từ client).
+
+  /**
+   * {@code POST /e2e/device-link/request} — body {@code {identityKey, oneTimeKeyId, oneTimeKey}}
+   * (bundle của 1 {@code Olm.Account} TẠM, thiết bị mới tự tạo, chỉ dùng 1 lần cho việc này). Trả
+   * {@code {code, expiresInSeconds}} -- mã hết hạn sau 5 phút (xem
+   * {@link E2eKeyRegistry#claimDeviceLinkRequest}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "e2e/device-link/request", type = Type.HTTP)})
+  public CompletionStage<byte[]> requestDeviceLink(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var body = parseJsonBody(request);
+    var identityKey = body.getString("identityKey");
+    var oneTimeKeyId = body.getString("oneTimeKeyId");
+    var oneTimeKey = body.getString("oneTimeKey");
+    if (identityKey == null || identityKey.isBlank() || oneTimeKeyId == null || oneTimeKey == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing identityKey/oneTimeKeyId/oneTimeKey");
+    }
+    return e2eKeys.createDeviceLinkRequest(userId, identityKey.strip(), oneTimeKeyId, oneTimeKey)
+        .thenApply(code -> bytes(new JsonObject().put("code", code).put("expiresInSeconds", 300)));
+  }
+
+  /**
+   * {@code GET /e2e/device-link/bundle?code=XXXXXX} — thiết bị ĐÃ bật E2E gọi sau khi user gõ đúng
+   * mã hiển thị trên thiết bị mới, lấy bundle (identity+one-time key) để tự mã hoá gói chuyển giao
+   * PHÍA CLIENT (xem frontend's e2eApproveDeviceLink) rồi gửi qua {@code POST /e2e/to-device} có sẵn
+   * (recipientUserId = chính mình). Dùng 1 LẦN -- gọi lại cùng mã sẽ 404 (xem
+   * {@link E2eKeyRegistry#claimDeviceLinkRequest}, cùng lý do trả 404 dù mã sai/hết hạn/thuộc user
+   * khác: không lộ mã nào từng tồn tại).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/device-link/bundle", type = Type.HTTP)})
+  public CompletionStage<byte[]> claimDeviceLinkBundle(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var code = request.getParam("code");
+    if (code == null || code.isBlank()) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing code");
+    }
+    return e2eKeys.claimDeviceLinkRequest(code.strip().toUpperCase(), userId).thenApply(bundle -> {
+      if (bundle == null) {
+        throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "mã không đúng hoặc đã hết hạn");
+      }
+      return bytes(bundle);
+    });
   }
 }

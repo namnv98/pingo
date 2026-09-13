@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -93,6 +95,41 @@ public class ConversationMembershipRegistry {
             .execute(Tuple.of(conversationId, userId))
             .toCompletionStage()
             .thenApply(rows -> rows.iterator().hasNext()));
+    }
+
+    /**
+     * Role của 1 thành viên -- {@code "owner"} hoặc {@code "member"} (xem cột {@code role},
+     * DEFAULT {@code 'member'}). Chỉ dùng cho check quyền/quy tắc "luôn còn ít nhất 1 owner" tại
+     * {@code HallApiHandlers} ({@link #removeMember}/thăng-hạ role) -- MỌI conversation (kể cả DM 2
+     * người) đều có đúng 1 owner (người tạo, xem {@code HallApiHandlers#createConversation}) dù DM
+     * không có khái niệm "quản trị nhóm" để dùng tới role này.
+     */
+    public CompletionStage<Map<UUID, String>> getMemberRoles(UUID conversationId) {
+        return supplier.executeReadOnly(conn -> conn.preparedQuery(
+                "SELECT user_id, role FROM conversation_members WHERE conversation_id = ?")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage()
+            .thenApply(rows -> {
+                var result = new HashMap<UUID, String>();
+                for (var row : rows) {
+                    result.put(row.getUUID("user_id"), row.getString("role"));
+                }
+                return result;
+            }));
+    }
+
+    /**
+     * Thăng/hạ role 1 thành viên -- {@code role} phải là {@code "owner"}/{@code "member"} (validate
+     * ở tầng gọi, xem {@code HallApiHandlers#setConversationMemberRole}/{@code
+     * #removeConversationMember}, ở đây không tự kiểm tra lại "còn ít nhất 1 owner" -- đó là quy tắc
+     * NGHIỆP VỤ, thuộc tầng handler, không phải tầng lưu trữ thuần này).
+     */
+    public CompletionStage<Void> setRole(UUID conversationId, UUID userId, String role) {
+        return supplier.execute(conn -> conn.preparedQuery(
+                "UPDATE conversation_members SET role = ? WHERE conversation_id = ? AND user_id = ?")
+            .execute(Tuple.of(role, conversationId, userId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
     }
 
     public CompletionStage<Set<UUID>> getMembers(UUID conversationId) {
@@ -210,6 +247,29 @@ public class ConversationMembershipRegistry {
             .thenApply(unused -> null));
     }
 
+    /**
+     * Bật mã hoá đầu cuối cho 1 conversation -- CHỈ MỘT CHIỀU bật, không có {@code disable} (tránh
+     * lịch sử "nửa mã hoá nửa không" gây hiểu lầm, xem {@code HallApiHandlers#setConversationEncrypted}).
+     * Idempotent ({@code SET e2e_enabled = true}, gọi lại nhiều lần vô hại).
+     */
+    public CompletionStage<Void> setEncrypted(UUID conversationId) {
+        return supplier.execute(conn -> conn.preparedQuery(
+                "INSERT INTO conversations (id, e2e_enabled) VALUES (?, true) ON CONFLICT (id) DO UPDATE SET e2e_enabled = true")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage()
+            .thenApply(unused -> null));
+    }
+
+    public CompletionStage<Boolean> isEncrypted(UUID conversationId) {
+        return supplier.executeReadOnly(conn -> conn.preparedQuery("SELECT e2e_enabled FROM conversations WHERE id = ?")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage()
+            .thenApply(rows -> {
+                var it = rows.iterator();
+                return it.hasNext() && Boolean.TRUE.equals(it.next().getBoolean("e2e_enabled"));
+            }));
+    }
+
 
     /**
      * Toan bo conversation ma userId dang la thanh vien -- dung cho UI "danh sach hoi thoai cua
@@ -227,7 +287,10 @@ public class ConversationMembershipRegistry {
         // thành cột thật, COALESCE ở ORDER BY ngoài mới hợp lệ.
         return supplier.executeReadOnly(conn -> conn.preparedQuery(
                 "SELECT * FROM ("
-                    + "  SELECT cm.conversation_id, array_agg(cm.user_id) AS member_ids, "
+                    + "  SELECT cm.conversation_id, array_agg(cm.user_id ORDER BY cm.user_id) AS member_ids, "
+                    // Cùng thứ tự ORDER BY user_id với member_ids ở trên -- 2 mảng zip lại đúng theo
+                    // INDEX (member_ids[i] <-> member_roles[i]), xem vòng lặp build JSON bên dưới.
+                    + "    array_agg(cm.role ORDER BY cm.user_id) AS member_roles, "
                     + "    (SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = cm.conversation_id) AS last_message_at, "
                     // Tin GẦN NHẤT (dù đã xoá hay chưa -- xoá thì vẫn phải hiện đúng chuyện vừa xảy ra
                     // "Tin nhắn đã bị xoá" ở sidebar, không lặng lẽ nhảy về tin cũ hơn, xem demo.html
@@ -252,6 +315,7 @@ public class ConversationMembershipRegistry {
                     + "    min(cm.created_at) AS conv_created_at, "
                     + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name, "
                     + "    (SELECT c.avatar_file_id FROM conversations c WHERE c.id = cm.conversation_id) AS conv_avatar_file_id, "
+                    + "    (SELECT c.e2e_enabled FROM conversations c WHERE c.id = cm.conversation_id) AS conv_e2e_enabled, "
                     // Trạng thái mute CỦA RIÊNG userId đang gọi -- không phải cột chung của cm
                     // (mỗi member có thể mute độc lập), nên phải tra lại theo đúng userId qua
                     // scalar subquery, giống hệt cách unread_count đã đọc conversation_reads ở trên.
@@ -274,21 +338,45 @@ public class ConversationMembershipRegistry {
                     // phan tu ben trong la gi.
                     var rawMemberIds = (Object[]) row.getValue("member_ids");
                     var memberIds = new JsonArray(Arrays.stream(rawMemberIds).map(String::valueOf).toList());
+                    // Zip theo INDEX với member_ids (cả 2 array_agg cùng ORDER BY user_id ở trên) --
+                    // dùng để client hiện huy hiệu "chủ nhóm" + quyết định có hiện nút thăng/hạ/kick
+                    // hay không (xem sidebar-conversations.js renderInfoPanel).
+                    var rawMemberRoles = (Object[]) row.getValue("member_roles");
+                    var memberRoles = new JsonObject();
+                    for (var i = 0; i < rawMemberIds.length; i++) {
+                        memberRoles.put(String.valueOf(rawMemberIds[i]), String.valueOf(rawMemberRoles[i]));
+                    }
                     var lastMessageAt = row.getOffsetDateTime("last_message_at");
                     var lastMessageDeleted = Boolean.TRUE.equals(row.getBoolean("last_message_deleted"));
                     var lastMessageBodyText = row.getString("last_message_body");
                     var lastMessageFromUserId = row.getUUID("last_message_from_user_id");
                     var avatarFileId = row.getUUID("conv_avatar_file_id");
+                    // Tin cuối là ciphertext (body có {"e2e":true,...}, xem MessageHistoryRegistry) thì
+                    // KHÔNG trả nội dung thô ra sidebar -- client không có khoá để đọc, hiện placeholder
+                    // "🔒 Tin nhắn đã mã hoá" thay vì cố parse .message ra rác/undefined.
+                    Object lastMessageBodyOut = null;
+                    var lastMessageEncrypted = false;
+                    if (!lastMessageDeleted && lastMessageBodyText != null) {
+                        var decoded = Json.decodeValue(lastMessageBodyText);
+                        if (decoded instanceof JsonObject decodedObj && decodedObj.getBoolean("e2e", false)) {
+                            lastMessageEncrypted = true;
+                        } else {
+                            lastMessageBodyOut = decoded;
+                        }
+                    }
                     result.add(
                         new JsonObject()
                             .put("conversationId", row.getUUID("conversation_id").toString())
                             .put("memberUserIds", memberIds)
+                            .put("memberRoles", memberRoles)
                             .put("name", row.getString("conv_name"))
                             .put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())
+                            .put("e2eEnabled", Boolean.TRUE.equals(row.getBoolean("conv_e2e_enabled")))
                             .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli())
                             .put("lastMessageFromUserId", lastMessageFromUserId == null ? null : lastMessageFromUserId.toString())
                             .put("lastMessageDeleted", lastMessageDeleted)
-                            .put("lastMessageBody", lastMessageDeleted || lastMessageBodyText == null ? null : Json.decodeValue(lastMessageBodyText))
+                            .put("lastMessageEncrypted", lastMessageEncrypted)
+                            .put("lastMessageBody", lastMessageBodyOut)
                             .put("unreadCount", row.getLong("unread_count"))
                             .put("muted", Boolean.TRUE.equals(row.getBoolean("my_muted"))));
                 }

@@ -22,6 +22,13 @@ data:
     -- cot do dung chung cho MOI thanh vien, con muted la state rieng tu cua chinh dong nay). Doc lai
     -- o ChatSessionManager#createNotification/#publishNotificationCandidates de chan notification/push.
     ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT false;
+    -- Role trong group: 'owner' (nhieu owner cung luc duoc, xem ConversationMembershipRegistry#setRole)
+    -- hoac 'member'. Nguoi tao conversation luon la owner dau tien (HallApiHandlers#createConversation);
+    -- moi thanh vien them sau qua addMembers giu DEFAULT 'member'. Quy tac "luon con it nhat 1 owner
+    -- neu nhom con thanh vien khac" duoc gac o tang HallApiHandlers (removeConversationMember/
+    -- setConversationMemberRole), KHONG phai constraint DB -- xoa/ha owner cuoi cung bat buoc phai
+    -- chi dinh 1 owner moi truoc, xem javadoc 2 method do.
+    ALTER TABLE conversation_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member';
 
     -- Ten rieng (tuy chon) cho 1 conversation, dung chung cho MOI thanh vien (khac ban dau chi luu
     -- localStorage rieng tung trinh duyet) -- xem ConversationMembershipRegistry#upsertName,
@@ -269,3 +276,97 @@ data:
     ALTER TABLE messages ADD COLUMN search_vector tsvector
         GENERATED ALWAYS AS (to_tsvector('pingo_search', coalesce(search_text, ''))) STORED;
     CREATE INDEX IF NOT EXISTS idx_messages_search_vector ON messages USING GIN (search_vector);
+
+    -- Sua tin nhan da gui -- KHONG gioi han thoi gian (khac Messenger/Zalo co gioi han vai chuc phut),
+    -- KHONG gioi han so lan. edited_at = lan sua GAN NHAT (NULL = chua tung sua) -- client dung cot
+    -- nay quyet dinh co hien nhan "(da chinh sua)" hay khong (xem MessageHistoryRegistry#editMessage).
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+
+    -- Lich su cac phien ban CU (truoc lan sua gan nhat) cua 1 tin -- moi lan sua, ban HIEN TAI (sap bi
+    -- ghi de) duoc chup lai vao day TRUOC KHI UPDATE messages.body, nen bang nay luon la cac phien ban
+    -- CU, phien ban MOI NHAT luon nam trong messages.body (khong luu trung o day). Xem UI hien thi lich
+    -- su: noi 2 nguon lai theo edited_at (message_edits) roi den messages.updated (hien tai) la day du.
+    -- Khong FK toi messages, giu dung quy uoc loose-schema cua repo (giong moi bang message_* khac).
+    CREATE TABLE IF NOT EXISTS message_edits (
+        id UUID NOT NULL PRIMARY KEY,
+        message_id UUID NOT NULL,
+        previous_body TEXT,
+        edited_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- ================= Mã hoá đầu cuối (E2E, dùng thư viện Olm/Megolm phía client) =================
+    -- users.e2e_identity_key (CỘT CŨ, còn giữ lại nhưng KHÔNG dùng nữa) -- bản đầu tiên gán 1 identity
+    -- key DUY NHẤT cho cả TÀI KHOẢN (mọi thiết bị dùng chung), gây xung đột khi mở nhiều nơi + không
+    -- có fan-out per-device thật. Từ giờ MỖI THIẾT BỊ tự có 1 identity key RIÊNG (đúng thuật toán
+    -- Sesame của Signal, xem e2e_devices bên dưới) -- không còn khái niệm "xung đột identity" nữa vì
+    -- không còn ai ghi đè ai, mỗi thiết bị 1 hàng riêng.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS e2e_identity_key TEXT;
+
+    -- Identity key (Curve25519, public) của TỪNG THIẾT BỊ (không phải từng user nữa) -- deviceId do
+    -- CLIENT tự sinh 1 lần/trình duyệt (UUID ngẫu nhiên, lưu localStorage, KHÔNG BAO GIỜ đổi), private
+    -- key KHÔNG BAO GIỜ rời máy (pickle + lưu IndexedDB, xem e2e-crypto.js). 1 user nhiều thiết bị =
+    -- nhiều hàng ở đây, mỗi hàng độc lập -- gửi tin cho user nào phải mã hoá RIÊNG cho TỪNG thiết bị
+    -- của họ (xem HallApiHandlers's GET /e2e/keys/bundle trả về MẢNG thiết bị, không phải 1 cái).
+    CREATE TABLE IF NOT EXISTS e2e_devices (
+        device_id UUID NOT NULL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        identity_key TEXT NOT NULL,
+        label TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_e2e_devices_user ON e2e_devices (user_id);
+    ALTER TABLE e2e_devices ADD COLUMN IF NOT EXISTS label TEXT;
+
+    -- One-time prekey (Curve25519, public) -- mỗi cái CHỈ dùng 1 LẦN để thiết lập 1 Olm session mới
+    -- (X3DH cần 1 prekey dùng 1 lần để có forward secrecy ngay từ tin đầu tiên, không chỉ dựa vào
+    -- identity key cố định). Bên tạo session GET ra 1 key rồi server XÓA LUÔN (xem
+    -- E2eKeyRegistry#claimOneTimePrekey) -- client tự sinh thêm lô mới khi thấy còn ít, giữ nguyên
+    -- tinh thần "one-time" đúng nghĩa. Khoá theo device_id (không phải user_id nữa) -- cùng lý do e2e_devices.
+    DROP TABLE IF EXISTS e2e_one_time_prekeys;
+    CREATE TABLE e2e_one_time_prekeys (
+        device_id UUID NOT NULL,
+        key_id TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (device_id, key_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_e2e_one_time_prekeys_device ON e2e_one_time_prekeys (device_id, created_at);
+
+    -- Bật/tắt mã hoá đầu cuối cho 1 conversation -- tích chọn (opt-in), mặc định false (giữ nguyên
+    -- hành vi cũ, server đọc được search_text/preview như trước). Bật rồi thì KHÔNG tắt lại được nữa
+    -- (xem HallApiHandlers#setConversationEncrypted) -- tránh vòng lặp lịch sử vừa mã hoá vừa không.
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS e2e_enabled BOOLEAN NOT NULL DEFAULT false;
+
+    -- Hàng đợi "to-device": tin BÁO HIỆU mã hoá (thiết lập Olm session, phân phối Megolm session key
+    -- lúc bật mã hoá/rotate) gửi THẲNG cho 1 user cụ thể -- KHÁC hẳn message thường (không gắn với 1
+    -- conversationId để fan-out theo Maglev, xem MessageDelivery) vì đích đến là 1 NGƯỜI, có thể đang
+    -- offline. Còn sống (chưa bị lấy) thì vẫn nằm đây, drain hết + xoá sạch mỗi lần user đó connect lại
+    -- (xem GET /e2e/to-device) -- nếu đang online thì CÒN được relay sống qua WS ngay lập tức (xem
+    -- EventBus address e2e_to_device_sent, HallApiHandlers), bảng này là lưới an toàn khi offline.
+    CREATE TABLE IF NOT EXISTS e2e_to_device_messages (
+        id UUID NOT NULL PRIMARY KEY,
+        recipient_user_id UUID NOT NULL,
+        sender_user_id UUID NOT NULL,
+        conversation_id UUID,
+        type TEXT NOT NULL,
+        body_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_e2e_to_device_recipient ON e2e_to_device_messages (recipient_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_message_edits_message ON message_edits (message_id, edited_at);
+
+    -- Mã liên kết thiết bị (KHÔNG quét QR -- gõ tay 6 ký tự) -- thiết bị MỚI (chưa có Olm.Account cục
+    -- bộ) tự tạo 1 Account TẠM + xin 1 mã ngắn hạn (5 phút) ở đây; thiết bị ĐÃ bật E2E gõ mã đó vào,
+    -- server trả (1 LẦN, atomic DELETE...RETURNING, xem E2eKeyRegistry#claimDeviceLinkRequest) đúng
+    -- identity_key/one_time_key của thiết bị mới để thiết bị cũ mã hoá gói {accountPickle, pickleKey}
+    -- CHUYỂN GIAO chính identity thật của mình -- server KHÔNG BAO GIỜ thấy accountPickle/pickleKey,
+    -- chỉ trung chuyển public key ở BƯỚC NÀY (gói mã hoá thật đi qua hàng đợi to-device sẵn có, xem
+    -- HallApiHandlers's device-link endpoints).
+    CREATE TABLE IF NOT EXISTS e2e_device_link_requests (
+        code TEXT NOT NULL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        identity_key TEXT NOT NULL,
+        one_time_key_id TEXT NOT NULL,
+        one_time_key TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );

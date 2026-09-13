@@ -38,6 +38,8 @@ public class RoutingVersionSync extends RoutingVersionTracker {
   private static final String MEMBER_REMOVED_ADDRESS = "conversation_member_removed";
   /** Địa chỉ EventBus harbor tự publish (chính pod này hoặc pod khác) lúc 1 user đổi trạng thái online/offline, xem {@code HarborSessionManager#broadcastPresenceChange}. */
   private static final String PRESENCE_ADDRESS = "user_presence_changed";
+  /** Địa chỉ EventBus hall broadcast "vừa có 1 tin to-device mới cho user X" (mã hoá đầu cuối, xem {@code HallApiHandlers#queueE2eToDevice}). */
+  private static final String E2E_TO_DEVICE_ADDRESS = "e2e_to_device_sent";
 
   private final BackendStreamGateway backendStreamGateway;
   private final Map<String, HarborSession> sessions;
@@ -54,6 +56,7 @@ public class RoutingVersionSync extends RoutingVersionTracker {
     vertx.eventBus().consumer(CONVERSATION_DELETED_ADDRESS, this::onConversationDeleted);
     vertx.eventBus().consumer(MEMBER_REMOVED_ADDRESS, this::onMemberRemoved);
     vertx.eventBus().consumer(PRESENCE_ADDRESS, this::onPresenceChanged);
+    vertx.eventBus().consumer(E2E_TO_DEVICE_ADDRESS, this::onE2eToDevice);
   }
 
   @Override
@@ -216,6 +219,40 @@ public class RoutingVersionSync extends RoutingVersionTracker {
             .build();
     for (var session : sessions.values()) {
       if (session.getUserId() != null) {
+        relayToClient.accept(session, frame);
+      }
+    }
+  }
+
+  /**
+   * Nhận broadcast "vừa có 1 tin to-device mới cho user X" (mã hoá đầu cuối -- thiết lập Olm
+   * session/phân phối Megolm session key, xem {@code HallApiHandlers#queueE2eToDevice}) — CHỈ relay
+   * cho session đang mở của ĐÚNG user X (có thể nhiều tab/thiết bị, lặp hết), KHÔNG liên quan gì tới
+   * conversation fan-out/routing version (khác mọi handler còn lại trong lớp này) -- đây là kênh
+   * "gửi thẳng tới 1 người" thuần tuý, dùng lại nguyên hạ tầng "tìm session sống của user Y trên pod
+   * này" đã có ở {@link #onMemberRemoved}. X không online ở pod nào lúc này thì không mất gì — hàng
+   * đợi DB đã lưu sẵn, tự bù lúc connect lại qua {@code GET /e2e/to-device}.
+   */
+  private void onE2eToDevice(Message<JsonObject> message) {
+    var body = message.body();
+    UUID recipientUserId;
+    try {
+      recipientUserId = UUID.fromString(body.getString("recipientUserId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      return;
+    }
+    var conversationId = body.getString("conversationId");
+    var frame =
+        SocketFrame.builder()
+            .type(MessageType.E2E_TO_DEVICE)
+            .id(body.getString("id"))
+            .fromUserId(body.getString("senderUserId"))
+            .conversationId(conversationId)
+            .body(Map.of("type", body.getString("type"), "payload", body.getValue("body")))
+            .ts(System.currentTimeMillis())
+            .build();
+    for (var session : sessions.values()) {
+      if (recipientUserId.equals(session.getUserId())) {
         relayToClient.accept(session, frame);
       }
     }

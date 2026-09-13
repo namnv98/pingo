@@ -38,6 +38,97 @@ function handleMessageDeleted(conversationId, messageId) {
     }
 }
 
+// Server tự kiểm tra lại quyền sửa (so from_user_id thật trong DB, giống deleteMessage) -- gửi frame
+// EDIT giữ nguyên mọi field khác của body (replyTo/files/preview...), chỉ đổi "message" (xem sendMsg
+// trong messaging-core.js, nơi thật sự lắp ráp body mới từ rawBodyByMessageId).
+function startEditMessage(conversationId, messageId) {
+    var entry = conversations[conversationId];
+    if (!entry || !entry._startEdit) return;
+    var body = rawBodyByMessageId[messageId] || {};
+    entry._startEdit(messageId, body.message || '');
+}
+
+// Frame EDIT (của mình lẫn người khác) -- tìm theo messageId trên TOÀN #chatMain, cùng cách
+// handleMessageDeleted làm, vì có thể đang xem 1 conversation khác lúc tin ở nơi khác được sửa.
+function handleMessageEdited(conversationId, messageId, newBody) {
+    if (!messageId) return;
+    rawBodyByMessageId[messageId] = newBody;
+    var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+    if (row) {
+        var bubbleEl = row.querySelector('.bubble');
+        if (bubbleEl) {
+            // renderMessageContent() tự xoá sạch innerHTML trước khi vẽ lại -- mất luôn khối reply-quote/
+            // forwarded-badge đã chèn từ trước (chèn RIÊNG, không phải 1 phần của renderMessageContent),
+            // phải chèn lại đây, cùng cách appendMessageBubble làm lúc dựng bubble lần đầu.
+            renderMessageContent(bubbleEl, newBody, function () {});
+            if (newBody && newBody.replyTo) bubbleEl.insertBefore(buildReplyQuoteEl(newBody.replyTo, conversationId), bubbleEl.firstChild);
+            if (newBody && newBody.forwardedFrom) bubbleEl.insertBefore(buildForwardedBadgeEl(newBody.forwardedFrom), bubbleEl.firstChild);
+        }
+        var editedLabelEl = row.querySelector('.editedLabel');
+        if (editedLabelEl) {
+            editedLabelEl.style.display = '';
+            editedLabelEl.onclick = function (e) { e.stopPropagation(); showEditHistory(messageId); };
+        }
+    }
+    // Tin KHÁC đang trích dẫn (reply) đúng tin vừa sửa -- cập nhật lại snippet hiện ra ở đó cho khớp nội dung mới.
+    document.querySelectorAll('.reply-quote[data-reply-to-id="' + CSS.escape(messageId) + '"] .reply-quote-snippet').forEach(function (sn) {
+        sn.innerText = snippetForBody(newBody);
+    });
+}
+
+// --- Modal "Lịch sử chỉnh sửa" -- cùng khuôn bgPickerModal/searchModal với forwardModal/addMemberModal (sidebar-conversations.js).
+function ensureEditHistoryModal() {
+    var overlay = document.getElementById('editHistoryModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'editHistoryModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal">' +
+        '<div class="bgPickerHead"><span>Lịch sử chỉnh sửa</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody"><div class="editHistoryList"></div></div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeEditHistoryModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeEditHistoryModal(); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('editHistoryModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeEditHistoryModal();
+});
+
+function closeEditHistoryModal() {
+    var overlay = document.getElementById('editHistoryModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
+// GET /messages/edit-history trả các bản CŨ (không gồm bản hiện tại, xem MessageHistoryRegistry#getEditHistory)
+// -- nối thêm bản HIỆN TẠI (rawBodyByMessageId, mới nhất) vào cuối danh sách cho đủ dòng thời gian.
+function showEditHistory(messageId) {
+    var overlay = ensureEditHistoryModal();
+    var listEl = overlay.querySelector('.editHistoryList');
+    listEl.innerHTML = '<div class="searchModalEmpty">Đang tải...</div>';
+    overlay.classList.add('show');
+    fetchJson('/messages/edit-history?messageId=' + encodeURIComponent(messageId), true)
+        .then(function (history) {
+            var currentBody = rawBodyByMessageId[messageId];
+            var versions = history.concat(currentBody ? [{body: currentBody, ts: Date.now(), current: true}] : []);
+            listEl.innerHTML = '';
+            versions.forEach(function (v) {
+                var row = document.createElement('div');
+                row.className = 'notifItem'; // tái dùng style hàng có sẵn (avatar+text+time), không cần CSS riêng
+                row.innerHTML =
+                    '<div class="notifItemBody"><div class="notifItemText"></div><div class="notifItemTime"></div></div>';
+                row.querySelector('.notifItemText').innerText = (v.current ? '(Hiện tại) ' : '') + (snippetForBody(v.body) || '(trống)');
+                row.querySelector('.notifItemTime').innerText = relativeTime(v.ts);
+                listEl.appendChild(row);
+            });
+        })
+        .catch(function (err) {
+            listEl.innerHTML = '<div class="searchModalEmpty">Không tải được lịch sử: ' + err.message + '</div>';
+        });
+}
+
 // Server hiểu body rỗng = huỷ reaction, emoji mới = tự thay thế (không cộng dồn) -- xem MessageType#REACTION.
 function sendReaction(conversationId, messageId, emoji) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -364,6 +455,8 @@ function performJumpToMessage(conversationId, targetMessageId, targetTs, highlig
         fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + SEEK_HALF + '&before=' + (targetTs + 1)),
         fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + SEEK_HALF + '&after=' + targetTs)
     ]).then(function(results){
+        return Promise.all([e2eResolveIncomingBatch(conversationId, results[0] || []), e2eResolveIncomingBatch(conversationId, results[1] || [])]);
+    }).then(function(results){
         var beforeMsgs = results[0] || [];
         var afterMsgs = results[1] || [];
         var logEl = entry.logEl;
@@ -373,19 +466,19 @@ function performJumpToMessage(conversationId, targetMessageId, targetTs, highlig
         entry.lastMessageMeta = null;
         entry.lastDividerDateKey = null;
         entry.lastGroupRow = null;
+        entry.firstMineRow = null;
+        entry.lastMineRow = null;
         entry.oldestLoadedTs = null;
         entry.newestLoadedTs = null;
         entry.suppressAutoScroll = true;
-        entry.skipReadTracking = true;
         entry.scrollAnchor = null;
         beforeMsgs.slice().reverse().forEach(function(m){
-            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
         });
         afterMsgs.forEach(function(m){
-            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+            appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
         });
         entry.suppressAutoScroll = false;
-        entry.skipReadTracking = false;
         var allTs = [];
         beforeMsgs.forEach(function(m){ allTs.push(m.ts); });
         afterMsgs.forEach(function(m){ allTs.push(m.ts); });

@@ -29,12 +29,24 @@ var messaging = firebase.messaging();
 // kiểu "notification" thường -- phải tự showNotification() ở đây.
 messaging.onBackgroundMessage(function (payload) {
   var data = payload.data || {};
-  self.registration.showNotification(data.title || 'Pingo', {
-    body: data.body || '',
-    icon: 'images/logo.svg',
-    tag: data.conversationId || undefined, // nhiều tin dồn dập cùng conversation -- gộp thành 1 notification thay vì rung liên tục.
-    data: {conversationId: data.conversationId}
-  });
+  var tag = data.conversationId || undefined;
+  // KHÔNG dựa vào renotify để Chrome tự "bật lại" noti trùng tag -- gặp thật trên Chrome+Linux
+  // (kể cả gọi showNotification() trực tiếp, không qua push): noti ĐẦU TIÊN của 1 tag luôn hiện,
+  // nhưng noti THỨ HAI trở đi trùng tag bị Chrome nuốt im lặng dù renotify=true (không phải lỗi
+  // app/server, tự tay lặp lại new Notification({tag, renotify:true}) 2 lần cũng thấy y hệt) --
+  // renotify chỉ là gợi ý cho trình duyệt, không có gì đảm bảo nó tôn trọng. Né hẳn cơ chế đó: tự
+  // đóng noti cũ cùng tag rồi mở noti MỚI (không tag) -- luôn là 1 noti "mới toanh" với trình duyệt
+  // nên luôn được alert, đồng thời vẫn không bao giờ có quá 1 noti/hội thoại hiển thị cùng lúc.
+  return (tag ? self.registration.getNotifications({tag: tag}) : Promise.resolve([]))
+    .then(function (existing) {
+      existing.forEach(function (n) { n.close(); });
+      self.registration.showNotification(data.title || 'Pingo', {
+        body: data.body || '',
+        icon: 'images/logo.svg',
+        tag: tag, // giữ tag để LẦN SAU tìm + đóng noti này -- không còn dùng nó để trình duyệt tự thay thế/renotify nữa (đã đóng thủ công ở trên trước khi tới đây).
+        data: {conversationId: data.conversationId}
+      });
+    });
 });
 
 // Bấm vào notification -- ưu tiên focus tab đang mở sẵn (báo conversationId qua postMessage để

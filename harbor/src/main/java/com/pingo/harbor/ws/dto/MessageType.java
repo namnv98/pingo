@@ -120,6 +120,18 @@ public enum MessageType {
      */
     DELETE,
     /**
+     * Client -&gt; gateway: sửa nội dung tin nhắn {@code id} của CHÍNH MÌNH (server tự kiểm tra
+     * {@code fromUserId} thật khớp người gửi gốc qua {@code from_user_id} trong DB, KHÔNG tin
+     * client tự khai, cùng cách {@link #DELETE} làm) — {@code conversationId} bắt buộc, {@code body}
+     * = nội dung MỚI (cùng shape với {@link #MESSAGE}, vd {@code {"message": "..."}}). KHÔNG giới
+     * hạn thời gian/số lần sửa. Gateway -&gt; client: fan-out cho MỌI subscriber khác biết {@code id}
+     * đó vừa được sửa + nội dung mới, để tự cập nhật bubble + hiện nhãn "đã chỉnh sửa" (xem
+     * {@code ChatSessionManager#handleEdit} bên colony — fan-out + persist cột {@code edited_at} +
+     * chụp lại bản cũ vào bảng {@code message_edits} cho lịch sử, xem {@code GET
+     * /messages/{id}/edit-history}).
+     */
+    EDIT,
+    /**
      * Cả 2 chiều: ghim/bỏ ghim tin nhắn {@code id} — {@code conversationId} bắt buộc, {@code body} =
      * {@code {"scope": "shared"|"private", "pinned": true|false}}. "shared" (ghim chung): CÓ fan-out
      * cho MỌI subscriber khác, ai cũng ghim/bỏ ghim được — xem {@code ChatSessionManager#handlePin}
@@ -127,5 +139,16 @@ public enum MessageType {
      * "private" (ghim riêng): CHỈ persist (bảng {@code message_pins_private}), KHÔNG fan-out — tránh
      * lộ cho thành viên khác biết ai đang ghim riêng gì; đọc lại qua {@code GET /pins}.
      */
-    PIN
+    PIN,
+    /**
+     * Gateway -&gt; client: 1 tin "to-device" mã hoá đầu cuối vừa tới (thiết lập Olm session, hoặc
+     * phân phối/rotate Megolm session key) -- KHÔNG gắn với 1 conversation để fan-out theo Maglev
+     * như MESSAGE thường, đích đến là 1 NGƯỜI cụ thể (xem {@code E2eKeyRegistry}, {@code
+     * HallApiHandlers#queueE2eToDevice}, {@code RoutingVersionSync}'s consumer riêng cho địa chỉ
+     * EventBus {@code e2e_to_device_sent}). {@code fromUserId} = người gửi, {@code body} =
+     * {@code {"type": "...", "payload": {...}}} -- client tự diễn giải theo {@code type} (xem
+     * {@code e2e-crypto.js}). Chỉ relay SỐNG cho session đang mở -- offline thì bù qua {@code GET
+     * /e2e/to-device} lúc connect lại (xem client's {@code connect()}).
+     */
+    E2E_TO_DEVICE
 }

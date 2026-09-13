@@ -23,13 +23,18 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p><b>"Online" (còn socket WS mở) KHÁC "đang thực sự xem"</b> — máy khoá màn hình/tab chạy nền
  * vẫn giữ socket sống (OS/browser tự trả PONG ngầm), khiến {@link PresenceRegistry#isOnline} trả
- * {@code true} dù không ai nhìn màn hình, kết quả là những user đó KHÔNG BAO GIỜ nhận noti dù thực
- * ra đã bỏ lỡ tin. Vì vậy: candidate OFFLINE lưu ngay như cũ; candidate ONLINE KHÔNG bỏ qua hẳn
- * nữa mà cho 1 khoảng ân hạn {@link #GRACE_MS} — nếu trong lúc đó có {@link #onReadAck} thật từ
- * đúng session đó (client xác nhận đã render tin ra màn hình, xem {@code MessageType#READ} bên
- * harbor) thì huỷ, coi như đã xem; hết hạn mà chưa có ACK thì coi như "mở máy nhưng không xem",
- * vẫn lưu/push noti như candidate offline. Khác cách bản cũ (lego-new) làm: KHÔNG đoán bằng đồng
- * hồ đơn thuần — chỉ huỷ khi có ACK thật, không có state machine mập mờ không ai xác nhận được.
+ * {@code true} dù không ai nhìn màn hình. Vì vậy grace period {@link #GRACE_MS} tồn tại — nhưng chỉ
+ * để quyết định có PUSH (FCM) hay không, KHÔNG trì hoãn việc LƯU notification: row insert NGAY LẬP
+ * TỨC cho mọi candidate (online lẫn offline), để {@code GET /notifications}/chuông trong app luôn
+ * đúng ngay tức thì, không có độ trễ nào cả (bản trước trì hoãn cả insert theo GRACE_MS, khiến chuông
+ * "chậm không rõ lý do" cho candidate online — bug thật đã gặp, sửa sai chỗ này mới đúng gốc thay vì
+ * vá phía client). Nếu trong lúc chờ có {@link #onReadAck} thật từ đúng session đó (client xác nhận
+ * đã render tin ra màn hình, xem {@code MessageType#READ} bên harbor) thì: huỷ lịch push VÀ tự đánh
+ * dấu luôn notification vừa insert là đã đọc (xem {@code NotificationRegistry#markReadByMessageId})
+ * — coi như đã xem trong app, không cần phiền thêm bằng push. Hết hạn mà chưa có ACK thì coi như "mở
+ * máy nhưng không xem", vẫn push như candidate offline. Khác cách bản cũ (lego-new) làm: KHÔNG đoán
+ * bằng đồng hồ đơn thuần — chỉ huỷ push khi có ACK thật, không có state machine mập mờ không ai xác
+ * nhận được.
  *
  * <p>Timer chờ ân hạn chỉ giữ trong bộ nhớ tiến trình (không bền) — nếu pod herald này chết đúng
  * lúc đang chờ, timer mất theo, candidate đó không được lưu noti (dù đáng lẽ phải lưu sau khi hết
@@ -50,8 +55,10 @@ public class NotificationConsumer {
   private static final String NOTIFY_CANDIDATES_ADDRESS = "message_notify_candidates";
   /** PHẢI khớp {@code HarborSessionManager#READ_ACK_ADDRESS} bên harbor. */
   private static final String READ_ACK_ADDRESS = "message_read_ack";
-  /** Đủ ngắn để noti không trễ quá lâu, đủ dài để không phiền người vừa mới thấy tin và sắp gửi READ. */
-  private static final long GRACE_MS = 8_000;
+  /** PHẢI khớp {@code ChatSessionManager#ACTIVITY_NOTIFY_ADDRESS} bên colony. */
+  private static final String ACTIVITY_NOTIFY_ADDRESS = "activity_notify";
+  /** Chỉ còn quyết định lúc nào GỬI PUSH (notification đã insert ngay từ onCandidates, không chờ mốc này) -- đủ ngắn để push không trễ quá lâu, đủ dài để không phiền người vừa mới thấy tin và sắp gửi READ. */
+  private static final long GRACE_MS = 3_000;
   /** Cửa sổ gộp nhiều notification liên tiếp của CÙNG 1 user thành 1 lần gọi Firebase (xem javadoc lớp). */
   private static final long PUSH_DEBOUNCE_MS = 3_000;
 
@@ -75,6 +82,7 @@ public class NotificationConsumer {
     this.pushService = pushService;
     vertx.eventBus().consumer(NOTIFY_CANDIDATES_ADDRESS, this::onCandidates);
     vertx.eventBus().consumer(READ_ACK_ADDRESS, this::onReadAck);
+    vertx.eventBus().consumer(ACTIVITY_NOTIFY_ADDRESS, this::onActivityNotify);
   }
 
   private void onCandidates(Message<JsonObject> message) {
@@ -95,25 +103,41 @@ public class NotificationConsumer {
       if (userId == null) {
         continue;
       }
-      if (!presence.isOnline(userId)) {
-        persistNotification(userId, conversationId, fromUserId, messageUuid, bodyPreview, ts);
+      // LƯU NGAY bất kể online/offline -- xem javadoc lớp. Grace period (nếu áp dụng) chỉ trì hoãn
+      // bước PUSH bên dưới, không đụng gì tới bước insert này.
+      persistNotification(userId, conversationId, fromUserId, messageUuid, bodyPreview, ts);
+
+      if (!presence.isOnline(userId) || messageId == null) {
+        // Offline: chắc chắn bỏ lỡ, push ngay. Online nhưng thiếu messageId: không có gì để đối
+        // chiếu READ ack sau này -- push ngay luôn, còn hơn treo vô thời hạn không bao giờ huỷ được.
+        queuePush(userId, bodyPreview, conversationId);
         continue;
-      }
-      if (messageId == null) {
-        continue; // khong co gi de doi chieu READ -- bo qua nhu truoc, con hon la khong bao gio huy duoc
       }
       var key = pendingKey(userId, messageId);
       var timerId = vertx.setTimer(
           GRACE_MS,
           tid -> {
             pendingGraceTimers.remove(key);
-            persistNotification(userId, conversationId, fromUserId, messageUuid, bodyPreview, ts);
+            // Bọc try/catch: pushService... có thể ném exception ĐỒNG BỘ (vd pool cạn kiệt) thay vì
+            // CompletionStage lỗi -- không bọc thì exception này bay thẳng ra khỏi timer callback của
+            // Vert.x, KHÔNG qua .exceptionally() nào cả, im lặng mất tiêu (đã gặp thật: cả nhánh
+            // "online" ngừng hẳn hoạt động cho tới khi restart pod, không 1 dòng log).
+            try {
+              queuePush(userId, bodyPreview, conversationId);
+            } catch (Exception ex) {
+              log.error("grace timer callback threw for key={}", key, ex);
+            }
           });
       pendingGraceTimers.put(key, timerId);
     }
   }
 
-  /** Client (qua harbor) xác nhận đã thực sự xem 1 tin -- huỷ noti đang chờ ân hạn cho đúng (userId, messageId) đó nếu còn. */
+  /**
+   * Client (qua harbor) xác nhận đã thực sự xem 1 tin -- huỷ lịch push đang chờ ân hạn cho đúng
+   * (userId, messageId) đó nếu còn, VÀ tự đánh dấu đã đọc luôn notification {@code type='message'}
+   * vừa insert cho tin đó (đã lưu ngay từ {@link #onCandidates}, không đợi grace period) -- coi như
+   * đã xem trong app, chuông không cần treo "chưa đọc" mãi dù push đã bị huỷ.
+   */
   private void onReadAck(Message<JsonObject> message) {
     var body = message.body();
     var userId = UUIDUtils.parseOrDefault(body.getString("userId"));
@@ -125,15 +149,74 @@ public class NotificationConsumer {
     if (timerId != null) {
       vertx.cancelTimer(timerId);
     }
+    var messageUuid = UUIDUtils.parseOrDefault(messageId);
+    if (messageUuid != null) {
+      notifications
+          .markReadByMessageId(messageUuid, userId)
+          .exceptionally(
+              ex -> {
+                log.warn("failed to auto mark-read notification for message {} user {}", messageUuid, userId, ex);
+                return null;
+              });
+    }
   }
 
+  /**
+   * Notification {@code type=reaction/reply/mention} vừa insert bên colony (xem {@code
+   * ChatSessionManager#createNotification}) -- LUÔN LƯU bất kể online/offline nên không cần lặp lại
+   * logic đó ở đây, chỉ còn việc PUSH. Người bị reply/được mention đã bị {@code
+   * ChatSessionManager#publishNotificationCandidates} LOẠI KHỎI candidate "message" chung (xem
+   * {@code extractSpecialNotifyUserIds} bên colony) để tránh trùng 2 noti/2 push cho cùng 1 tin --
+   * nghĩa là push ở đây (reply/mention/reaction) giờ là NGUỒN PUSH DUY NHẤT cho các sự kiện này,
+   * không còn nguy cơ đụng độ với push "Tin nhắn mới" nữa.
+   *
+   * <p><b>LUÔN push, KHÔNG check {@code presence.isOnline}</b> -- khác {@link #onCandidates} (tin
+   * nhắn thường), "online" ở đây KHÔNG đủ để suy ra "đã thấy": reaction/mention chỉ hiện live qua
+   * frame REACTION/MESSAGE nếu người dùng ĐANG MỞ ĐÚNG conversation đó, trong khi online chỉ nghĩa
+   * "có mở app ở đâu đó" (sidebar, conversation khác...) -- coi online = đã thấy sẽ bỏ sót gần hết
+   * trường hợp thật (bug thật đã gặp: test reaction/reply/mention lúc đang mở app ở màn hình khác,
+   * không nhận được push nào). Tin nhắn thường né được vấn đề này nhờ GRACE_MS + READ ack thật; làm
+   * y hệt cho reaction/reply/mention không đáng công (tần suất thấp hơn hẳn tin nhắn) -- đơn giản
+   * nhất là bắn push luôn, nhất quán với "LUÔN LƯU" đã chọn cho phần insert DB ở colony.
+   */
+  private void onActivityNotify(Message<JsonObject> message) {
+    var body = message.body();
+    var userId = UUIDUtils.parseOrDefault(body.getString("userId"));
+    var conversationId = UUIDUtils.parseOrDefault(body.getString("conversationId"));
+    var type = body.getString("type");
+    var bodyPreview = body.getString("bodyPreview");
+    if (userId == null || conversationId == null || type == null) {
+      return;
+    }
+    var title =
+        switch (type) {
+          case "reaction" -> "Có người bày tỏ cảm xúc với tin nhắn của bạn";
+          case "reply" -> "Có người trả lời tin nhắn của bạn";
+          case "mention" -> "Bạn được nhắc đến trong 1 tin nhắn";
+          default -> "Thông báo mới";
+        };
+    var data = new HashMap<String, String>();
+    data.put("conversationId", conversationId.toString());
+    try {
+      pushService
+          .sendToUser(userId, title, bodyPreview, data)
+          .exceptionally(
+              ex -> {
+                log.warn("failed to send activity push notification for user {}", userId, ex);
+                return null;
+              });
+    } catch (Exception ex) {
+      log.error("onActivityNotify threw synchronously for user {}", userId, ex);
+    }
+  }
+
+  /** Insert notification NGAY LẬP TỨC -- không tự gửi push (xem {@link #onCandidates} quyết định lúc nào gọi {@link #queuePush}). */
   private void persistNotification(UUID userId, UUID conversationId, UUID fromUserId, UUID messageId, String bodyPreview, long ts) {
     var notificationId = UUID.randomUUID();
     // messageTs == ts: tin gốc CHÍNH LÀ tin vừa gửi (khác reaction bên colony, xem javadoc
     // NotificationRegistry#create) -- không có độ lệch nào cần phân biệt riêng ở đây.
     notifications
         .create(notificationId, userId, conversationId, fromUserId, messageId, "message", bodyPreview, ts, ts)
-        .thenRun(() -> queuePush(userId, bodyPreview, conversationId))
         .exceptionally(
             ex -> {
               log.warn("failed to persist notification {} for user {}", notificationId, userId, ex);
@@ -165,13 +248,19 @@ public class NotificationConsumer {
     }
     var data = new HashMap<String, String>();
     data.put("conversationId", last.conversationId().toString());
-    pushService
-        .sendToUser(userId, title, body, data)
-        .exceptionally(
-            ex -> {
-              log.warn("failed to send push notification for user {}", userId, ex);
-              return null;
-            });
+    try {
+      pushService
+          .sendToUser(userId, title, body, data)
+          .exceptionally(
+              ex -> {
+                log.warn("failed to send push notification for user {}", userId, ex);
+                return null;
+              });
+    } catch (Exception ex) {
+      // pushService.sendToUser ném đồng bộ (vd pool cạn kiệt) thì .exceptionally() ở trên không kịp
+      // gắn vào đâu cả -- bọc thêm lớp này để không mất log, cùng lý do với timer callback ở onCandidates.
+      log.error("flushPush threw synchronously for user {}", userId, ex);
+    }
   }
 
   private static String pendingKey(UUID userId, String messageId) {

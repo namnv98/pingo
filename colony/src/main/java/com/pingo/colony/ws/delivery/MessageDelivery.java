@@ -114,7 +114,7 @@ public class MessageDelivery {
    * rot fan-out live khong mat du lieu, chi mat phan "cap nhat UI ngay lap tuc" cho session dang mo
    * dung luc do, lan doc/react tiep theo (hoac F5) se thay dung.
    */
-  private static final java.util.Set<FrameType> EPHEMERAL_TYPES = java.util.Set.of(FrameType.TYPING, FrameType.SEEN, FrameType.REACTION, FrameType.DELETE);
+  private static final java.util.Set<FrameType> EPHEMERAL_TYPES = java.util.Set.of(FrameType.TYPING, FrameType.SEEN, FrameType.REACTION, FrameType.DELETE, FrameType.EDIT);
 
   /**
    * Nhận MESSAGE (hoặc TYPING/SEEN — tín hiệu tạm thời, xem javadoc tương ứng trong link.proto)

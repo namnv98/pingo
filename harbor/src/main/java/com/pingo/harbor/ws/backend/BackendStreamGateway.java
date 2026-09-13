@@ -129,6 +129,15 @@ public class BackendStreamGateway {
   }
 
   /**
+   * Gửi yêu cầu sửa tin {@code frame.getId()} -- xem {@link #sendEphemeral}. {@code frame.getBody()}
+   * = nội dung MỚI (cùng shape MESSAGE). Colony tự kiểm tra lại người gửi gốc trong DB trước khi
+   * thực sự sửa + fan-out (xem {@code ChatSessionManager#handleEdit}), giống {@link #sendDelete}.
+   */
+  public void sendEdit(HarborSession session, SocketFrame frame, UUID conversationId) {
+    sendEphemeral(session, frame.getId(), conversationId, FrameType.EDIT, SocketFrames.encodeBackendBody(frame.getBody()));
+  }
+
+  /**
    * Gửi yêu cầu ghim/bỏ ghim tin {@code frame.getId()} -- xem {@link #sendEphemeral}.
    * {@code frame.getBody()} = {@code {scope, pinned}}, colony tự đọc để quyết định persist bảng nào
    * và có fan-out hay không (xem {@code ChatSessionManager#handlePin}).
@@ -547,7 +556,7 @@ public class BackendStreamGateway {
       // -- giu dung hanh vi cu: nguoi gui thay lai tin cua minh qua kenh MESSAGE, tach biet voi ACK
       // rieng; voi TYPING/SEEN thi client tu loc fromUserId === minh de khong tu hien tin hieu cua
       // chinh minh, con REACTION thi client CAN nhan lai chinh minh de dong bo UI nhieu tab/thiet bi).
-      case MESSAGE, TYPING, SEEN, REACTION, DELETE, PIN -> {
+      case MESSAGE, TYPING, SEEN, REACTION, DELETE, EDIT, PIN -> {
         var conversationId = UUIDUtils.parseOrDefault(frame.getConversationId());
         var localSubscribers = conversationId == null ? null : stream.getLocalSubscribersByConversation().get(conversationId);
         if (localSubscribers == null || localSubscribers.isEmpty()) {

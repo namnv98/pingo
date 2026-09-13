@@ -25,6 +25,9 @@ public final class HallErrorKeys {
   @RegisterErrorMapper(404)
   public static final String NOT_FOUND = "hall.error.not_found";
 
+  @RegisterErrorMapper(403)
+  public static final String FORBIDDEN = "hall.error.forbidden";
+
   @RegisterErrorMapper(503)
   public static final String DRAINING = "hall.error.draining";
 }

@@ -90,7 +90,12 @@ public class PushService {
       }
       var token = tokens.get(i);
       var errorCode = res.getException() == null ? null : res.getException().getMessagingErrorCode();
-      if (INVALID_TOKEN_ERRORS.contains(errorCode)) {
+      // errorCode null (lỗi transport/serialization trước khi thật sự tới FCM, không map ra
+      // MessagingErrorCode nào) -- INVALID_TOKEN_ERRORS là List.of(...) bất biến, KHÔNG cho phần tử
+      // null, .contains(null) ném NullPointerException thẳng ra khỏi callback async của
+      // sendEachAsync (gặp thật, log "failed to send push notification" mỗi lần lỗi dạng này tới,
+      // không phải lỗi token nên không được rơi vào nhánh unregister bên dưới).
+      if (errorCode != null && INVALID_TOKEN_ERRORS.contains(errorCode)) {
         invalidTokenCache.put(token, Boolean.TRUE);
         pushTokens
             .unregister(token)
@@ -100,7 +105,16 @@ public class PushService {
                   return null;
                 });
       } else {
-        log.warn("push notification failed for 1 token, errorCode={}", errorCode);
+        // In tường minh class + message thay vì đưa thẳng exception làm tham số cuối cho log.warn --
+        // SLF4J chỉ tự in stack trace nếu tham số cuối "instanceof Throwable" ĐÚNG LÚC CHẠY; nếu
+        // res.getException() thật sự là null thì "null instanceof Throwable" = false, log.warn coi nó
+        // như tham số thường (không có {} nào khớp, bị bỏ qua) -- nhìn log tưởng nhầm là do log4j
+        // không in exception, thật ra là không CÓ exception nào để in (đã gặp thật, xem log
+        // "errorCode=null" không kèm stack trace dù đã thử log.warn(..., res.getException())).
+        var ex = res.getException();
+        log.warn(
+            "push notification failed for 1 token, errorCode={}, exceptionIsNull={}, exceptionClass={}, exceptionMessage={}",
+            errorCode, ex == null, ex == null ? null : ex.getClass().getName(), ex == null ? null : ex.getMessage());
       }
     }
   }

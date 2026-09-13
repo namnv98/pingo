@@ -56,7 +56,7 @@ function markMessageSent(messageId) {
     row.classList.remove('pending', 'failed');
     var seenEl = row.querySelector('.seen-status');
     if (seenEl) { seenEl.classList.remove('failed'); seenEl.onclick = null; seenEl.title = ''; }
-    updateSeenDisplay(row, false); // '✓' -- đã gửi, chưa ai xem; '✓✓' sẽ tới sau qua handleSeenReceived như bình thường
+    updateSeenDisplay(row, seenByUserIdsByMessageId[messageId] || []); // '✓' -- đã gửi, chưa ai xem; '✓✓' sẽ tới sau qua handleSeenReceived như bình thường
 }
 
 function markMessageFailed(messageId, reason) {
@@ -98,11 +98,27 @@ function retrySendMessage(messageId) {
 // uploadAndSendFiles, sendExternalImageMessage. body đã đúng shape server mong đợi (message/files/replyTo/...).
 function sendChatMessage(conversationId, body) {
     var id = newId();
+    // Bubble optimistic + sidebar preview LUÔN dùng plaintext, không đợi mã hoá xong -- Double
+    // Ratchet không tự giải mã lại chiều MÌNH vừa mã hoá (xem e2eResolveIncomingBody), nên đây là
+    // nguồn plaintext DUY NHẤT hiển thị được cho tin của chính mình, kể cả khi conversation đã bật E2E.
     appendMessageBubble(conversationId, myUserId, body, Date.now(), id, false, null, false, true);
-    var frame = {type: 'MESSAGE', id: id, conversationId: conversationId, body: body};
-    pendingSentMessages[id] = frame;
-    if (send(frame)) scheduleSendTimeout(id);
-    else markMessageFailed(id, 'Mất kết nối');
+    updateConvListEntryFromMessage(conversationId, myUserId, body, Date.now(), false);
+    pendingSentMessages[id] = {type: 'MESSAGE', id: id, conversationId: conversationId, body: body};
+    // Mã hoá (nếu conversation đã bật E2E, xem e2eMaybeEncryptForSend) CHỈ ảnh hưởng gói tin THẬT SỰ
+    // gửi lên dây -- có thể mất chút thời gian (lần đầu chat với 1 người phải GET /e2e/keys/bundle),
+    // không chặn optimistic UI ở trên.
+    e2eMaybeEncryptForSend(conversationId, body)
+        .then(function (wireBody) {
+            // wireBody === body (nguyên plaintext) nếu conversation KHÔNG bật E2E -- chỉ cache khi
+            // THẬT SỰ mã hoá (wireBody.e2e true), tránh phình IndexedDB vô ích cho mọi tin thường.
+            var cacheDone = wireBody && wireBody.e2e ? e2eCachePlaintext(id, body) : Promise.resolve();
+            return cacheDone.then(function () {
+                var frame = {type: 'MESSAGE', id: id, conversationId: conversationId, body: wireBody};
+                if (send(frame)) scheduleSendTimeout(id);
+                else markMessageFailed(id, 'Mất kết nối');
+            });
+        })
+        .catch(function (err) { markMessageFailed(id, 'Mã hoá lỗi: ' + err.message); });
     return id;
 }
 
@@ -807,6 +823,27 @@ function ensureConversationCard(conversationId, label, subtitle) {
     });
     var sendMsg = function () {
         var text = inputEl.value.trim();
+        if (editingMessageId) {
+            // Sửa CHỈ đổi body.message, giữ nguyên mọi field khác của body gốc (replyTo/files/preview...)
+            // -- xem rawBodyByMessageId (populate ở appendMessageBubble), tránh gửi EDIT làm rớt mất
+            // replyTo/preview đã có từ trước của đúng tin đó.
+            if (!text) return;
+            var originalBody = rawBodyByMessageId[editingMessageId] || {};
+            var newBody = Object.assign({}, originalBody, {message: text});
+            // Áp NGAY bằng plaintext (optimistic, giống sendChatMessage) -- WS echo EDIT của CHÍNH
+            // mình tới sau sẽ bị bỏ qua (xem history-ws.js case "EDIT"), vì Double Ratchet không tự
+            // giải mã lại chiều mình vừa mã hoá, echo đó chỉ còn nguyên ciphertext không dùng lại được.
+            handleMessageEdited(conversationId, editingMessageId, newBody);
+            e2eMaybeEncryptForSend(conversationId, newBody)
+                .then(function (wireBody) {
+                    // Ghi ĐÈ cache bằng bản MỚI -- reload lại trang sau khi sửa phải thấy đúng bản mới nhất, không phải bản gốc lúc gửi lần đầu (xem javadoc e2eCachePlaintext).
+                    var cacheDone = wireBody && wireBody.e2e ? e2eCachePlaintext(editingMessageId, newBody) : Promise.resolve();
+                    return cacheDone.then(function () { send({type: 'EDIT', id: editingMessageId, conversationId: conversationId, body: wireBody}); });
+                })
+                .catch(function (err) { appAlert('mã hoá lỗi: ' + err.message, 'Lỗi'); });
+            cancelEdit();
+            return;
+        }
         if (entry.pendingFiles.length) {
             // Tin đính kèm file thì phần chữ là CAPTION, không phải "tin chỉ có 1 link" -- huỷ khối xem trước link đang hiện cho khỏi hiểu lầm.
             if (composeLinkDebounce) { clearTimeout(composeLinkDebounce); composeLinkDebounce = null; }
@@ -999,6 +1036,32 @@ function ensureConversationCard(conversationId, label, subtitle) {
     }
     replyBarEl.querySelector('.replyBarClose').onclick = function(e){ e.stopPropagation(); clearPendingReply(); inputEl.focus(); };
 
+    // Thanh "Đang sửa tin nhắn" -- cùng vị trí/pattern với replyBar, hiện khi editingMessageId != null.
+    // Sửa dùng LẠI ô nhập chính (không phải sửa ngay trong bubble) -- điền sẵn text hiện tại, bấm Gửi
+    // sẽ gửi frame EDIT thay vì MESSAGE mới (xem sendMsg bên dưới).
+    var editBarEl = document.createElement('div');
+    editBarEl.className = 'replyBar';
+    editBarEl.innerHTML = '<div class="replyBarBody"><div class="replyBarName">Đang sửa tin nhắn</div></div><button type="button" class="replyBarClose">✕</button>';
+    card.querySelector('.composeCard').insertBefore(editBarEl, card.querySelector('.composeRow'));
+    var editingMessageId = null;
+    function startEdit(messageId, currentText) {
+        clearPendingReply(); // sửa và trả lời loại trừ nhau, tránh gộp nhầm replyTo cũ vào bản sửa
+        editingMessageId = messageId;
+        inputEl.value = currentText || '';
+        autoGrowComposeInput();
+        updateSendButtonState();
+        editBarEl.classList.add('show');
+        inputEl.focus();
+    }
+    function cancelEdit() {
+        editingMessageId = null;
+        editBarEl.classList.remove('show');
+        inputEl.value = '';
+        autoGrowComposeInput();
+        updateSendButtonState();
+    }
+    editBarEl.querySelector('.replyBarClose').onclick = function(e){ e.stopPropagation(); cancelEdit(); inputEl.focus(); };
+
     var entry = {
         label: initialLabel, el: card, logEl: logEl,
         jumpBtnEl: jumpBtnEl, jumpBadgeEl: jumpBadgeEl, readObserver: readObserver,
@@ -1012,6 +1075,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     };
     entry._setPendingReply = setPendingReply;
     entry.clearPendingReply = clearPendingReply;
+    entry._startEdit = startEdit;
     // Đo lại mốc .conv-send NGAY lúc card hiện ra (gọi từ selectConversation) -- offsetHeight đồng bộ ở đây tránh phụ thuộc lần ResizeObserver báo đầu tiên có thể đã gộp mất thay đổi thật (xem composeResizeObserver phía trên).
     entry.resetComposeSendBaseline = function () { lastConvSendHeight = convSendEl.offsetHeight; };
     conversations[conversationId] = entry;
@@ -1132,11 +1196,12 @@ function maybeInsertDateDivider(entry, tsEpochMillis) {
 }
 
 // Mọi conversation (DM lẫn nhóm) đều dùng chung 1 kiểu hiển thị bong bóng Messenger (buildDmBubbleRow) -- theo yêu cầu bỏ giao diện chat nhóm kiểu Slack riêng, làm giống chat riêng.
-function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, messageId, seen, reactions, deleted, pending) {
+function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, messageId, seen, reactions, deleted, pending, seenBy, editedTs) {
     var entry = ensureConversationCard(conversationId, 'Conversation');
     // Tin có thể tới trùng qua 2 đường (lazy-load đúng lúc tin đó cũng vừa đẩy sống qua WS) -- bỏ qua nếu id đã render rồi, tránh vẽ trùng row và cộng trùng totalUnreadCount.
     if (messageId && entry.renderedMessageIds.has(messageId)) return;
     if (messageId) entry.renderedMessageIds.add(messageId);
+    if (messageId && !deleted) rawBodyByMessageId[messageId] = body;
     var mine = fromUserId === myUserId;
     // Sang ngày mới LUÔN cắt nhóm (dù cùng người gửi, cách nhau vài giây) -- không ai mong nhóm tin từ hôm qua "tiếp tục" sang hôm nay.
     var dateInserted = maybeInsertDateDivider(entry, tsEpochMillis);
@@ -1186,6 +1251,11 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
                 }
             }
         };
+        var editBtn = row.querySelector('.msgEditBtn');
+        if (editBtn) editBtn.onclick = function (e) {
+            e.stopPropagation();
+            startEditMessage(conversationId, messageId);
+        };
         var deleteBtn = row.querySelector('.msgDeleteBtn');
         if (deleteBtn) deleteBtn.onclick = function (e) {
             e.stopPropagation();
@@ -1206,16 +1276,41 @@ function appendMessageBubble(conversationId, fromUserId, body, tsEpochMillis, me
         if (bubbleEl3) bubbleEl3.insertBefore(buildForwardedBadgeEl(body.forwardedFrom), bubbleEl3.firstChild);
     }
     if (mine) {
-        updateSeenDisplay(row, !!seen);
+        if (messageId) seenByUserIdsByMessageId[messageId] = (seenBy || []).slice();
+        var mineList = messageId ? seenByUserIdsByMessageId[messageId] : [];
+        updateSeenDisplay(row, mineList);
+        row.dataset.seenKey = mineSeenKey(mineList);
+        linkMineRow(entry.lastMineRow, row);
+        if (!entry.firstMineRow) entry.firstMineRow = row;
+        entry.lastMineRow = row;
+        refreshMineTickVisibility(row);
+        refreshMineTickVisibility(row._prevMineRow);
         // Bubble optimistic (xem sendChatMessage) -- chờ ACK/echo/ERROR xác nhận, xem markMessageSent/markMessageFailed.
         if (pending) { row.classList.add('pending'); var seenEl0 = row.querySelector('.seen-status'); if (seenEl0) seenEl0.innerText = '○'; }
     }
     if (deleted) renderDeletedPlaceholder(row);
 
+    // Nhãn "(đã chỉnh sửa)" -- hiện cho MỌI người xem (không riêng người gửi), bấm vào xem lịch sử
+    // các bản cũ (xem showEditHistory, GET /messages/edit-history). Không hiện nếu tin đã xoá (không
+    // còn gì để xem lịch sử của nội dung đã bị ẩn).
+    if (messageId && editedTs && !deleted) {
+        var editedLabelEl = row.querySelector('.editedLabel');
+        if (editedLabelEl) {
+            editedLabelEl.style.display = '';
+            editedLabelEl.onclick = function (e) { e.stopPropagation(); showEditHistory(messageId); };
+        }
+    }
+
     entry.logEl.appendChild(row);
 
-    // READ chỉ gửi khi tin thực sự lọt readObserver -- KHÔNG dùng cờ "seen" API để quyết định vì nó nghĩa "có AI KHÁC đã đọc chưa", không phải "chính mình đã đọc chưa" (trong nhóm >2 người seen=true dù mình chưa từng thấy tin). entry.skipReadTracking bật khi nạp đoạn lịch sử đã chắc chắn mình đọc rồi.
-    var trackRead = !!(messageId && !deleted && !mine && !entry.skipReadTracking);
+    // READ chỉ gửi khi tin thực sự lọt readObserver. Dựa vào seenBy (per-message, từ message_reads
+    // thật) để biết CHÍNH MÌNH đã đọc tin NÀY chưa -- KHÔNG dùng entry.skipReadTracking (cờ theo cả
+    // BATCH lúc nạp lịch sử "trước con trỏ") nữa: con trỏ conversation_reads chỉ là 1 mốc thời gian
+    // tiến dần, đọc 1 tin MỚI (vd bấm thẳng vào thông báo reply/mention) sẽ nhảy con trỏ qua ĐẦU các
+    // tin cũ hơn nó dù CHƯA từng thực sự thấy (bug thật đã gặp: cuộn lên tin cũ chưa đọc mà không có
+    // gì gửi READ -- vì cả batch bị đánh dấu skipReadTracking chỉ vì nằm "trước con trỏ").
+    var alreadySeenByMe = !!(seenBy && myUserId && seenBy.indexOf(myUserId) !== -1);
+    var trackRead = !!(messageId && !deleted && !mine && !alreadySeenByMe);
     if (trackRead) {
         entry.unreadIdSet.add(messageId);
         entry.readObserver.observe(row);
@@ -1262,11 +1357,12 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
         '<div class="bubble-col">' +
         (mine ? '' : '<div class="sender-name"></div>') +
         '<div class="bubble-wrap"><div class="bubble"></div><div class="reactions-row"></div></div>' +
-        '<div class="bubble-time"><span class="bubble-time-text"></span><span class="seen-status"></span></div>' +
+        '<div class="bubble-time"><span class="editedLabel" style="display:none" title="Xem lịch sử chỉnh sửa">(đã chỉnh sửa)</span><span class="bubble-time-text"></span><span class="seen-status"></span></div>' +
         '</div>' +
         '<div class="msg-actions"><button type="button" class="replyBtn fa-solid fa-reply" title="Trả lời"></button><button type="button" class="react-btn fa-solid fa-face-smile" title="Thả cảm xúc"></button>' +
         '<button type="button" class="pinBtn fa-solid fa-thumbtack" title="Ghim tin nhắn"></button>' +
         '<button type="button" class="forwardBtn fa-solid fa-share-from-square" title="Chuyển tiếp"></button>' +
+        (mine ? '<button type="button" class="msgEditBtn fa-solid fa-pen" title="Sửa tin nhắn"></button>' : '') +
         (mine ? '<button type="button" class="msgDeleteBtn fa-solid fa-trash" title="Xoá tin nhắn"></button>' : '') +
         '</div>';
     if (!mine) {
@@ -1280,11 +1376,16 @@ function buildDmBubbleRow(entry, fromUserId, body, tsEpochMillis, mine, grouped,
     }
     renderMessageContent(row.querySelector('.bubble'), body, onMediaReady);
     row.querySelector('.bubble-time-text').innerText = formatTime(tsEpochMillis);
-    // Avatar/giờ chỉ hiện ở tin cuối khối gộp -- mỗi khi có tin mới cùng nhóm thì ẩn avatar/giờ của dòng vừa mất "ngôi mới nhất", để chúng luôn trôi xuống đúng dòng cuối.
+    // Avatar/giờ chỉ hiện ở tin cuối khối gộp (theo CỬA SỔ THỜI GIAN, xem tham số grouped) -- mỗi khi
+    // có tin mới cùng nhóm thì ẩn avatar/giờ của dòng vừa mất "ngôi mới nhất". RIÊNG tin CỦA MÌNH
+    // KHÔNG ẩn theo "grouped" ở đây -- ẩn/hiện giờ+tick của tin CỦA MÌNH là 1 khái niệm KHÁC, gộp
+    // theo CHUỖI CÙNG TRẠNG THÁI ĐÃ XEM (xem refreshMineTickVisibility, gọi riêng ở nơi tạo row),
+    // không phải theo khoảng cách thời gian -- 2 khái niệm độc lập, gộp nhầm theo "grouped" từng gây
+    // bug thật (giấu mất trạng thái "đã xem" của tin cũ hơn khi nó khác tin cuối cụm avatar).
     if (grouped && entry.lastGroupRow) {
-        var prevTimeEl = entry.lastGroupRow.querySelector('.bubble-time');
-        if (prevTimeEl) prevTimeEl.style.display = 'none';
         if (!mine) {
+            var prevTimeEl = entry.lastGroupRow.querySelector('.bubble-time');
+            if (prevTimeEl) prevTimeEl.style.display = 'none';
             var prevAvatarEl = entry.lastGroupRow.querySelector('.avatar');
             if (prevAvatarEl) prevAvatarEl.style.visibility = 'hidden';
         }
@@ -1341,19 +1442,108 @@ if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(repositionActiveMsgActions).observe(document.getElementById('chatMain'));
 }
 
-// Cập nhật hiển thị "đã gửi/đã xem" (✓/✓✓) cho 1 tin của chính mình, kiểu Messenger.
-function updateSeenDisplay(row, seen) {
+// Cập nhật hiển thị "đã gửi/đã xem" (✓/✓✓) cho 1 tin của chính mình, kiểu Messenger -- seenByUserIds
+// là mảng userId (KHÔNG phải boolean nữa, xem GET /messages field seenBy) để còn biết ĐÃ XEM BỞI AI,
+// không chỉ có/không. DM (đúng 1 người khác) thì "✓✓" là đủ nghĩa; group (>1 người) thêm tooltip liệt
+// kê tên -- bấm/hover vào dấu ✓✓ mới biết CỤ THỂ ai đã xem, ai chưa (trước đây chỉ biết ÍT NHẤT 1
+// người đã xem, không phân biệt được 1/5 hay 4/5 thành viên group đã xem).
+function updateSeenDisplay(row, seenByUserIds) {
     var seenEl = row.querySelector('.seen-status');
     if (!seenEl) return;
+    var list = seenByUserIds || [];
+    var seen = list.length > 0;
     seenEl.innerText = seen ? '✓✓' : '✓';
     seenEl.classList.toggle('seen', seen);
+    // title = tooltip DỰ PHÒNG khi hover (không phải cách chính để xem) -- cách chính là BẤM vào, mở
+    // popup liệt kê tên (xem showSeenByList) vì title ẩn hoàn toàn tới khi hover, không ai biết có gì
+    // để xem (bug thật đã gặp: "chưa hiện được ai đã xem tin nhắn" dù data seenBy đã đúng từ server).
+    seenEl.title = seen ? 'Bấm để xem đã xem bởi ai' : '';
+    seenEl.classList.toggle('clickable', seen);
+    seenEl.onclick = seen ? function (e) { e.stopPropagation(); showSeenByList(list); } : null;
+}
+
+// Khoá so sánh "trạng thái đã xem" của 1 tin CỦA MÌNH -- 2 tin cùng khoá nghĩa là đang được đúng
+// những người đó xem, dùng để gộp chuỗi tin liên tiếp cùng trạng thái (xem refreshMineTickVisibility).
+function mineSeenKey(seenByUserIds) {
+    return (seenByUserIds || []).slice().sort().join(',');
+}
+
+// Nối 2 tin CỦA MÌNH liền kề theo thời gian (bỏ qua tin "theirs" xen giữa) -- dùng để dò trạng thái
+// "đã xem" của tin NGAY SAU khi quyết định có ẩn dòng giờ+tick của tin NÀY hay không.
+function linkMineRow(prevMine, nextMine) {
+    if (!prevMine || !nextMine) return;
+    prevMine._nextMineRow = nextMine;
+    nextMine._prevMineRow = prevMine;
+}
+
+// Tick "đã xem" gộp theo Messenger/Zalo -- 1 chuỗi tin liên tiếp CỦA MÌNH cùng seenKey (cùng những
+// ai đã xem) chỉ hiện dòng giờ+tick ở tin CUỐI chuỗi, các tin trước đó ẩn hẳn (kể cả giờ) để đỡ rối
+// mắt khi gửi liền nhiều tin (bug thật đã gặp: "mỗi tin đều có tick nhìn xấu"). So với _nextMineRow
+// (KHÔNG phải "grouped" theo cửa sổ thời gian cho avatar/tên -- 2 khái niệm độc lập, 1 chuỗi seen có
+// thể dài/ngắn hơn 1 cụm avatar) vì tin cuối chuỗi luôn là tin gần đây nhất còn "sống" (null next).
+function refreshMineTickVisibility(row) {
+    if (!row) return;
+    var timeEl = row.querySelector('.bubble-time');
+    if (!timeEl) return;
+    var next = row._nextMineRow;
+    var visible = !next || next.dataset.seenKey !== row.dataset.seenKey;
+    timeEl.style.display = visible ? '' : 'none';
+}
+
+// Popup nhỏ liệt kê tên người đã xem -- cùng khuôn bgPickerModal/searchModal với editHistoryModal.
+function ensureSeenByModal() {
+    var overlay = document.getElementById('seenByModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'seenByModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal">' +
+        '<div class="bgPickerHead"><span>Đã xem bởi</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody"><div class="seenByList"></div></div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeSeenByModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeSeenByModal(); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('seenByModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeSeenByModal();
+});
+function closeSeenByModal() {
+    var overlay = document.getElementById('seenByModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+function showSeenByList(userIds) {
+    var overlay = ensureSeenByModal();
+    var listEl = overlay.querySelector('.seenByList');
+    listEl.innerHTML = '';
+    userIds.forEach(function (uid) {
+        var row = document.createElement('div');
+        row.className = 'userRow';
+        row.innerHTML = '<span class="userRowAvatar"></span><span class="userName"></span>';
+        var imgUrl = userAvatarUrl(uid);
+        applyAvatar(row.querySelector('.userRowAvatar'), imgUrl ? {imageUrl: imgUrl} : {color: avatarColor(uid), initial: avatarInitial(displayName(uid))});
+        row.querySelector('.userName').innerText = displayName(uid);
+        listEl.appendChild(row);
+    });
+    overlay.classList.add('show');
 }
 
 // Nhận frame SEEN -- tìm row trong TOÀN BỘ #chatMain (kể cả card không active) vì có thể xem lúc đang mở conversation khác.
-function handleSeenReceived(conversationId, messageId) {
+function handleSeenReceived(conversationId, messageId, seenUserId) {
     if (!messageId) return;
+    var list = seenByUserIdsByMessageId[messageId] || [];
+    if (seenUserId && list.indexOf(seenUserId) === -1) list = list.concat([seenUserId]);
+    seenByUserIdsByMessageId[messageId] = list;
     var row = document.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
     if (!row) return;
-    updateSeenDisplay(row, true);
+    updateSeenDisplay(row, list);
+    row.dataset.seenKey = mineSeenKey(list);
+    // Trạng thái tin NÀY vừa đổi -- tin NÀY và tin CỦA MÌNH liền trước nó (seenKey chưa đổi) đều có
+    // thể cần ẩn/hiện lại dòng giờ+tick (xem refreshMineTickVisibility); tin trước đó nữa thì không
+    // ảnh hưởng vì công thức của nó chỉ so với đúng 1 tin liền sau, không đổi.
+    refreshMineTickVisibility(row);
+    refreshMineTickVisibility(row._prevMineRow);
 }
 

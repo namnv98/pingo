@@ -140,9 +140,8 @@ function loadHistory(conversationId) {
         .catch(function (err) {
             console.warn('không load được lịch sử cho ' + conversationId, err);
             logToConversation(conversationId, '(không load được lịch sử: ' + err.message + ')');
-            // Vẫn phải reset các cờ này dù load lỗi giữa chừng, nếu không tin sống tới qua WS sau đó sẽ mãi kẹt không cuộn/không gửi READ được.
+            // Vẫn phải reset cờ này dù load lỗi giữa chừng, nếu không tin sống tới qua WS sau đó sẽ mãi kẹt không cuộn được.
             entry.suppressAutoScroll = false;
-            entry.skipReadTracking = false;
         });
     return entry.historyLoadPromise;
 }
@@ -159,10 +158,13 @@ function loadLatestPage(conversationId) {
     return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE)
         .then(function (messages) {
             entry.hasMoreOlder = messages.length === HISTORY_PAGE_SIZE;
-            entry.suppressAutoScroll = true;
             // API trả mới nhất trước (ORDER BY created_at DESC) — đảo lại để hiển thị đúng thứ tự thời gian.
-            messages.slice().reverse().forEach(function (m) {
-                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+            return e2eResolveIncomingBatch(conversationId, messages.slice().reverse());
+        })
+        .then(function (messages) {
+            entry.suppressAutoScroll = true;
+            messages.forEach(function (m) {
+                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
             entry.suppressAutoScroll = false;
             entry.stickToBottom = true;
@@ -175,20 +177,25 @@ function loadLatestPage(conversationId) {
 function loadAroundReadCursor(conversationId, cursor) {
     var entry = conversations[conversationId];
     entry.suppressAutoScroll = true;
-    entry.skipReadTracking = true;
     // totalUnreadCount lấy từ cursor.unreadCount (server COUNT thật) -- không bị giới hạn bởi cỡ 1 trang lazy-load.
     entry.totalUnreadCount = cursor.unreadCount || 0;
     return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&before=' + (cursor.lastReadTs + 1))
         .then(function (beforeMessages) {
             entry.hasMoreOlder = beforeMessages.length === HISTORY_PAGE_SIZE;
-            beforeMessages.slice().reverse().forEach(function (m) {
-                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+            return e2eResolveIncomingBatch(conversationId, beforeMessages.slice().reverse());
+        })
+        .then(function (beforeMessages) {
+            beforeMessages.forEach(function (m) {
+                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
-            entry.skipReadTracking = false;
             return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&after=' + cursor.lastReadTs);
         })
         .then(function (afterMessages) {
             entry.hasMoreNewer = afterMessages.length === HISTORY_PAGE_SIZE;
+            // after trả TĂNG DẦN sẵn (ORDER BY created_at ASC) -- không cần đảo lại như before/latest.
+            return e2eResolveIncomingBatch(conversationId, afterMessages);
+        })
+        .then(function (afterMessages) {
             var dividerEl = null;
             if (afterMessages.length) {
                 dividerEl = document.createElement('div');
@@ -196,9 +203,8 @@ function loadAroundReadCursor(conversationId, cursor) {
                 dividerEl.innerText = 'Tin nhắn mới';
                 entry.logEl.appendChild(dividerEl);
             }
-            // after trả TĂNG DẦN sẵn (ORDER BY created_at ASC) -- không cần đảo lại như before/latest.
             afterMessages.forEach(function (m) {
-                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
             entry.suppressAutoScroll = false;
             if (dividerEl) {
@@ -223,7 +229,8 @@ function maybeLoadOlder(conversationId) {
     fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&before=' + entry.oldestLoadedTs)
         .then(function (messages) {
             entry.hasMoreOlder = messages.length === HISTORY_PAGE_SIZE;
-            if (messages.length) prependOlderMessages(conversationId, messages);
+            if (!messages.length) return;
+            return e2eResolveIncomingBatch(conversationId, messages).then(function (resolved) { prependOlderMessages(conversationId, resolved); });
         })
         .catch(function (err) { console.warn('không tải thêm được tin cũ hơn: ' + err.message); })
         .finally(function () { entry.loadingOlder = false; });
@@ -237,10 +244,13 @@ function maybeLoadNewer(conversationId) {
     fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&after=' + entry.newestLoadedTs)
         .then(function (messages) {
             entry.hasMoreNewer = messages.length === HISTORY_PAGE_SIZE;
+            return e2eResolveIncomingBatch(conversationId, messages);
+        })
+        .then(function (messages) {
             // Nạp lazy-load là hành động ngầm, không được đụng vị trí đang xem -- khác tin sống qua WS (vẫn tự cuộn theo khi đang neo đáy).
             entry.suppressAutoScroll = true;
             messages.forEach(function (m) {
-                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted);
+                appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
             entry.suppressAutoScroll = false;
             // Tính lại stickToBottom theo thực tế -- nội dung mới vừa nối vào cuối có thể đã đẩy vị trí "đã xem" ra khỏi đáy.
@@ -261,6 +271,7 @@ function prependOlderMessages(conversationId, messagesDesc) {
     var batchState = {lastGroupRow: null};
     var localDividerKey = null;
     var rowsInfo = [];
+    var batchFirstMineRow = null, batchLastMineRow = null; // biên nối tin CỦA MÌNH trong batch này với entry.firstMineRow đã có sẵn (xem refreshMineTickVisibility)
     // Ảnh/video trong batch vừa chèn có thể đổi chiều cao sau khi đã canh scrollTop lần đầu -- phải bù thêm phần chênh lệch khi đó, không thì nội dung đang xem bị trôi (bug từng gặp, tương tự appendMessageBubble nhưng ngược hướng).
     var lastKnownScrollHeight;
     messages.forEach(function (m) {
@@ -301,7 +312,33 @@ function prependOlderMessages(conversationId, messagesDesc) {
             };
         }
         if (m.body && m.body.replyTo) { var be=row.querySelector('.bubble'); if(be) be.insertBefore(buildReplyQuoteEl(m.body.replyTo, conversationId), be.firstChild); }
-        if (mine) updateSeenDisplay(row, !!m.seen);
+        if (m.id && m.editedTs && !m.deleted) {
+            var editedLabelEl2 = row.querySelector('.editedLabel');
+            if (editedLabelEl2) {
+                editedLabelEl2.style.display = '';
+                (function (mid) { editedLabelEl2.onclick = function (e) { e.stopPropagation(); showEditHistory(mid); }; })(m.id);
+            }
+        }
+        if (mine) {
+            if (m.id) seenByUserIdsByMessageId[m.id] = (m.seenBy || []).slice();
+            var mineList2 = m.id ? seenByUserIdsByMessageId[m.id] : [];
+            updateSeenDisplay(row, mineList2);
+            row.dataset.seenKey = mineSeenKey(mineList2);
+            linkMineRow(batchLastMineRow, row);
+            if (!batchFirstMineRow) batchFirstMineRow = row;
+            batchLastMineRow = row;
+        }
+        // Tin cũ nạp lên khi cuộn LÊN (khác batch ban đầu của loadAroundReadCursor/loadLatestPage,
+        // xem appendMessageBubble) -- vẫn phải gắn readObserver theo TỪNG tin dựa vào seenBy thật, vì
+        // "cũ hơn con trỏ" không có nghĩa "chính mình đã thực sự thấy" (bug thật đã gặp: cuộn lên tin
+        // cũ chưa đọc không gửi được READ, vì hàm này trước đó không gắn readObserver cho tin nào cả).
+        if (m.id && !m.deleted && !mine) {
+            var alreadySeenByMe2 = !!(m.seenBy && myUserId && m.seenBy.indexOf(myUserId) !== -1);
+            if (!alreadySeenByMe2) {
+                entry.unreadIdSet.add(m.id);
+                entry.readObserver.observe(row);
+            }
+        }
         if (m.deleted) renderDeletedPlaceholder(row);
         frag.appendChild(row);
         batchState.lastGroupRow = row;
@@ -310,11 +347,22 @@ function prependOlderMessages(conversationId, messagesDesc) {
         rowsInfo.push({row: row, mine: mine, id: m.id, reactions: m.reactions, deleted: m.deleted});
     });
 
+    // Nối tin CỦA MÌNH mới nhất trong batch này (cũ hơn, nạp lên khi cuộn LÊN) với tin CỦA MÌNH cũ
+    // nhất đã có sẵn trước đó -- rồi tính lại ẩn/hiện giờ+tick cho đúng tin nào của batch mới là
+    // "cuối chuỗi" (entry.firstMineRow bản thân KHÔNG cần tính lại: công thức của nó chỉ phụ thuộc
+    // tin liền SAU nó, không đổi).
+    if (batchLastMineRow) {
+        linkMineRow(batchLastMineRow, entry.firstMineRow);
+        entry.firstMineRow = batchFirstMineRow;
+        if (!entry.lastMineRow) entry.lastMineRow = batchLastMineRow;
+    }
+
     // Neo lại vị trí đang xem sau khi chèn nội dung phía trên (không thì scrollTop giữ nguyên sẽ khiến nội dung "nhảy" xuống).
     var prevScrollHeight = entry.logEl.scrollHeight;
     entry.logEl.insertBefore(frag, entry.logEl.firstChild);
     lastKnownScrollHeight = entry.logEl.scrollHeight;
     entry.logEl.scrollTop += (lastKnownScrollHeight - prevScrollHeight);
+    rowsInfo.forEach(function (info) { if (info.mine) refreshMineTickVisibility(info.row); });
 
     // Đo/canh nút + vẽ reaction SAU khi cả batch đã thật sự lên DOM (giống lý do trong appendMessageBubble).
     rowsInfo.forEach(function (info) {
@@ -463,11 +511,15 @@ function connect() {
                 // Echo của CHÍNH tin mình vừa gửi -- xác nhận luôn ở đây, thường tới TRƯỚC cả ACK (fan-out
                 // cục bộ chạy trước dòng gửi ACK bên colony) nên không thể chỉ dựa vào case ACK ở trên.
                 if (frame.fromUserId === myUserId) markMessageSent(frame.id);
+                // Giải mã NẾU CẦN (e2eResolveIncomingBody bỏ qua tin không mã hoá HOẶC tin của chính
+                // mình -- echo tin mình gửi chỉ còn ciphertext không tự giải mã lại được, bubble/sidebar
+                // của tin đó đã cập nhật bằng plaintext ngay lúc gửi ở sendChatMessage rồi, xem ở đó).
+                e2eResolveIncomingBody(frame.fromUserId, frame.body, frame.id, frame.conversationId).then(function (resolvedBody) {
                 // Tin sống cho conversation chưa từng loadHistory không được vẽ tay ở đây -- sẽ đứng sai chỗ (đầu log rỗng), đảo ngược thứ tự khi loadHistory nạp về sau (bug thật đã gặp); chỉ cần đảm bảo card + kích hoạt loadHistory, nó tự nạp đúng vị trí.
                 // READ chỉ gửi khi tin thật sự lọt vào khung nhìn qua IntersectionObserver trong appendMessageBubble (xem sendReadReceipt), không gửi mù ở đây.
                 var msgEntry = conversations[frame.conversationId];
                 if (msgEntry && msgEntry.historyLoadPromise) {
-                    appendMessageBubble(frame.conversationId, frame.fromUserId, frame.body, frame.ts, frame.id);
+                    appendMessageBubble(frame.conversationId, frame.fromUserId, resolvedBody, frame.ts, frame.id);
                 } else {
                     ensureConversationCard(frame.conversationId, 'Conversation');
                     loadHistory(frame.conversationId);
@@ -479,8 +531,10 @@ function connect() {
                     renderTypingIndicator(frame.conversationId);
                 }
                 // Cập nhật sidebar theo tin vừa nhận nhưng không tự chuyển màn hình sang nó (tránh giật focus khi đang gõ chỗ khác).
-                updateConvListEntryFromMessage(frame.conversationId, frame.fromUserId, frame.body, frame.ts, false);
+                // Tin CỦA CHÍNH MÌNH: sendChatMessage đã tự patch bằng plaintext rồi, khỏi ghi đè lại bằng resolvedBody (vẫn là ciphertext, xem trên).
+                if (frame.fromUserId !== myUserId) updateConvListEntryFromMessage(frame.conversationId, frame.fromUserId, resolvedBody, frame.ts, false);
                 if (frame.fromUserId !== myUserId) refreshNotifBadgeSoon(); // có thể @mention/trả lời mình -- để server tự biết, xem refreshNotifBadgeSoon
+                });
                 break;
             case "PING":
                 send({type: "PONG", id: frame.id});
@@ -501,8 +555,9 @@ function connect() {
                 handlePresenceChange(frame.fromUserId, !!(frame.body && frame.body.online));
                 break;
             case "SEEN":
-                // frame.id = id cua tin nhan vua duoc xem (quy uoc correlation id, xem MessageType#SEEN).
-                handleSeenReceived(frame.conversationId, frame.id);
+                // frame.id = id cua tin nhan vua duoc xem (quy uoc correlation id, xem MessageType#SEEN);
+                // frame.fromUserId = AI vua xem -- can de gop vao danh sach "da xem boi" (xem handleSeenReceived).
+                handleSeenReceived(frame.conversationId, frame.id, frame.fromUserId);
                 break;
             case "REACTION":
                 // frame.id = id tin nhan, frame.fromUserId = ai vua react, frame.body.emoji = rong/thieu neu huy.
@@ -513,9 +568,28 @@ function connect() {
                 // frame.id = id tin nhan vua bi xoa (server da tu kiem tra quyen truoc khi fan-out ra day).
                 handleMessageDeleted(frame.conversationId, frame.id);
                 break;
+            case "EDIT":
+                // frame.id = id tin nhan vua duoc sua, frame.body = noi dung MOI (server da tu kiem tra quyen truoc khi fan-out ra day).
+                // Echo EDIT của CHÍNH MÌNH: sendMsg đã tự áp bằng plaintext ngay lúc gửi rồi (xem
+                // messaging-core.js) -- áp lại ở đây sẽ ghi đè bằng ciphertext (không tự giải mã lại
+                // được chiều mình vừa mã hoá), bỏ qua hẳn.
+                // e2eResolveEditedBody (KHÔNG phải e2eResolveIncomingBody) -- cache đang giữ bản CŨ
+                // trước khi sửa, phải bỏ qua đọc cache, decrypt ciphertext MỚI rồi ghi đè lại.
+                if (frame.fromUserId !== myUserId) {
+                    e2eResolveEditedBody(frame.fromUserId, frame.body, frame.id, frame.conversationId).then(function (resolvedBody) {
+                        handleMessageEdited(frame.conversationId, frame.id, resolvedBody);
+                    });
+                }
+                break;
             case "PIN":
                 // Chi bay toi day voi scope "shared" (ghim rieng khong fan-out, xem ChatSessionManager#handlePin).
                 handlePinReceived(frame.conversationId, frame.id, frame.fromUserId, frame.body && frame.body.pinned);
+                break;
+            case "E2E_TO_DEVICE":
+                // Relay sống của POST /e2e/to-device (xem HallApiHandlers#queueE2eToDevice) -- hiện
+                // chỉ dùng để phân phối Megolm session key cho group (xem e2eHandleToDeviceItem).
+                // frame.fromUserId = người gửi khoá, frame.body = {type, payload: <olm envelope>}.
+                if (frame.body) e2eHandleToDeviceItem(frame.body.type, frame.fromUserId, frame.conversationId, frame.body.payload);
                 break;
             case "CONVERSATION_ADDED":
                 // Gateway đã tự subscribe ngầm hộ -- tạo card sẵn nhưng không tự chuyển màn hình sang nó; unreadCount lấy đúng từ refreshConversationList() (GET /conversations) bên dưới, không cần tự đánh dấu ở đây.

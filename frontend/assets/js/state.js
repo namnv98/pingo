@@ -30,6 +30,13 @@ var TYPING_THROTTLE_MS = 2500;
 
 // messageId -> { userId: emoji } -- nguồn vẽ lại huy hiệu (renderReactions), cập nhật qua frame REACTION hoặc GET /messages.
 var reactionsByMessageId = {};
+// messageId -> [userId, ...] (đã loại from_user_id) -- nguồn vẽ "✓✓ đã xem bởi ai" (updateSeenDisplay), cập nhật qua frame SEEN hoặc GET /messages (field seenBy).
+var seenByUserIdsByMessageId = {};
+// messageId -> body object HIỆN TẠI (đầy đủ, có thể chứa replyTo/forwardedFrom/files ngoài "message")
+// -- cần giữ lại để: (1) mở form sửa thì biết chính xác text hiện tại để điền sẵn, (2) gửi frame EDIT
+// giữ nguyên các field khác (replyTo/files...), chỉ thay "message". Cập nhật ở appendMessageBubble +
+// khi nhận/gửi thành công frame EDIT (xem messages-render.js editMessage/handleMessageEdited).
+var rawBodyByMessageId = {};
 // Icon ảnh thay emoji Unicode để hiển thị đồng nhất mọi OS; emoji vẫn là định danh gửi server (chỉ lưu chuỗi emoji, không biết icon) và để chèn vào ô nhập tin.
 var REACTIONS = [
     {emoji: '👍', icon: 'images/chat/like.svg'},

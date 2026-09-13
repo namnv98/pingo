@@ -54,6 +54,15 @@ public class ChatSessionManager {
    * PresenceRegistry/Hazelcast vào đường xử lý tin nhắn nóng), chỉ báo "ai CÓ THỂ cần noti".
    */
   private static final String NOTIFY_CANDIDATES_ADDRESS = "message_notify_candidates";
+  /**
+   * Địa chỉ EventBus báo "1 notification type=reaction/reply/mention vừa insert cho đúng 1 user" --
+   * PHẢI khớp {@code NotificationConsumer#ACTIVITY_NOTIFY_ADDRESS} bên herald. Khác hẳn
+   * {@link #NOTIFY_CANDIDATES_ADDRESS} (broadcast N candidate cho 1 tin nhắn, có online/grace/READ
+   * ack) -- reaction/reply/mention LUÔN LƯU bất kể online/offline (xem {@link #createNotification}),
+   * nên chỉ cần báo herald bắn push ngay nếu user đang offline, không cần state machine grace period
+   * (mức độ khẩn của 1 react/mention thấp hơn hẳn tin nhắn, không đáng công thêm read-ack riêng).
+   */
+  private static final String ACTIVITY_NOTIFY_ADDRESS = "activity_notify";
 
   private final String serverId;
   private final SessionRegistry registry = new SessionRegistry();
@@ -166,6 +175,7 @@ public class ChatSessionManager {
       case SEEN -> handleSeen(session, frame);
       case REACTION -> handleReaction(session, frame);
       case DELETE -> handleDelete(session, frame);
+      case EDIT -> handleEdit(session, frame);
       case PIN -> handlePin(session, frame);
       case PONG -> {} // chi can cham lastSeenAt (da lam o tren), khong can xu ly gi them
       default -> log.debug("unsupported frame type {} from session {}", frame.getType(), session.getId());
@@ -442,6 +452,52 @@ public class ChatSessionManager {
   }
 
   /**
+   * Sửa tin {@code frame.getId()} -- KHÔNG giới hạn thời gian/số lần, cùng pattern {@link
+   * #handleDelete} (colony tự kiểm tra lại {@code from_user_id} thật trong DB trước khi thực sự sửa
+   * + fan-out, không tin session tự khai). {@code frame.getBodyJson()} = nội dung MỚI, cùng shape
+   * {@code MESSAGE} -- {@code search_text} trích lại từ ĐÂY (không tái dùng {@link
+   * #extractTextPreview} vì hàm đó cắt còn 140 ký tự cho mục đích preview noti, {@code search_text}
+   * cần TOÀN VĂN để tìm kiếm không bỏ sót phần sau 140 ký tự, xem {@link
+   * MessageHistoryRegistry#editMessage}).
+   */
+  private void handleEdit(ChatSession session, Frame frame) {
+    var fromUserId = UUIDUtils.parseOrDefault(frame.getFromUserId());
+    var messageId = UUIDUtils.parseOrDefault(frame.getId());
+    if (fromUserId == null || messageId == null || isBlank(frame.getConversationId())) {
+      return;
+    }
+    var finalConversationId = frame.getConversationId();
+    var newBodyJson = frame.getBodyJson();
+    var newBody = newBodyJson.isEmpty() ? null : Json.decodeValue(newBodyJson);
+    var newSearchText = newBody instanceof JsonObject j ? j.getString("message") : null;
+    history
+        .editMessage(messageId, fromUserId, newBodyJson, newSearchText)
+        .thenAccept(
+            edited -> {
+              if (!Boolean.TRUE.equals(edited)) {
+                return;
+              }
+              var outgoing =
+                  Frame.newBuilder()
+                      .setId(frame.getId())
+                      .setType(FrameType.EDIT)
+                      .setFromUserId(fromUserId.toString())
+                      .setConversationId(finalConversationId)
+                      .setBodyJson(newBodyJson)
+                      .setTs(now())
+                      .build();
+              if (!messageDelivery.deliverLocally(outgoing)) {
+                messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+              }
+            })
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to edit message {}", messageId, ex);
+              return null;
+            });
+  }
+
+  /**
    * Ghim/bỏ ghim tin {@code frame.getId()} -- {@code frame.getBodyJson()} = {@code {"scope":
    * "shared"|"private", "pinned": true|false}}. "shared": persist bảng {@code message_pins_shared}
    * RỒI fan-out cho mọi subscriber khác (cùng pattern {@link #handleReaction}/{@link #handleDelete})
@@ -522,6 +578,11 @@ public class ChatSessionManager {
       return;
     }
     var finalFromUserId = fromUserId;
+    // Người bị trả lời/được @nhắc trong CHÍNH tin này sẽ có noti "reply"/"mention" riêng (xem
+    // notifyReplyAndMentions, LUÔN LƯU không điều kiện online/offline) -- loại họ khỏi candidate
+    // "message" chung ở đây để tránh báo TRÙNG 2 noti (+2 push) cho cùng 1 lần gửi (bug thật đã gặp:
+    // "Tin nhắn mới" VÀ "Có người trả lời tin nhắn của bạn" cùng hiện cho cùng 1 tin).
+    var excludeUserIds = extractSpecialNotifyUserIds(outgoing.getBodyJson());
     membership
         .getMembers(conversationId)
         .thenCompose(
@@ -529,7 +590,7 @@ public class ChatSessionManager {
                 .getMutedUserIds(conversationId)
                 .thenApply(
                     mutedUserIds -> members.stream()
-                        .filter(id -> !id.equals(finalFromUserId) && !mutedUserIds.contains(id))
+                        .filter(id -> !id.equals(finalFromUserId) && !mutedUserIds.contains(id) && !excludeUserIds.contains(id))
                         .map(UUID::toString)
                         .toList()))
         .thenAccept(
@@ -537,7 +598,11 @@ public class ChatSessionManager {
               if (candidateUserIds.isEmpty()) {
                 return;
               }
-              var bodyPreview = outgoing.getBodyJson().isEmpty() ? null : outgoing.getBodyJson();
+              // Trích riêng field "message" (text thuần) làm preview -- KHÔNG dùng thẳng cả
+              // outgoing.getBodyJson() (cả cục JSON thô, vd {"message":"..."}) như trước (bug thật đã
+              // gặp: chuông/push hiện nguyên JSON thay vì nội dung tin), cùng cách notifyReplyAndMentions
+              // bên dưới đã làm đúng cho reply/mention -- xem extractTextPreview.
+              var bodyPreview = extractTextPreview(outgoing.getBodyJson());
               var payload =
                   new JsonObject()
                       .put("conversationId", conversationId.toString())
@@ -612,6 +677,74 @@ public class ChatSessionManager {
   }
 
   /**
+   * {@code body.replyTo.fromUserId} + {@code body.mentionedUserIds} (client tự đính kèm sẵn, xem
+   * javadoc {@link #notifyReplyAndMentions}) -- dùng để LOẠI những user này khỏi candidate "message"
+   * chung ở {@link #publishNotificationCandidates}, vì họ đã có noti "reply"/"mention" riêng cho
+   * đúng tin này rồi.
+   */
+  private static java.util.Set<UUID> extractSpecialNotifyUserIds(String bodyJson) {
+    if (bodyJson == null || bodyJson.isBlank()) {
+      return java.util.Set.of();
+    }
+    Object decoded;
+    try {
+      decoded = Json.decodeValue(bodyJson);
+    } catch (Exception e) {
+      return java.util.Set.of();
+    }
+    if (!(decoded instanceof JsonObject json)) {
+      return java.util.Set.of();
+    }
+    var result = new java.util.HashSet<UUID>();
+    var replyTo = json.getJsonObject("replyTo");
+    if (replyTo != null) {
+      var repliedOwner = UUIDUtils.parseOrDefault(replyTo.getString("fromUserId"));
+      if (repliedOwner != null) {
+        result.add(repliedOwner);
+      }
+    }
+    var mentioned = json.getJsonArray("mentionedUserIds");
+    if (mentioned != null) {
+      for (var raw : mentioned) {
+        var id = UUIDUtils.parseOrDefault(String.valueOf(raw));
+        if (id != null) {
+          result.add(id);
+        }
+      }
+    }
+    return result;
+  }
+
+  /** Chuỗi JSON thô ({@code outgoing.getBodyJson()}) -&gt; text preview thuần. Dùng cho {@link #publishNotificationCandidates} (bodyPreview đưa vào herald để lưu/push -- KHÔNG được đưa nguyên cả cục JSON, bug thật đã gặp: chuông/push hiện {@code {"message":"..."}} thay vì nội dung tin). */
+  private static String extractTextPreview(String bodyJson) {
+    if (bodyJson == null || bodyJson.isBlank()) {
+      return null;
+    }
+    Object decoded;
+    try {
+      decoded = Json.decodeValue(bodyJson);
+    } catch (Exception e) {
+      return null;
+    }
+    return decoded instanceof JsonObject json ? extractTextPreview(json) : null;
+  }
+
+  /**
+   * Cắt còn 140 ký tự -- cùng giới hạn preview đã dùng cho reply/mention (xem {@link
+   * #notifyReplyAndMentions}). Tin đã mã hoá đầu cuối ({@code body.e2e == true}, xem
+   * frontend/assets/js/e2e-crypto.js) thì {@code body} KHÔNG có field {@code message} thật (nằm
+   * trong {@code ciphertext}, server không đọc được) -- trả placeholder cố định thay vì null, để
+   * chuông/push/sidebar đều hiện nhất quán "🔒 Tin nhắn đã mã hoá" thay vì trống trơn.
+   */
+  private static String extractTextPreview(JsonObject body) {
+    if (Boolean.TRUE.equals(body.getBoolean("e2e"))) {
+      return "🔒 Tin nhắn đã mã hoá";
+    }
+    var messageText = body.getString("message");
+    return messageText != null && messageText.length() > 140 ? messageText.substring(0, 140) : messageText;
+  }
+
+  /**
    * Trích mọi URL trong {@code body.message} vào bảng {@code message_links} cho tab "Links" -- xem
    * {@link MessageLinkRegistry#extractAndSave}. Best-effort, không chặn gì cả -- chạy sau khi tin đã
    * lưu xong, cùng chỗ với {@link #enrichLinkPreview}.
@@ -642,8 +775,7 @@ public class ChatSessionManager {
     if (!(body instanceof JsonObject json)) {
       return;
     }
-    var messageText = json.getString("message");
-    var preview = messageText != null && messageText.length() > 140 ? messageText.substring(0, 140) : messageText;
+    var preview = extractTextPreview(json);
 
     var replyTo = json.getJsonObject("replyTo");
     if (replyTo != null) {
@@ -685,6 +817,14 @@ public class ChatSessionManager {
               }
               notifications
                   .create(UUID.randomUUID(), userId, conversationId, fromUserId, messageId, type, bodyPreview, ts, messageTs)
+                  .thenRun(() -> vertx.eventBus().publish(
+                      ACTIVITY_NOTIFY_ADDRESS,
+                      new JsonObject()
+                          .put("userId", userId.toString())
+                          .put("conversationId", conversationId.toString())
+                          .put("fromUserId", fromUserId.toString())
+                          .put("type", type)
+                          .put("bodyPreview", bodyPreview)))
                   .exceptionally(ex -> {
                     logDbPoolThrottled("failed to persist " + type + " notification for message {}", conversationId, ex);
                     return null;

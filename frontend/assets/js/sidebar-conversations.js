@@ -74,6 +74,18 @@ function ensureProfileModal() {
         '<button type="button" class="bgUploadBtn" id="profileChangeAvatarBtn">' + ICON.image + ' Đổi ảnh</button></div>' +
         '<div class="profileUsernameRow"><span id="profileUsernameValue"></span>' +
         '<button type="button" class="icon" id="profileRenameBtn" title="Đổi tên hiển thị">' + ICON.edit + '</button></div>' +
+        '<div class="bgPickerSectionTitle">Mã hoá đầu cuối</div>' +
+        '<div class="profileE2eRow" id="profileE2eLinkOldRow"><span>Chia sẻ lịch sử đã giải mã trên máy này cho 1 thiết bị mới</span>' +
+        '<button type="button" class="bgUploadBtn" id="profileE2eLinkOldBtn">Nhập mã từ thiết bị mới</button></div>' +
+        '<div class="profileE2eRow" id="profileE2eLinkNewRow"><span>Lấy lịch sử đã giải mã từ 1 thiết bị khác cùng tài khoản</span>' +
+        '<button type="button" class="bgUploadBtn" id="profileE2eLinkNewBtn">Lấy mã liên kết</button></div>' +
+        '<div class="bgPickerSectionTitle">Sao lưu lạnh</div>' +
+        '<div class="profileE2eRow"><span>Tải file sao lưu lịch sử đã giải mã (phòng khi mất hết thiết bị) -- file chỉ nằm trên máy bạn, KHÔNG qua server</span>' +
+        '<button type="button" class="bgUploadBtn" id="profileE2eBackupBtn">Tạo bản sao lưu</button></div>' +
+        '<div class="profileE2eRow"><span>Khôi phục lịch sử từ 1 file sao lưu đã tạo trước đó</span>' +
+        '<button type="button" class="bgUploadBtn" id="profileE2eRestoreBtn">Khôi phục từ file</button></div>' +
+        '<div class="bgPickerSectionTitle">Thiết bị của tôi</div>' +
+        '<div id="profileE2eDeviceList" class="profileE2eDeviceList"></div>' +
         '</div></div>';
     // Bấm ra NGOÀI modal (đúng vào nền tối) mới đóng -- giống #bgPickerOverlay/#mediaLightbox.
     overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeProfileModal(); };
@@ -86,6 +98,10 @@ function ensureProfileModal() {
         if (file) changeMyAvatar(file);
     });
     overlay.querySelector('#profileRenameBtn').onclick = function () { changeMyUsername(); };
+    overlay.querySelector('#profileE2eLinkOldBtn').onclick = function () { e2eStartApproveLinkFlow(); };
+    overlay.querySelector('#profileE2eLinkNewBtn').onclick = function () { e2eStartRequestLinkFlow(); };
+    overlay.querySelector('#profileE2eBackupBtn').onclick = function () { e2eStartCreateBackupFlow(); };
+    overlay.querySelector('#profileE2eRestoreBtn').onclick = function () { e2eStartRestoreBackupFlow(); };
     return overlay;
 }
 document.addEventListener('keydown', function (e) {
@@ -99,6 +115,243 @@ function refreshProfileModalContent() {
     var myImageUrl = userAvatarUrl(myUserId);
     applyAvatar(overlay.querySelector('#profileAvatarPreview'), myImageUrl ? {imageUrl: myImageUrl} : {color: avatarColor(myUserId), initial: avatarInitial(myUsername)});
     overlay.querySelector('#profileUsernameValue').innerText = myUsername;
+    // Cả 2 dòng LUÔN cùng hiện (khác bản trước loại trừ theo e2eReady -- giờ mỗi thiết bị tự có
+    // identity riêng ngay từ đầu, không còn "thiết bị chưa sẵn sàng", chỉ khác nhau ở CÓ hay CHƯA có
+    // lịch sử -- xem thảo luận Sesame/Signal thật ở đầu e2e-crypto.js) -- chỉ ẩn nếu vendor/olm.js
+    // chưa load được (E2E tắt hẳn phiên này).
+    var olmAvailable = typeof Olm !== 'undefined';
+    overlay.querySelector('#profileE2eLinkOldRow').style.display = olmAvailable ? '' : 'none';
+    overlay.querySelector('#profileE2eLinkNewRow').style.display = olmAvailable ? '' : 'none';
+    refreshProfileDeviceList();
+}
+
+// Danh sách thiết bị mã hoá của CHÍNH MÌNH (xem e2eListDevices) -- gọi lại mỗi lần mở modal (không
+// cache, danh sách hiếm khi đổi nhưng rẻ để load mới mỗi lần), cho gỡ (xoá) từng thiết bị KHÁC --
+// không cho gỡ ĐÚNG thiết bị đang dùng (muốn "đăng xuất" thiết bị hiện tại thì dùng nút Đăng xuất
+// thường, gỡ theo kiểu này chỉ dành cho máy CŨ/đã mất, xem javadoc E2eKeyRegistry#deleteDevice).
+function refreshProfileDeviceList() {
+    var listEl = document.getElementById('profileE2eDeviceList');
+    if (!listEl || typeof Olm === 'undefined') return;
+    listEl.innerText = 'Đang tải...';
+    e2eListDevices().then(function (devices) {
+        if (!devices.length) { listEl.innerText = 'Chưa có thiết bị nào.'; return; }
+        listEl.innerHTML = '';
+        devices.forEach(function (d) {
+            var isCurrent = d.deviceId === e2eDeviceId;
+            var row = document.createElement('div');
+            row.className = 'profileDeviceRow';
+            row.innerHTML =
+                '<span class="profileDeviceInfo">' +
+                '<span class="profileDeviceLabel">' + (d.label || 'Thiết bị không tên') + (isCurrent ? ' <b>(thiết bị này)</b>' : '') + '</span>' +
+                '<span class="profileDeviceDate">Thêm lúc ' + relativeTime(d.createdAt) + '</span>' +
+                '</span>';
+            if (!isCurrent) {
+                var delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'icon fa-solid fa-trash';
+                delBtn.title = 'Gỡ thiết bị này';
+                delBtn.onclick = function () {
+                    appConfirm('Gỡ "' + (d.label || 'thiết bị này') + '"? Thiết bị đó sẽ không đọc/gửi được tin mã hoá mới nữa (tin đã lỡ gửi trước đó thì thôi, không thu hồi lại được).', {
+                        title: 'Gỡ thiết bị', confirmText: 'Gỡ', cancelText: 'Huỷ', danger: true
+                    }).then(function (ok) {
+                        if (!ok) return;
+                        e2eDeleteDevice(d.deviceId).then(function () {
+                            showToast('Đã gỡ thiết bị');
+                            refreshProfileDeviceList();
+                        }).catch(function (err) { showToast(err.message || 'Gỡ thất bại'); });
+                    });
+                };
+                row.appendChild(delBtn);
+            }
+            listEl.appendChild(row);
+        });
+    }).catch(function () { listEl.innerText = 'Không tải được danh sách thiết bị.'; });
+}
+
+// --- Liên kết thiết bị mã hoá (gõ tay mã 6 ký tự, xem e2e-crypto.js's e2eRequestDeviceLink/
+// e2eApproveDeviceLink cho phần crypto+network) -- CHỈ còn dùng để chuyển giao LỊCH SỬ đã giải mã
+// giữa 2 thiết bị cùng tài khoản (mỗi thiết bị đã tự có identity riêng từ e2eInit, không cần "linking"
+// mới dùng được E2E nữa) -- 2 luồng UI, dùng cái nào tuỳ bạn đang ở thiết bị NGUỒN (có sẵn lịch sử) hay
+// ĐÍCH (muốn lấy lịch sử về). ---
+
+// Thiết bị NGUỒN (có sẵn lịch sử): nhập mã hiển thị trên thiết bị ĐÍCH rồi gửi -- tái dùng appPrompt
+// (đã dùng sẵn cho changeMyUsername ngay phía trên, xếp lớp OK lên trên profileModalOverlay vì
+// #appModalOverlay có z-index cao hơn, không cần đóng modal Hồ sơ trước).
+function e2eStartApproveLinkFlow() {
+    appPrompt('Nhập mã 6 ký tự hiển thị trên thiết bị muốn lấy lịch sử (hết hạn sau 5 phút):', '', {
+        title: 'Chia sẻ lịch sử',
+        placeholder: 'VD: 7K3RXQ',
+        confirmText: 'Gửi',
+        cancelText: 'Huỷ'
+    }).then(function (code) {
+        if (code === null || !code.trim()) return;
+        return e2eApproveDeviceLink(code.trim().toUpperCase())
+            .then(function () { showToast('Đã gửi lịch sử -- thiết bị kia sẽ tự nhận trong giây lát'); })
+            .catch(function (err) { showToast(err.message || 'Gửi thất bại'); });
+    });
+}
+
+// Thiết bị ĐÍCH (muốn lấy lịch sử): xin mã, hiện lên cho user tự gõ sang thiết bị nguồn, rồi CHỜ SỐNG
+// (không polling, xem javadoc e2eWaitForDeviceLink) -- modal riêng (không dùng appConfirm/appPrompt vì
+// cần vừa hiện mã vừa tự cập nhật trạng thái theo thời gian thực, 2 việc appModal không hỗ trợ sẵn).
+function ensureE2eLinkWaitModal() {
+    var overlay = document.getElementById('e2eLinkWaitOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'e2eLinkWaitOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal">' +
+        '<div class="bgPickerHead"><span>Lấy lịch sử từ thiết bị khác</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="e2eLinkWaitHint">Trên thiết bị ĐÃ có lịch sử: mở "Hồ sơ của bạn" → "Nhập mã từ thiết bị mới", nhập mã này:</div>' +
+        '<div class="e2eLinkCode" id="e2eLinkCodeValue"></div>' +
+        '<div class="e2eLinkStatus" id="e2eLinkStatusValue">Đang chờ...</div>' +
+        '</div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closeE2eLinkWaitModal(true); };
+    overlay.onclick = function (e) { if (e.target === overlay) closeE2eLinkWaitModal(true); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+function closeE2eLinkWaitModal(cancelPending) {
+    var overlay = document.getElementById('e2eLinkWaitOverlay');
+    if (overlay) overlay.classList.remove('show');
+    if (cancelPending) e2eCancelDeviceLinkWait();
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('e2eLinkWaitOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closeE2eLinkWaitModal(true);
+});
+
+function e2eStartRequestLinkFlow() {
+    e2eRequestDeviceLink().then(function (data) {
+        var overlay = ensureE2eLinkWaitModal();
+        overlay.querySelector('#e2eLinkCodeValue').innerText = data.code;
+        overlay.querySelector('#e2eLinkStatusValue').innerText = 'Đang chờ thiết bị kia nhập mã...';
+        overlay.classList.add('show');
+        return e2eWaitForDeviceLink((data.expiresInSeconds || 300) * 1000).then(function () {
+            var statusEl = overlay.querySelector('#e2eLinkStatusValue');
+            // Lịch sử mới nhập thẳng vào IndexedDB (xem e2eApplyLinkedHistory) -- các đoạn chat đang
+            // hiện sẵn trên màn hình (nếu có) đã render xong TỪ TRƯỚC với cache lúc đó, không tự vẽ
+            // lại theo dữ liệu mới -- tự RELOAD LUÔN thay vì bắt người dùng tự F5 (đã hỏi ý kiến: chỉ
+            // cần tự động, không cần né reload hoàn toàn).
+            if (statusEl) statusEl.innerText = 'Đã nhận lịch sử thành công! Đang tải lại...';
+            setTimeout(function () { location.reload(); }, 900);
+        }).catch(function (err) {
+            var statusEl = overlay.querySelector('#e2eLinkStatusValue');
+            if (statusEl) statusEl.innerText = err.message || 'Lấy lịch sử thất bại';
+        });
+    }).catch(function (err) {
+        showToast(err.message || 'Không lấy được mã liên kết');
+    });
+}
+
+// --- Sao lưu lạnh (xuất/nhập file mã hoá cục bộ -- xem e2e-crypto.js's e2eCreateBackup/
+// e2eRestoreBackup cho phần crypto, KHÔNG đụng gì tới server). ---
+
+// Hỏi cách bảo vệ file trước (tái dùng appConfirm làm lựa chọn 2 nhánh, giống hệt dialog xung đột
+// thiết bị trước đây) -- "khoá tự sinh" là nhánh mặc định/khuyến nghị (an toàn hơn hẳn 1 mật khẩu
+// người tự nghĩ ra), đặt làm nút chính.
+function e2eStartCreateBackupFlow() {
+    appConfirm(
+        'Bảo vệ file sao lưu bằng cách nào?\n\n' +
+        '"Khoá tự sinh" (khuyến nghị): hệ thống tạo 1 chuỗi ngẫu nhiên mạnh, chỉ hiện ĐÚNG 1 LẦN để bạn tự lưu lại (sổ tay, trình quản lý mật khẩu...) -- an toàn hơn mật khẩu tự nghĩ.\n\n' +
+        '"Tự đặt mật khẩu": bạn tự nhớ, tiện hơn nhưng an toàn tuỳ độ khó đoán của mật khẩu bạn chọn.',
+        {title: 'Tạo bản sao lưu', confirmText: 'Khoá tự sinh', cancelText: 'Tự đặt mật khẩu'}
+    ).then(function (useRandomKey) {
+        if (useRandomKey) return e2eDoCreateBackup('key', null);
+        return appPrompt('Đặt mật khẩu cho bản sao lưu (tối thiểu 8 ký tự, nên KHÁC mật khẩu đăng nhập):', '', {
+            title: 'Đặt mật khẩu sao lưu',
+            confirmText: 'Tiếp tục',
+            cancelText: 'Huỷ',
+            required: true,
+            validate: function (v) { return v.length < 8 ? 'Tối thiểu 8 ký tự' : null; }
+        }).then(function (phrase) {
+            if (phrase === null) return;
+            return e2eDoCreateBackup('phrase', phrase);
+        });
+    });
+}
+
+function e2eDoCreateBackup(mode, phrase) {
+    return e2eCreateBackup(mode, phrase).then(function (result) {
+        var filename = 'pingo-e2e-backup-' + myUsername + '-' + new Date().toISOString().slice(0, 10) + '.json';
+        var blob = new Blob([result.fileContent], {type: 'application/json'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+        if (result.recoveryKeyHex) {
+            showE2eRecoveryKeyModal(result.recoveryKeyHex);
+        } else {
+            showToast('Đã tải file sao lưu -- nhớ mật khẩu bạn vừa đặt');
+        }
+    }).catch(function (err) { showToast(err.message || 'Tạo bản sao lưu thất bại'); });
+}
+
+// Hiện khoá khôi phục ĐÚNG 1 LẦN cho user tự chép lại -- không lưu ở đâu trong app, mất là mất thật
+// (đúng bản chất "khoá tự sinh", xem javadoc e2eCreateBackup). Modal riêng thay vì appAlert vì cần
+// nút "Sao chép" tiện tay, không chỉ đọc rồi bấm OK.
+function ensureE2eRecoveryKeyModal() {
+    var overlay = document.getElementById('e2eRecoveryKeyOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'e2eRecoveryKeyOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal">' +
+        '<div class="bgPickerHead"><span>Lưu lại khoá khôi phục</span></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="e2eLinkWaitHint">Đây là LẦN DUY NHẤT khoá này hiện ra. Chép lại và cất ở nơi an toàn (sổ tay, trình quản lý mật khẩu...) -- mất khoá này thì file sao lưu vừa tải KHÔNG ai khôi phục lại được, kể cả chúng tôi.</div>' +
+        '<div class="e2eLinkCode" id="e2eRecoveryKeyValue" style="font-size:15px;word-break:break-all;letter-spacing:.04em"></div>' +
+        '<button type="button" class="bgUploadBtn" id="e2eRecoveryKeyCopyBtn" style="margin-top:12px">Sao chép</button>' +
+        '<button type="button" class="bgUploadBtn" id="e2eRecoveryKeyDoneBtn" style="margin-top:8px">Tôi đã lưu xong</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+    return overlay;
+}
+function showE2eRecoveryKeyModal(recoveryKeyHex) {
+    var overlay = ensureE2eRecoveryKeyModal();
+    overlay.querySelector('#e2eRecoveryKeyValue').innerText = recoveryKeyHex;
+    overlay.querySelector('#e2eRecoveryKeyCopyBtn').onclick = function () {
+        navigator.clipboard.writeText(recoveryKeyHex).then(function () { showToast('Đã sao chép'); });
+    };
+    overlay.querySelector('#e2eRecoveryKeyDoneBtn').onclick = function () { overlay.classList.remove('show'); };
+    overlay.classList.add('show');
+}
+
+// Chọn file backup -> đọc nội dung -> hỏi đúng loại bí mật theo {@code file.mode} -> giải mã + nhập.
+function e2eStartRestoreBackupFlow() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = function () {
+        var file = input.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+            var content = reader.result;
+            var parsed;
+            try { parsed = JSON.parse(content); } catch (e) { showToast('File sao lưu không hợp lệ'); return; }
+            var isPhrase = parsed.mode === 'phrase';
+            appPrompt(
+                isPhrase ? 'Nhập mật khẩu đã đặt lúc tạo bản sao lưu này:' : 'Nhập khoá khôi phục (64 ký tự hex) đã lưu lúc tạo bản sao lưu này:',
+                '',
+                {title: 'Khôi phục từ bản sao lưu', confirmText: 'Khôi phục', cancelText: 'Huỷ', required: true}
+            ).then(function (secret) {
+                if (secret === null) return;
+                return e2eRestoreBackup(content, secret.trim()).then(function () {
+                    showToast('Đã khôi phục -- đang tải lại...');
+                    setTimeout(function () { location.reload(); }, 900);
+                }).catch(function (err) { showToast(err.message || 'Khôi phục thất bại'); });
+            });
+        };
+        reader.readAsText(file);
+    };
+    input.click();
 }
 
 function openProfileModal() {
@@ -552,8 +805,15 @@ function renderInfoPanel(conversationId) {
     applyAvatar(avatarEl, avatar);
     // Chỉ GROUP mới sửa được ảnh đại diện -- DM hiện avatar thật của người kia, không phải thứ chính
     // mình sở hữu (xem changeGroupAvatar). Nút chỉ hiện khi hover (CSS #infoPanelAvatarWrap.editable:hover).
+    // role: 'owner'/'member' theo memberRoles (GET /conversations) -- GROUP (>2 người) CHỈ owner mới
+    // đổi ảnh/thêm thành viên được (server đã chặn 403, xem HallApiHandlers#requireGroupOwner); DM (2
+    // người) thì ai cũng được, giữ nguyên hành vi cũ.
+    var roles = conv.memberRoles || {};
+    var myRole = roles[myUserId];
+    var isOwnerMe = myRole === 'owner';
+    var canManageGroupInfo = !isGroupConv || isOwnerMe;
     var avatarWrapEl = document.getElementById('infoPanelAvatarWrap');
-    avatarWrapEl.classList.toggle('editable', isGroupConv);
+    avatarWrapEl.classList.toggle('editable', isGroupConv && canManageGroupInfo);
     if (isGroupConv) document.getElementById('infoPanelAvatarEditBtn').innerHTML = ICON.edit;
     document.getElementById('infoPanelName').innerText = conversationLabel(conv);
     document.getElementById('infoPanelSubtitle').innerText = conv.memberUserIds.length + ' thành viên';
@@ -562,10 +822,35 @@ function renderInfoPanel(conversationId) {
     document.getElementById('infoConvIdValue').innerText = conv.conversationId.substring(0, 8) + '…';
     document.getElementById('infoTypeValue').innerText = isGroupConv ? 'Nhóm' : 'Nhắn tin trực tiếp';
     document.getElementById('infoActivityValue').innerText = relativeTime(conv.lastMessageAt);
+    // Mã hoá đầu cuối -- DM dùng Olm 1-1, GROUP dùng Megolm (xem e2eEncryptGroupOutgoing). Bật cho
+    // group thì CHỈ owner (canManageGroupInfo, cùng quyền với đổi tên/ảnh/thêm thành viên -- server
+    // cũng chặn qua chính requireGroupOwner, xem HallApiHandlers#setConversationEncrypted). Đã bật
+    // rồi thì KHÔNG cho tắt lại (server chặn) -- chỉ hiện trạng thái.
+    var e2eValueEl = document.getElementById('infoE2eValue');
+    if (conv.e2eEnabled) {
+        e2eValueEl.className = 'infoRowValue';
+        e2eValueEl.innerText = 'Đã bật';
+        e2eValueEl.onclick = null;
+    } else if (isGroupConv && !canManageGroupInfo) {
+        e2eValueEl.className = 'infoRowValue';
+        e2eValueEl.innerText = 'Chỉ chủ nhóm mới bật được';
+        e2eValueEl.onclick = null;
+    } else {
+        e2eValueEl.className = 'infoRowValue enableLink';
+        e2eValueEl.innerText = 'Bật ngay';
+        e2eValueEl.onclick = function () {
+            appConfirm('Bật mã hoá đầu cuối cho cuộc trò chuyện này? KHÔNG thể tắt lại sau khi đã bật.', {title: 'Mã hoá đầu cuối', confirmText: 'Bật', cancelText: 'Huỷ'})
+                .then(function (ok) {
+                    if (!ok) return;
+                    e2eEnableConversation(conv.conversationId).catch(function (err) { appAlert('bật mã hoá lỗi: ' + err.message, 'Lỗi'); });
+                });
+        };
+    }
     // Thêm thành viên: cho phép cả với DM (2 người) -- thêm 1 người thứ 3 vào biến nó thành group
     // tự nhiên, đúng với việc isGroupConv chỉ suy từ SỐ LƯỢNG thành viên, không có cột "type" riêng.
+    // GROUP thì chỉ owner (canManageGroupInfo).
     var addMemberBtnEl = document.getElementById('infoAddMemberBtn');
-    addMemberBtnEl.style.display = '';
+    addMemberBtnEl.style.display = canManageGroupInfo ? '' : 'none';
     addMemberBtnEl.innerHTML = ICON.plus || '+';
     addMemberBtnEl.onclick = function (e) { e.stopPropagation(); openAddMemberModal(conv); };
 
@@ -581,16 +866,21 @@ function renderInfoPanel(conversationId) {
     statusEl.innerText = anyoneElseOnline ? 'Đang hoạt động' : 'Ngoại tuyến';
     // Chấm trạng thái trên avatar đầu panel dùng CÙNG tín hiệu đó (xanh có ai online / xám không).
     document.getElementById('infoPanelStatusDot').classList.toggle('online', anyoneElseOnline);
+    // roles/myRole/isOwnerMe tính sẵn ở trên (đầu hàm) -- DM cũng có đúng 1 owner (người tạo) nhưng
+    // vô nghĩa nên chỉ hiện huy hiệu/nút thăng-hạ-kick cho GROUP (isGroupConv).
     var listEl = document.getElementById('infoMemberList');
     listEl.innerHTML = '';
     sorted.forEach(function (id) {
         var isMe = id === myUserId;
         var online = isMe || !!onlineUserIds[id];
+        var isOwner = roles[id] === 'owner';
         var row = document.createElement('div');
         row.className = 'infoMemberRow';
         row.innerHTML = '<span class="avatar-wrap"><span class="avatar"></span><span class="status-dot' + (online ? ' online' : '') + '"></span></span><span class="name"></span>' +
+            (isGroupConv && isOwner ? '<span class="ownerBadge" title="Chủ nhóm">👑</span>' : '') +
             '<span class="roleBadge ' + (online ? 'online">Online' : 'offline">Offline') + '</span>' +
-            (isGroupConv && !isMe ? '<button type="button" class="icon infoMemberRemoveBtn fa-solid fa-xmark" title="Xoá khỏi nhóm"></button>' : '');
+            (isGroupConv && isOwnerMe ? '<button type="button" class="icon infoMemberRoleBtn ' + (isOwner ? 'fa-solid fa-user-minus" title="Hạ xuống thành viên"' : 'fa-solid fa-crown" title="Thăng làm chủ nhóm"') + '></button>' : '') +
+            (isGroupConv && !isMe && isOwnerMe ? '<button type="button" class="icon infoMemberRemoveBtn fa-solid fa-xmark" title="Xoá khỏi nhóm"></button>' : '');
         var memberImageUrl = userAvatarUrl(id);
         applyAvatar(row.querySelector('.avatar'), memberImageUrl ? {imageUrl: memberImageUrl} : {color: avatarColor(id), initial: avatarInitial(displayName(id))});
         var nameEl = row.querySelector('.name');
@@ -601,10 +891,41 @@ function renderInfoPanel(conversationId) {
             you.innerText = ' (bạn)';
             nameEl.appendChild(you);
         }
+        var roleBtnEl = row.querySelector('.infoMemberRoleBtn');
+        if (roleBtnEl) roleBtnEl.onclick = function (e) { e.stopPropagation(); isOwner ? demoteFromOwner(conv.conversationId, id) : promoteToOwner(conv.conversationId, id); };
         var removeBtnEl = row.querySelector('.infoMemberRemoveBtn');
         if (removeBtnEl) removeBtnEl.onclick = function (e) { e.stopPropagation(); removeConversationMember(conv.conversationId, id); };
         listEl.appendChild(row);
     });
+}
+
+// Thăng 1 thành viên làm owner -- chỉ owner hiện tại mới bấm được nút này (xem renderInfoPanel).
+// Server tự kiểm tra lại quyền (PUT /conversations/role), không tin riêng UI ẩn/hiện nút.
+function promoteToOwner(conversationId, userId) {
+    fetch(HISTORY_API_BASE + '/conversations/role?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(userId) + '&role=owner', {
+        method: 'PUT',
+        headers: {'Authorization': 'Bearer ' + authToken}
+    })
+        .then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            refreshConversationList();
+        })
+        .catch(function (err) { appAlert('thăng chủ nhóm lỗi: ' + err.message, 'Lỗi'); });
+}
+
+// Hạ 1 owner xuống member -- server chặn (409) nếu đây là owner CUỐI CÙNG của nhóm còn thành viên
+// khác (xem HallApiHandlers#setConversationMemberRole), hiện lỗi thẳng cho biết phải thăng người
+// khác trước.
+function demoteFromOwner(conversationId, userId) {
+    fetch(HISTORY_API_BASE + '/conversations/role?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(userId) + '&role=member', {
+        method: 'PUT',
+        headers: {'Authorization': 'Bearer ' + authToken}
+    })
+        .then(function (res) {
+            if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
+            refreshConversationList();
+        })
+        .catch(function (err) { appAlert('hạ chủ nhóm lỗi: ' + err.message, 'Lỗi'); });
 }
 
 // Đổi ảnh đại diện RIÊNG của group đang mở trong Info panel -- chỉ nút #infoPanelAvatarEditBtn (chỉ
@@ -793,6 +1114,14 @@ function enterApp() {
     refreshConversationList();
     loadNotifications(); // đồng bộ badge chuông thông báo ngay lúc vào app (xem history-ws.js)
     initPushNotifications(); // xin quyền + đăng ký token FCM của thiết bị này (xem push-notifications.js)
+    // nạp/tạo Account Olm + đảm bảo server có sẵn identity key/prekey (xem e2e-crypto.js) -- không
+    // chặn phần còn lại, tự bật e2eReady khi xong. Drain to-device (khoá Megolm group gửi lúc mình
+    // offline) CHỈ sau khi e2eInit() xong -- cần Account sẵn sàng mới giải mã được gói Olm 1-1 bọc
+    // ngoài (xem e2eHandleToDeviceItem). Sau đó chủ động xin lại khoá nhóm còn thiếu (xem
+    // e2eRequestMissingGroupKeys) -- lùi 1.5s để refreshConversationList() ở trên (chạy song song) có
+    // đủ thời gian nạp xong {@code lastConvList} thật (không phụ thuộc cứng vào nó -- chấp nhận được
+    // nếu hiếm khi lần đầu tải trang mạng chậm chưa kịp, cơ chế phân phối bù lúc gửi tin vẫn tự sửa).
+    e2eInit().then(e2eDrainToDevice).then(function () { setTimeout(e2eRequestMissingGroupKeys, 1500); });
     connect();
 }
 
@@ -846,6 +1175,11 @@ function conversationLastMessagePreview(conv) {
     var prefix = isMine ? 'Bạn: ' : (isGroupConv ? displayName(conv.lastMessageFromUserId) + ': ' : '');
     if (conv.lastMessageDeleted) return {kind: 'text', text: prefix + 'Tin nhắn đã bị xoá'};
     var body = conv.lastMessageBody;
+    // Server không trả nội dung thô cho tin đã mã hoá (xem ConversationMembershipRegistry
+    // #listConversationsForUser) -- body ở đây null kèm cờ lastMessageEncrypted, hoặc chính
+    // client vừa nhận 1 tin e2e qua WS còn nguyên envelope (updateConvListEntryFromMessage patch
+    // thẳng, chưa giải mã) -- cả 2 case đều hiện placeholder cố định, không cố parse .message.
+    if (conv.lastMessageEncrypted || (body && body.e2e)) return {kind: 'text', text: prefix + '🔒 Tin nhắn đã mã hoá'};
     if (!body) return {kind: 'text', text: prefix};
     var files = getMessageFiles(body);
     if (files.length) {
@@ -874,6 +1208,7 @@ function updateConvListEntryFromMessage(conversationId, fromUserId, body, tsEpoc
     conv.lastMessageFromUserId = fromUserId;
     conv.lastMessageDeleted = !!deleted;
     conv.lastMessageBody = deleted ? null : body;
+    conv.lastMessageEncrypted = !deleted && !!(body && body.e2e);
     // Tăng tạm optimistic CHỈ khi tin của người khác và conversation KHÔNG đang mở (đang mở thì IntersectionObserver tự đánh dấu đã đọc ngay) -- server vẫn là nguồn đếm thật cuối cùng.
     if (!deleted && fromUserId !== myUserId && conversationId !== activeConversationId) {
         conv.unreadCount = (conv.unreadCount || 0) + 1;
@@ -942,14 +1277,30 @@ function deleteConversation(conversationId) {
 // Tự rời nhóm -- khác deleteConversation (xoá cho MỌI thành viên), ở đây chỉ chính mình biến mất
 // khỏi conversation, các thành viên khác không bị ảnh hưởng. Dùng chung endpoint với "kick" (server
 // không phân biệt), chỉ khác userId truyền lên là CHÍNH mình.
+//
+// Đang là owner DUY NHẤT mà nhóm còn người khác thì KHÔNG được rời thẳng -- server sẽ từ chối
+// (CONFLICT, xem HallApiHandlers#removeConversationMember) vì rời xong nhóm sẽ mồ côi (không ai còn
+// quyền quản lý). Phải bắt chọn 1 thành viên khác làm owner mới TRƯỚC (showPickOwnerModal), gửi kèm
+// newOwnerUserId để server tự thăng người đó NGAY TRƯỚC KHI xoá mình, atomic trong 1 request.
 function leaveConversation(conversationId) {
+    var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
+    var otherMembers = conv ? conv.memberUserIds.filter(function (id) { return id !== myUserId; }) : [];
+    var myRole = conv && conv.memberRoles ? conv.memberRoles[myUserId] : null;
+    var otherOwnerExists = conv && conv.memberRoles ? otherMembers.some(function (id) { return conv.memberRoles[id] === 'owner'; }) : true;
+    if (myRole === 'owner' && !otherOwnerExists && otherMembers.length > 0) {
+        showPickOwnerModal(otherMembers, function (newOwnerUserId) { doLeaveConversation(conversationId, newOwnerUserId); });
+        return;
+    }
+    doLeaveConversation(conversationId, null);
+}
+
+function doLeaveConversation(conversationId, newOwnerUserId) {
     var entry = conversations[conversationId];
     var label = entry ? entry.label : conversationId.substring(0, 8) + '…';
     appConfirm('Rời khỏi "' + label + '"? Bạn sẽ không còn thấy cuộc trò chuyện này nữa.', {title: 'Rời nhóm', confirmText: 'Rời nhóm', cancelText: 'Huỷ', danger: true}).then(function (ok) { if (!ok) return;
-    fetch(HISTORY_API_BASE + '/conversations/members?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(myUserId), {
-        method: 'DELETE',
-        headers: {'Authorization': 'Bearer ' + authToken}
-    })
+    var url = HISTORY_API_BASE + '/conversations/members?conversationId=' + encodeURIComponent(conversationId) + '&userId=' + encodeURIComponent(myUserId);
+    if (newOwnerUserId) url += '&newOwnerUserId=' + encodeURIComponent(newOwnerUserId);
+    fetch(url, {method: 'DELETE', headers: {'Authorization': 'Bearer ' + authToken}})
         .then(function (res) {
             if (!res.ok) return res.json().then(function (data) { throw new Error(data.error || ('HTTP ' + res.status)); });
             removeConversationLocally(conversationId);
@@ -957,6 +1308,47 @@ function leaveConversation(conversationId) {
         .catch(function (err) {
             appAlert('rời nhóm lỗi: ' + err.message, 'Lỗi');
         });
+    });
+}
+
+// Popup chọn 1 thành viên làm owner mới -- BẮT BUỘC khi owner cuối cùng rời nhóm còn người khác (xem
+// leaveConversation). Danh sách nhỏ (thành viên còn lại của 1 nhóm), không cần ô tìm kiếm như
+// openAddMemberModal -- tái dùng CHUNG khuôn HTML/CSS bgPickerModal + buildUserRow/.userRow.canSelect
+// đã có (chọn 1 dòng là xong, không cần nút "Xác nhận" riêng).
+function ensurePickOwnerModal() {
+    var overlay = document.getElementById('pickOwnerModalOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'pickOwnerModalOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal searchModal">' +
+        '<div class="bgPickerHead"><span>Chọn chủ nhóm mới trước khi rời</span>' +
+        '<button type="button" class="bgPickerClose" title="Đóng (Esc)">' + ICON.close + '</button></div>' +
+        '<div class="bgPickerBody"><div class="pickOwnerList"></div></div></div>';
+    overlay.querySelector('.bgPickerClose').onclick = function (e) { e.stopPropagation(); closePickOwnerModal(); };
+    overlay.onclick = function (e) { if (e.target === overlay) closePickOwnerModal(); };
+    document.body.appendChild(overlay);
+    return overlay;
+}
+document.addEventListener('keydown', function (e) {
+    var overlay = document.getElementById('pickOwnerModalOverlay');
+    if (overlay && overlay.classList.contains('show') && e.key === 'Escape') closePickOwnerModal();
+});
+
+function closePickOwnerModal() {
+    var overlay = document.getElementById('pickOwnerModalOverlay');
+    if (overlay) overlay.classList.remove('show');
+}
+
+function showPickOwnerModal(candidateUserIds, onPicked) {
+    var overlay = ensurePickOwnerModal();
+    var listEl = overlay.querySelector('.pickOwnerList');
+    listEl.innerHTML = '';
+    candidateUserIds.forEach(function (id) {
+        var known = knownUsers.filter(function (u) { return u.id === id; })[0];
+        var row = buildUserRow(known || {id: id, username: displayName(id)}, false);
+        row.onclick = function () { closePickOwnerModal(); onPicked(id); };
+        listEl.appendChild(row);
     });
 }
 
@@ -996,6 +1388,7 @@ function removeConversationLocally(conversationId) {
 }
 
 function refreshConversationList() {
+    var oldList = lastConvList; // chụp lại TRƯỚC khi ghi đè -- cần để so sánh phát hiện "vừa có người rời" (xem e2eCheckGroupRotations).
     fetch(HISTORY_API_BASE + '/conversations', {headers: {'Authorization': 'Bearer ' + authToken}})
         .then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1006,6 +1399,7 @@ function refreshConversationList() {
             renderConversationList(list);
             Object.keys(conversations).forEach(updateConvHeadPresence);
             refreshPresenceSnapshot(collectRelevantUserIdsForPresence());
+            e2eCheckGroupRotations(oldList, list);
         })
         .catch(function (err) {
             console.warn('không load được danh sách hội thoại', err);
@@ -1069,9 +1463,11 @@ function buildConvListItem(conv) {
     if (entry) {
         if (entry.label !== label) {
             entry.label = label;
-            var labelEl = entry.el.querySelector('.convLabel');
-            if (labelEl) labelEl.innerText = label;
         }
+        // Tách riêng khỏi check "label đổi" ở trên -- e2eEnabled có thể bật trong khi tên hội thoại
+        // không đổi gì, vẫn phải tự cập nhật ổ khoá ngay, không đợi tên đổi mới chạy tới đây.
+        var labelEl = entry.el.querySelector('.convLabel');
+        if (labelEl) labelEl.innerText = (conv.e2eEnabled ? '🔒 ' : '') + label;
         var subtitleEl = entry.el.querySelector('.subtitle');
         if (subtitleEl && subtitleEl.innerText !== subtitle) subtitleEl.innerText = subtitle;
         // Đồng bộ mute (server-authoritative, có thể đổi từ tab/thiết bị khác) + hiện/ẩn "Rời nhóm" (chỉ group, không DM).
@@ -1080,8 +1476,18 @@ function buildConvListItem(conv) {
             muteBtnEl2.classList.toggle('active', !!conv.muted);
             muteBtnEl2.title = conv.muted ? 'Bật lại thông báo' : 'Tắt thông báo';
         }
+        var isGroupHead = others.length > 1;
+        var isOwnerMeHead = conv.memberRoles ? conv.memberRoles[myUserId] === 'owner' : true;
         var leaveBtnEl2 = entry.el.querySelector('.leaveBtn');
-        if (leaveBtnEl2) leaveBtnEl2.style.display = others.length > 1 ? '' : 'none';
+        if (leaveBtnEl2) leaveBtnEl2.style.display = isGroupHead ? '' : 'none';
+        // GROUP mà không phải owner -- server đã chặn (403, xem HallApiHandlers#requireGroupOwner),
+        // ẩn nốt 2 nút này để khỏi bấm vào rồi mới biết bị từ chối. "Xoá hẳn" (xoá cho MỌI thành
+        // viên) khác "Rời nhóm" (chỉ mình biến mất) -- member thường CHỈ được rời, không được xoá cả
+        // đoạn chat của người khác.
+        var renameBtnEl2 = entry.el.querySelector('.renameBtn');
+        if (renameBtnEl2) renameBtnEl2.style.display = (!isGroupHead || isOwnerMeHead) ? '' : 'none';
+        var deleteBtnEl2 = entry.el.querySelector('.deleteBtn');
+        if (deleteBtnEl2) deleteBtnEl2.style.display = (!isGroupHead || isOwnerMeHead) ? '' : 'none';
     }
     return item;
 }

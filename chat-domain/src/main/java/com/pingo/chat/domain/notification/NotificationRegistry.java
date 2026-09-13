@@ -115,4 +115,20 @@ public class NotificationRegistry {
         .toCompletionStage()
         .thenApply(unused -> null));
   }
+
+  /**
+   * Tự đánh dấu đã đọc noti {@code type='message'} khi client xác nhận READ ack thật cho đúng
+   * messageId đó (xem {@code NotificationConsumer#onReadAck} bên herald) -- row đã được insert NGAY
+   * lúc tin tới (không còn chờ hết grace period mới insert), nên cần tự dọn read_at khi biết chắc đã
+   * xem, thay vì để mãi "chưa đọc" dù push đã bị huỷ. CHỈ áp cho {@code type='message'} -- noti
+   * mention/reply/reaction cố tình LUÔN hiện trong chuông dù đã thấy tin trực tiếp trong khung chat
+   * (giống feed hoạt động Teams/Slack, xem javadoc lớp), không được tự đánh dấu đã đọc ở đây.
+   */
+  public CompletionStage<Void> markReadByMessageId(UUID messageId, UUID userId) {
+    return supplier.execute(conn -> conn.preparedQuery(
+            "UPDATE notifications SET read_at = now() WHERE message_id = ? AND user_id = ? AND type = 'message' AND read_at IS NULL")
+        .execute(Tuple.of(messageId, userId))
+        .toCompletionStage()
+        .thenApply(unused -> null));
+  }
 }

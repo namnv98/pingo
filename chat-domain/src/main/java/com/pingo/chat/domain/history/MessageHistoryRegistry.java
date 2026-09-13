@@ -281,6 +281,65 @@ public class MessageHistoryRegistry {
   }
 
   /**
+   * Sửa tin đã gửi -- KHÔNG giới hạn thời gian, KHÔNG giới hạn số lần (xem {@code
+   * ChatSessionManager#handleEdit}). Chỉ đúng {@code from_user_id} gốc VÀ chưa xoá mới sửa được
+   * (cùng điều kiện với {@link #markDeleted}). 3 bước TUẦN TỰ, không transaction (best-effort, cùng
+   * mức chấp nhận được như {@link #markRead} 2 bước -- xem javadoc lớp): (1) đọc {@code body} HIỆN
+   * TẠI (đồng thời xác nhận đúng chủ + chưa xoá), (2) chụp lại bản đó vào {@code message_edits}
+   * TRƯỚC KHI ghi đè, (3) mới UPDATE {@code messages.body} = bản mới. {@code search_text} được cập
+   * nhật lại theo nội dung MỚI (khác {@code enrichLinkPreview} không bao giờ đổi {@code
+   * body.message} -- sửa tin THẬT SỰ đổi nội dung nên phải đồng bộ lại để tìm kiếm ra đúng bản mới
+   * nhất, xem {@link #searchMessages}).
+   */
+  public CompletionStage<Boolean> editMessage(UUID messageId, UUID userId, String newBodyJson, String newSearchText) {
+    return supplier.executeReadOnly(conn -> conn.preparedQuery(
+            "SELECT body FROM messages WHERE id = ? AND from_user_id = ? AND deleted_at IS NULL")
+        .execute(Tuple.of(messageId, userId))
+        .toCompletionStage()
+        .thenApply(rows -> {
+          var it = rows.iterator();
+          return it.hasNext() ? it.next().getString("body") : null;
+        }))
+        .thenCompose(previousBody -> {
+          if (previousBody == null) {
+            return java.util.concurrent.CompletableFuture.completedStage(false);
+          }
+          return supplier.execute(conn -> conn.preparedQuery(
+                  "INSERT INTO message_edits (id, message_id, previous_body) VALUES (?, ?, ?)")
+              .execute(Tuple.of(UUID.randomUUID(), messageId, previousBody))
+              .toCompletionStage())
+              .thenCompose(unused -> supplier.execute(conn -> conn.preparedQuery(
+                      "UPDATE messages SET body = ?, edited_at = now(), search_text = ? WHERE id = ?")
+                  .execute(Tuple.of(newBodyJson, newSearchText, messageId))
+                  .toCompletionStage()))
+              .thenApply(unused -> true);
+        });
+  }
+
+  /**
+   * Lịch sử các bản CŨ của 1 tin (không gồm bản HIỆN TẠI -- đã có sẵn trong chính tin đó, xem
+   * {@link #editMessage}), cũ nhất trước để client nối vào cuối cùng với bản hiện tại thành 1 dòng
+   * thời gian đầy đủ (xem demo.html renderEditHistory).
+   */
+  public CompletionStage<JsonArray> getEditHistory(UUID messageId) {
+    return supplier.executeReadOnly(conn -> conn.preparedQuery(
+            "SELECT previous_body, (extract(epoch from edited_at) * 1000)::bigint AS ts "
+                + "FROM message_edits WHERE message_id = ? ORDER BY edited_at ASC")
+        .execute(Tuple.of(messageId))
+        .toCompletionStage()
+        .thenApply(rows -> {
+          var result = new JsonArray();
+          for (var row : rows) {
+            var bodyText = row.getString("previous_body");
+            result.add(new JsonObject()
+                .put("body", bodyText == null ? null : Json.decodeValue(bodyText))
+                .put("ts", row.getLong("ts")));
+          }
+          return result;
+        }));
+  }
+
+  /**
    * Lấy lịch sử tin nhắn của 1 conversation, mới nhất trước — dùng cho phân trang kiểu "load thêm
    * tin cũ hơn": {@code beforeEpochMillis} là mốc thời gian (loại trừ), null nghĩa là trang đầu
    * tiên (tính từ "bây giờ"). Kèm {@code seen} (đã có ai KHÁC người gửi đọc chưa, xem
@@ -321,7 +380,12 @@ public class MessageHistoryRegistry {
   private static final String SELECT_COLUMNS =
       "SELECT m.id, m.conversation_id, m.from_user_id, m.body, m.deleted_at, "
           + "(extract(epoch from m.created_at) * 1000)::bigint AS ts, "
-          + "EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id != m.from_user_id) AS seen, "
+          + "(extract(epoch from m.edited_at) * 1000)::bigint AS edited_ts, "
+          // Danh sách AI đã xem (không chỉ boolean) -- cùng pattern array_agg với reactions bên dưới,
+          // để client tự vẽ "✓✓" (2 người, kiểu Messenger) HOẶC "đã xem bởi N người" (group >2 thành
+          // viên) thay vì chỉ biết CÓ/KHÔNG ai đã xem. Loại from_user_id -- tin của chính mình không
+          // bao giờ tính "tự mình đã xem" (markRead tự advance qua tin mình gửi, xem javadoc markRead).
+          + "(SELECT array_agg(mr.user_id::text ORDER BY mr.user_id) FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id != m.from_user_id) AS seen_by_user_ids, "
           + "(SELECT array_agg(mrx.emoji ORDER BY mrx.user_id) FROM message_reactions mrx WHERE mrx.message_id = m.id) AS reaction_emojis, "
           + "(SELECT array_agg(mrx.user_id::text ORDER BY mrx.user_id) FROM message_reactions mrx WHERE mrx.message_id = m.id) AS reaction_user_ids "
           + "FROM messages m ";
@@ -335,6 +399,7 @@ public class MessageHistoryRegistry {
       // này, chỉ ẩn NỘI DUNG khỏi API đọc.
       var deleted = row.getValue("deleted_at") != null;
       var bodyText = row.getString("body");
+      var seenByUserIds = toUserIdArray(row.getValue("seen_by_user_ids"));
       result.add(
           new JsonObject()
               .put("id", row.getUUID("id").toString())
@@ -342,9 +407,22 @@ public class MessageHistoryRegistry {
               .put("fromUserId", row.getUUID("from_user_id").toString())
               .put("body", deleted ? null : (bodyText == null ? null : Json.decodeValue(bodyText)))
               .put("ts", row.getLong("ts"))
-              .put("seen", row.getBoolean("seen"))
+              .put("editedTs", row.getValue("edited_ts")) // null = chưa từng sửa, xem editMessage()
+              .put("seen", !seenByUserIds.isEmpty()) // giữ tương thích ngược (✓/✓✓ nhị phân) cho code cũ nào còn đọc field này
+              .put("seenBy", seenByUserIds)
               .put("deleted", deleted)
               .put("reactions", deleted ? new JsonArray() : toReactionsArray(row)));
+    }
+    return result;
+  }
+
+  private static JsonArray toUserIdArray(Object rawArray) {
+    var result = new JsonArray();
+    if (rawArray == null) {
+      return result;
+    }
+    for (var id : (Object[]) rawArray) {
+      result.add(String.valueOf(id));
     }
     return result;
   }

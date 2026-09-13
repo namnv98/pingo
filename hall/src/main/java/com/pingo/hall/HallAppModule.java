@@ -5,6 +5,7 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
+import com.pingo.chat.domain.e2e.E2eKeyRegistry;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -114,6 +115,13 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private MessageLinkRegistry messageLinkRegistry(JdbcConnectionSupplier supplier) {
     return new MessageLinkRegistry(supplier);
+  }
+
+  /** Khoá cho mã hoá đầu cuối (identity key/one-time prekey + hàng đợi to-device) -- xem javadoc {@link E2eKeyRegistry}. */
+  @Provides
+  @Singleton
+  private E2eKeyRegistry e2eKeyRegistry(JdbcConnectionSupplier supplier) {
+    return new E2eKeyRegistry(supplier);
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */

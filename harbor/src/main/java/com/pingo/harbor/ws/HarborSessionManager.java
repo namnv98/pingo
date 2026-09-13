@@ -186,6 +186,7 @@ public class HarborSessionManager {
             case TYPING -> handleTyping(session, frame);
             case REACTION -> handleReaction(session, frame);
             case DELETE -> handleDelete(session, frame);
+            case EDIT -> handleEdit(session, frame);
             case PIN -> handlePin(session, frame);
             case READ -> handleRead(session, frame);
             case PING -> sendToClient(session, SocketFrames.pong(frame.getId()));
@@ -363,6 +364,20 @@ public class HarborSessionManager {
             return;
         }
         backendStreamGateway.sendDelete(session, frame, conversationId);
+    }
+
+    /** Sửa tin nhắn {@code id} của CHÍNH MÌNH -- forward xuống colony để tự kiểm tra lại quyền rồi mới thực sự sửa + fan-out, cùng pattern với {@link #handleDelete}. */
+    private void handleEdit(HarborSession session, SocketFrame frame) {
+        if (session.getUserId() == null || isBlank(frame.getConversationId()) || isBlank(frame.getId())) {
+            return;
+        }
+        UUID conversationId;
+        try {
+            conversationId = UUID.fromString(frame.getConversationId());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        backendStreamGateway.sendEdit(session, frame, conversationId);
     }
 
     /**

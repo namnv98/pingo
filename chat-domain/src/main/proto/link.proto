@@ -59,6 +59,12 @@ enum FrameType {
   // message_pins_private), KHONG fan-out -- tranh lo cho thanh vien khac trong cung conversation biet
   // ai dang ghim rieng gi, xem ChatSessionManager#handlePin.
   PIN = 15;
+  // Sua noi dung 1 tin nhan (id = id tin, body_json = noi dung MOI cung shape voi MESSAGE) -- chi
+  // chinh nguoi gui goc moi sua duoc (server tu kiem tra from_user_id that trong DB, giong DELETE),
+  // KHONG gioi han thoi gian/so lan. Fan-out + CO persist (cot edited_at + chup ban cu vao bang
+  // message_edits, xem ChatSessionManager#handleEdit) -- moi subscriber khac tu cap nhat noi dung +
+  // hien nhan "da chinh sua" khi nhan duoc, hoac khi load lai lich su (GET /messages tra editedTs).
+  EDIT = 16;
 }
 
 message Frame {

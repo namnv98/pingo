@@ -558,6 +558,8 @@
         .infoRowLabel { color: var(--ink-soft); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .infoRowValue { font-weight: 600; color: var(--ink); text-align: right; flex: none; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .infoRowValue.badge { font-family: ui-monospace, monospace; font-weight: 500; font-size: 12px; }
+        .infoRowValue.enableLink { color: var(--accent); cursor: pointer; text-decoration: underline; }
+        .infoRowValue.enableLink:hover { color: var(--accent-dark); }
         /* Giá trị "Trạng thái" = 1 chấm + chữ, ĐỒNG BỘ ngôn ngữ với danh sách thành viên bên dưới. */
         .infoStatusVal { display: inline-flex !important; align-items: center; gap: 7px; justify-content: flex-end; }
         .infoStatusVal::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #c2c6d2; flex: none; }
@@ -572,6 +574,10 @@
         .infoMemberRow .avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700; }
         .infoMemberRow .name { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .infoMemberRow .name .you { color: var(--ink-faint); font-weight: 500; }
+        .infoMemberRow .ownerBadge { flex: none; font-size: 12px; margin-left: 2px; }
+        .infoMemberRoleBtn { flex: none; border: none; background: none; color: var(--ink-faint); padding: 4px 6px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .1s; }
+        .infoMemberRow:hover .infoMemberRoleBtn { opacity: 1; }
+        .infoMemberRoleBtn:hover { color: var(--accent); background: var(--canvas); }
         /* Trạng thái thành viên: chấm + chữ nhỏ bên phải, nhẹ và sạch. */
         .infoMemberRow .roleBadge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; flex: none; }
         .infoMemberRow .roleBadge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #c2c6d2; }
@@ -715,8 +721,8 @@
         #searchModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
         #searchModalOverlay.show { display: flex; }
         /* Overlay "Chuyển tiếp tin nhắn" / "Thêm thành viên" -- cùng khuôn hệt #searchModalOverlay ở trên. */
-        #forwardModalOverlay, #addMemberModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
-        #forwardModalOverlay.show, #addMemberModalOverlay.show { display: flex; }
+        #forwardModalOverlay, #addMemberModalOverlay, #editHistoryModalOverlay, #seenByModalOverlay, #pickOwnerModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: flex-start; justify-content: center; padding: 20px; padding-top: 12vh; }
+        #forwardModalOverlay.show, #addMemberModalOverlay.show, #editHistoryModalOverlay.show, #seenByModalOverlay.show, #pickOwnerModalOverlay.show { display: flex; }
         /* App modal (thay alert/confirm/prompt) -- overlay + card giong bgPicker/lightbox */
         #appModalOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
         #appModalOverlay.show { display: flex; }
@@ -764,6 +770,31 @@
         .profileUsernameRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 2px 4px; border-top: 1px solid var(--line); font-size: 14px; font-weight: 700; color: var(--ink); }
         .profileUsernameRow button.icon { border-color: transparent; background: none; }
         .profileUsernameRow button.icon:hover { background: var(--canvas); border-color: var(--line); }
+        /* Mục "Mã hoá đầu cuối" trong modal Hồ sơ (xem ensureProfileModal) -- 2 dòng loại trừ nhau tuỳ
+           e2eReady của THIẾT BỊ NÀY, mỗi dòng: mô tả ngắn + 1 nút hành động (tái dùng .bgUploadBtn). */
+        .profileE2eRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 2px; font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
+        .profileE2eRow .bgUploadBtn { width: auto; margin-top: 0; padding: 8px 14px; border-radius: 999px; white-space: nowrap; flex: none; }
+        /* Danh sách "Thiết bị của tôi" (xem refreshProfileDeviceList) -- mỗi dòng: nhãn+ngày thêm + nút gỡ (trừ thiết bị đang dùng). */
+        .profileE2eDeviceList { font-size: 12px; color: var(--ink-faint); }
+        .profileDeviceRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+        .profileDeviceRow:last-child { border-bottom: none; }
+        .profileDeviceInfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .profileDeviceLabel { font-size: 13px; font-weight: 700; color: var(--ink); }
+        .profileDeviceLabel b { font-weight: 700; color: var(--accent-dark); }
+        .profileDeviceDate { font-size: 11px; color: var(--ink-faint); }
+        .profileDeviceRow button.icon { border-color: transparent; background: none; color: var(--ink-faint); flex: none; }
+        .profileDeviceRow button.icon:hover { background: var(--canvas); border-color: var(--line); color: #ef4444; }
+        /* Modal "Liên kết thiết bị" (xin/hiện mã, chờ sống -- xem ensureE2eLinkWaitModal) -- cùng khung
+           overlay + .bgPickerModal như modal Hồ sơ. */
+        #e2eLinkWaitOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.45); z-index: 210; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #e2eLinkWaitOverlay.show { display: flex; }
+        /* Modal "Lưu lại khoá khôi phục" (xem showE2eRecoveryKeyModal) -- z-index cao hơn hẳn modal
+           Hồ sơ (thường mở phía sau nó) để chắc chắn nổi lên trên. */
+        #e2eRecoveryKeyOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.6); z-index: 330; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #e2eRecoveryKeyOverlay.show { display: flex; }
+        .e2eLinkWaitHint { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; padding: 4px 0 14px; }
+        .e2eLinkCode { font-family: ui-monospace, monospace; font-size: 28px; font-weight: 800; letter-spacing: .12em; text-align: center; color: var(--ink); background: var(--canvas); border-radius: 12px; padding: 14px; }
+        .e2eLinkStatus { text-align: center; font-size: 12.5px; color: var(--ink-faint); padding: 12px 0 4px; }
         /* Modal tìm kiếm toàn cục (xem ensureSearchModal, sidebar-conversations.js) -- tái dùng khung
            .bgPickerModal/.bgPickerHead/.bgPickerBody như modal Hồ sơ, chỉ khác nội dung: ô nhập + danh
            sách kết quả cuộn. Rộng/cao hơn hẳn 2 modal kia vì cần chỗ cho danh sách. */
@@ -1001,6 +1032,13 @@
         .bubble-row.mine .bubble-time { text-align: right; }
         .bubble-row .seen-status { margin-left: 4px; }
         .bubble-row .seen-status.seen { color: var(--accent-dark); font-weight: 700; }
+        /* Nhãn "(đã chỉnh sửa)" -- bấm vào xem lịch sử (showEditHistory), xem appendMessageBubble/handleMessageEdited. */
+        .bubble-row .editedLabel { margin-right: 4px; cursor: pointer; font-style: italic; }
+        .bubble-row .editedLabel:hover { text-decoration: underline; }
+        /* ✓✓ bấm được để xem "đã xem bởi ai" (showSeenByList) -- .seen (đã có sẵn) chỉ đổi màu, .clickable thêm con trỏ tay để gợi ý bấm được. */
+        .bubble-row .seen-status.clickable { cursor: pointer; }
+        .bubble-row .seen-status.clickable:hover { text-decoration: underline; }
+        .seenByList .userRow { cursor: default; }
         /* Optimistic send (xem sendChatMessage/appendMessageBubble) -- bubble mờ đi trong lúc chờ
            ACK/echo xác nhận (.pending), '!' đỏ + con trỏ tay khi lỗi/hết timeout (.failed, bấm vào
            .seen-status để gửi lại, xem markMessageFailed/retrySendMessage). */

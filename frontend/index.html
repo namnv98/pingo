@@ -176,6 +176,7 @@
                     <div class="infoCard">
                         <div class="infoRow"><span class="infoRowIcon" id="infoStatusIcon"></span><span class="infoRowLabel">Trạng thái</span><span class="infoRowValue" id="infoStatusValue"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoTypeIcon"></span><span class="infoRowLabel">Loại</span><span class="infoRowValue" id="infoTypeValue"></span></div>
+                        <div class="infoRow" id="infoE2eRow"><span class="infoRowIcon">🔒</span><span class="infoRowLabel">Mã hoá đầu cuối</span><span class="infoRowValue" id="infoE2eValue"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoMemberIcon"></span><span class="infoRowLabel">Thành viên</span><span class="infoRowValue" id="infoMemberCountRow"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoActivityIcon"></span><span class="infoRowLabel">Hoạt động gần nhất</span><span class="infoRowValue" id="infoActivityValue"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoConvIdIcon"></span><span class="infoRowLabel">Mã hội thoại</span><span class="infoRowValue badge" id="infoConvIdValue"></span></div>
@@ -214,6 +215,9 @@
 </div>
 
 <script src="assets/js/state.js"></script>
+<!-- Olm (Double Ratchet thật, xem frontend/vendor/olm-README.md) -- PHẢI load trước e2e-crypto.js. -->
+<script src="vendor/olm.js"></script>
+<script src="assets/js/e2e-crypto.js"></script>
 <script src="assets/js/theme-accent.js"></script>
 <script src="assets/js/sidebar-conversations.js"></script>
 <script src="assets/js/auth.js"></script>
