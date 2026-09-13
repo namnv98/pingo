@@ -553,9 +553,25 @@ function e2eLoadOutboundGroupSession(conversationId) {
     });
 }
 
+// Cảnh báo bất cứ khi nào sessionId outbound của conversation này ĐỔI so với lần lưu trước -- không
+// chỉ riêng 3 trường hợp đã biết (lần đầu gửi, sau restore, rotate do rời/kick nhóm), để phát hiện cả
+// trường hợp đổi session ngoài dự tính (dấu hiệu bug) thay vì im lặng.
 function e2eSaveOutboundGroupSession(conversationId, session, distributedTo, initialSessionKey) {
-    return e2eDbPut('groupOutbound', myUserId + '|' + e2eDeviceId + '|' + conversationId,
-        {pickle: session.pickle(e2ePickleKey), distributedTo: distributedTo, initialSessionKey: initialSessionKey});
+    var key = myUserId + '|' + e2eDeviceId + '|' + conversationId;
+    var newSessionId = session.session_id();
+    return e2eDbGet('groupOutbound', key).then(function (prev) {
+        if (prev && prev.pickle) {
+            var prevSession = new Olm.OutboundGroupSession();
+            prevSession.unpickle(e2ePickleKey, prev.pickle);
+            if (prevSession.session_id() !== newSessionId && typeof showToast === 'function') {
+                var conv = (typeof lastConvList !== 'undefined' ? lastConvList : []).filter(function (c) { return c.conversationId === conversationId; })[0];
+                var label = conv && typeof conversationLabel === 'function' ? conversationLabel(conv) : conversationId.substring(0, 8) + '…';
+                showToast('⚠ Session mã hoá nhóm "' + label + '" vừa đổi -- nên tải lại file backup mới');
+            }
+        }
+        return e2eDbPut('groupOutbound', key,
+            {pickle: session.pickle(e2ePickleKey), distributedTo: distributedTo, initialSessionKey: initialSessionKey});
+    });
 }
 
 function e2eLoadInboundGroupSession(conversationId, senderUserId, sessionId) {
