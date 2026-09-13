@@ -556,6 +556,13 @@ function e2eLoadOutboundGroupSession(conversationId) {
 // Cảnh báo bất cứ khi nào sessionId outbound của conversation này ĐỔI so với lần lưu trước -- không
 // chỉ riêng 3 trường hợp đã biết (lần đầu gửi, sau restore, rotate do rời/kick nhóm), để phát hiện cả
 // trường hợp đổi session ngoài dự tính (dấu hiệu bug) thay vì im lặng.
+function e2eWarnOutboundSessionChanged(conversationId) {
+    if (typeof showToast !== 'function') return;
+    var conv = (typeof lastConvList !== 'undefined' ? lastConvList : []).filter(function (c) { return c.conversationId === conversationId; })[0];
+    var label = conv && typeof conversationLabel === 'function' ? conversationLabel(conv) : conversationId.substring(0, 8) + '…';
+    showToast('⚠ Session mã hoá nhóm "' + label + '" vừa đổi -- nên tải lại file backup mới');
+}
+
 function e2eSaveOutboundGroupSession(conversationId, session, distributedTo, initialSessionKey) {
     var key = myUserId + '|' + e2eDeviceId + '|' + conversationId;
     var newSessionId = session.session_id();
@@ -563,14 +570,23 @@ function e2eSaveOutboundGroupSession(conversationId, session, distributedTo, ini
         if (prev && prev.pickle) {
             var prevSession = new Olm.OutboundGroupSession();
             prevSession.unpickle(e2ePickleKey, prev.pickle);
-            if (prevSession.session_id() !== newSessionId && typeof showToast === 'function') {
-                var conv = (typeof lastConvList !== 'undefined' ? lastConvList : []).filter(function (c) { return c.conversationId === conversationId; })[0];
-                var label = conv && typeof conversationLabel === 'function' ? conversationLabel(conv) : conversationId.substring(0, 8) + '…';
-                showToast('⚠ Session mã hoá nhóm "' + label + '" vừa đổi -- nên tải lại file backup mới');
-            }
+            if (prevSession.session_id() !== newSessionId) e2eWarnOutboundSessionChanged(conversationId);
+            return e2eDbPut('groupOutbound', key,
+                {pickle: session.pickle(e2ePickleKey), distributedTo: distributedTo, initialSessionKey: initialSessionKey});
         }
-        return e2eDbPut('groupOutbound', key,
-            {pickle: session.pickle(e2ePickleKey), distributedTo: distributedTo, initialSessionKey: initialSessionKey});
+        // Không có groupOutbound cũ -- có thể là lần đầu gửi thật (không cảnh báo), HOẶC vừa restore
+        // xong nên outbound bị mất trắng dù trước đó chính mình đã từng gửi tin trong conversation này
+        // (groupInbound vẫn còn entry tự-export của chính mình từ backup) -- 2 trường hợp này chỉ phân
+        // biệt được qua groupInbound, không thể dựa vào groupOutbound (luôn rỗng ở cả 2 trường hợp).
+        return e2eDbGetAllForUser('groupInbound').then(function (entries) {
+            var hadOwnHistory = entries.some(function (e) {
+                var parts = e.key.split('|'); // key: myUserId|conversationId|senderUserId|sessionId
+                return parts[1] === conversationId && parts[2] === myUserId;
+            });
+            if (hadOwnHistory) e2eWarnOutboundSessionChanged(conversationId);
+            return e2eDbPut('groupOutbound', key,
+                {pickle: session.pickle(e2ePickleKey), distributedTo: distributedTo, initialSessionKey: initialSessionKey});
+        });
     });
 }
 
