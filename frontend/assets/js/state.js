@@ -37,6 +37,14 @@ var seenByUserIdsByMessageId = {};
 // giữ nguyên các field khác (replyTo/files...), chỉ thay "message". Cập nhật ở appendMessageBubble +
 // khi nhận/gửi thành công frame EDIT (xem messages-render.js editMessage/handleMessageEdited).
 var rawBodyByMessageId = {};
+// messageId -> {fromUserId, conversationId, body} CHO TIN E2E GIẢI MÃ THẤT BẠI (đang hiển thị nhãn
+// "chưa nhận được khoá") -- {@code body} ở đây là PHONG BÌ GỐC (ciphertext), khác hẳn rawBodyByMessageId
+// (giữ bản đã giải mã/thất bại). Cần giữ riêng vì e2eResolveIncomingBody không cache lúc thất bại nên
+// phong bì gốc bị mất ngay sau khi resolve xong nếu không lưu lại đây -- dùng để TỰ THỬ LẠI khi khoá
+// tới muộn qua to-device (xem e2eRetryFailedMessagesIn trong e2e-crypto.js), thay vì bắt người dùng tự
+// F5 mới thấy lại được (bug thật đã gặp: khoá đã lưu xong trong IndexedDB nhưng màn hình không tự vẽ
+// lại, chỉ F5 mới lộ ra).
+var e2eFailedEnvelopesByMessageId = {};
 // Icon ảnh thay emoji Unicode để hiển thị đồng nhất mọi OS; emoji vẫn là định danh gửi server (chỉ lưu chuỗi emoji, không biết icon) và để chèn vào ô nhập tin.
 var REACTIONS = [
     {emoji: '👍', icon: 'images/chat/like.svg'},

@@ -1,22 +1,18 @@
-// Mã hoá đầu cuối (E2E) -- dùng thư viện Olm thật (Double Ratchet + Megolm, xem frontend/vendor/olm.js),
-// KHÔNG tự viết crypto. MỖI THIẾT BỊ (không phải mỗi user) tự có 1 identity key RIÊNG -- đúng thuật
-// toán Sesame của Signal thật (xem https://signal.org/docs/specifications/sesame/): 1 user nhiều
-// thiết bị = nhiều identity độc lập, gửi tin phải mã hoá RIÊNG cho TỪNG thiết bị của người nhận (fan-
-// out), không dùng chung 1 identity giữa các thiết bị (bản đầu tiên làm vậy, gây xung đột + sai an
-// toàn -- xem lịch sử users.e2e_identity_key trong postgres/helm/templates/configmap.yaml).
+// Mã hoá đầu cuối (E2E) -- dùng thư viện Olm thật (Double Ratchet + Megolm, xem frontend/vendor/olm.js).
+// Mỗi THIẾT BỊ (không phải mỗi user) có 1 identity key riêng (Signal Sesame:
+// https://signal.org/docs/specifications/sesame/) -- gửi tin phải mã hoá RIÊNG cho TỪNG thiết bị của
+// người nhận (fan-out), không dùng chung 1 identity giữa các thiết bị của cùng 1 user.
 //
-// Cách hoạt động DM (KHÔNG cần hàng đợi to-device riêng -- khác group): tin ĐẦU TIÊN gửi cho 1 THIẾT
-// BỊ chưa từng chat mã hoá cùng sẽ tự động là "PREKEY message" (Olm tự nhúng sẵn mọi thứ cần để thiết
-// bị đó tạo session, xem olm.js README mục create_outbound/create_inbound) -- cưỡi thẳng lên đúng
-// đường MESSAGE thường đang có sẵn. 1 tin logic = 1 envelope chứa NHIỀU ciphertext (1 cho mỗi thiết
-// bị đích, gồm cả thiết bị của người nhận LẪN các thiết bị KHÁC của CHÍNH MÌNH để tự đọc lại được tin
-// mình gửi) -- xem {@code perDevice} trong e2eEncryptOutgoing/e2eDecryptIncoming.
+// DM: tin đầu tiên gửi cho 1 thiết bị chưa từng chat cùng tự động là "PREKEY message" (Olm tự nhúng
+// mọi thứ cần để tạo session, xem olm.js README mục create_outbound/create_inbound). 1 tin logic = 1
+// envelope chứa nhiều ciphertext (1 cho mỗi thiết bị đích của người nhận, cộng thiết bị KHÁC của
+// chính mình để tự đọc lại được tin mình gửi) -- xem {@code perDevice} trong
+// e2eEncryptOutgoing/e2eDecryptIncoming.
 //
-// Private key KHÔNG BAO GIỜ rời máy: Olm.Account/Olm.Session pickle (serialize, mã hoá bằng 1 khoá
-// cục bộ random sinh 1 lần, lưu localStorage) rồi lưu trong IndexedDB -- xoá dữ liệu trình duyệt =
-// mất khả năng đọc lịch sử mã hoá cũ (chấp nhận được, giống mọi client Olm/Signal khác chạy trong
-// trình duyệt) -- có thể lấy lại lịch sử ĐÃ TỪNG giải mã từ 1 thiết bị khác cùng tài khoản qua tính
-// năng "liên kết thiết bị" (mã 6 ký tự, gõ tay, xem mục cuối file), giống Signal thật.
+// Private key không rời máy: Olm.Account/Olm.Session pickle bằng 1 khoá cục bộ (localStorage) rồi lưu
+// IndexedDB -- xoá dữ liệu trình duyệt = mất lịch sử mã hoá cũ (chấp nhận được, như mọi client Olm
+// khác). Lấy lại lịch sử ĐÃ giải mã từ thiết bị khác cùng tài khoản qua "liên kết thiết bị" (mã 6 ký
+// tự) hoặc "sao lưu lạnh" (file, xem cuối file).
 
 var E2E_DB_NAME = 'pingo-e2e';
 var E2E_DB_VERSION = 3;
@@ -69,10 +65,9 @@ function e2eDbPut(storeName, key, value) {
     });
 }
 
-// Lấy TOÀN BỘ entry của storeName thuộc VỀ MÌNH (key bắt đầu bằng "myUserId|") -- dùng để đóng gói
-// chuyển giao lúc liên kết thiết bị (xem e2eApproveDeviceLink); lọc theo prefix để KHÔNG lỡ kèm theo
-// dữ liệu của tài khoản KHÁC từng đăng nhập chung trình duyệt này (IndexedDB chia theo origin, không
-// theo user, xem javadoc e2eGetOrCreatePickleKey).
+// Lấy toàn bộ entry của storeName thuộc về mình (key bắt đầu bằng "myUserId|") -- dùng để đóng gói
+// chuyển giao lúc liên kết thiết bị/sao lưu; lọc theo prefix vì IndexedDB chia theo ORIGIN chứ không
+// theo user (1 trình duyệt có thể từng đăng nhập nhiều tài khoản).
 function e2eDbGetAllForUser(storeName) {
     return e2eOpenDb().then(function (db) {
         return new Promise(function (resolve, reject) {
@@ -90,8 +85,6 @@ function e2eDbGetAllForUser(storeName) {
     });
 }
 
-// Nhập lại 1 lô entry (key/value) vào storeName -- dùng ở đầu NHẬN của liên kết thiết bị, entries
-// đã kèm sẵn đúng key (myUserId|...) từ thiết bị gửi, cùng 1 user nên copy thẳng không cần đổi key.
 function e2eDbPutAll(storeName, entries) {
     if (!entries || !entries.length) return Promise.resolve();
     return e2eOpenDb().then(function (db) {
@@ -105,15 +98,12 @@ function e2eDbPutAll(storeName, entries) {
     });
 }
 
-// Đóng gói 'groupInbound' để CHUYỂN SANG THIẾT BỊ KHÁC (liên kết thiết bị HOẶC sao lưu lạnh) --
-// KHÔNG được dump thẳng {@code stored.pickle} như e2eDbGetAllForUser (bug thật đã gặp lúc test: tin
-// gap vẫn "chưa nhận được khoá" dù session ĐÃ tới nơi) -- pickle là Olm.Session#pickle(e2ePickleKey)
-// MÃ HOÁ BẰNG e2ePickleKey CỦA THIẾT BỊ NÀY, còn thiết bị NHẬN có e2ePickleKey RIÊNG của NÓ (sinh 1
-// lần/trình duyệt, không bao giờ transfer, xem javadoc e2eGetOrCreatePickleKey) -- unpickle bằng khoá
-// khác sẽ ném OLM.BAD_ACCOUNT_KEY, không đơn thuần "thiếu key" mà là hỏng vĩnh viễn (đè mất session
-// ĐÚNG nếu bản backup cũ được import SAU 1 session mới đã nhận đúng). Phải giải phóng khỏi pickle
-// key bằng {@code export_session(first_known_index())} (Olm hỗ trợ sẵn, KHÔNG lệ thuộc pickle key
-// của bất kỳ thiết bị nào) -- xem e2eImportGroupInboundEntries phía dưới, làm ngược lại lúc nhập.
+// Đóng gói/mở gói 'groupInbound' để chuyển sang thiết bị KHÁC (liên kết thiết bị hoặc sao lưu lạnh).
+// KHÔNG được chuyển thẳng {@code stored.pickle} -- pickle được mã hoá bằng e2ePickleKey CỦA THIẾT BỊ
+// NÀY, thiết bị nhận có pickle key riêng (không bao giờ transfer) nên unpickle sai khoá sẽ ném
+// OLM.BAD_ACCOUNT_KEY. Dùng {@code export_session}/{@code import_session} của Olm (không lệ thuộc
+// pickle key của bất kỳ thiết bị nào) làm định dạng trung gian, rồi pickle LẠI bằng pickle key của
+// thiết bị đích lúc nhập.
 function e2eExportGroupInboundEntries(entries) {
     return entries.map(function (e) {
         var session = new Olm.InboundGroupSession();
@@ -122,8 +112,6 @@ function e2eExportGroupInboundEntries(entries) {
     });
 }
 
-// Ngược lại e2eExportGroupInboundEntries -- nhập từng exportedSessionKey (không lệ thuộc pickle key
-// nơi xuất) rồi pickle LẠI bằng e2ePickleKey CỦA THIẾT BỊ NÀY trước khi lưu, xem javadoc trên.
 function e2eImportGroupInboundEntries(entries) {
     if (!entries || !entries.length) return Promise.resolve();
     var putEntries = entries.map(function (e) {
@@ -134,14 +122,30 @@ function e2eImportGroupInboundEntries(entries) {
     return e2eDbPutAll('groupInbound', putEntries);
 }
 
-// Khoá pickle cục bộ (mã hoá Account/Session lúc lưu xuống IndexedDB) -- sinh 1 LẦN/trình duyệt,
-// KHÔNG BAO GIỜ gửi lên server (khác identity key/prekey, vốn CHỦ Ý là public). Lưu localStorage
-// (cùng chỗ với authToken) thay vì IndexedDB cho đơn giản -- chỉ 1 chuỗi ngắn, không cần transaction.
-// Khoá localStorage GẮN THEO myUserId -- IndexedDB/localStorage chia theo ORIGIN, không theo "đang
-// đăng nhập ai", nên 1 trình duyệt từng dùng để đăng nhập NHIỀU tài khoản (test nhiều user, máy dùng
-// chung...) mà không namespace theo user sẽ đọc NHẦM session/khoá của tài khoản KHÁC đã đăng nhập
-// trước đó trên CÙNG trình duyệt (bug thật đã gặp lúc test nhiều tài khoản: 2 người khác nhau bị
-// dùng chung 1 outbound Megolm session).
+// Với mỗi outbound session (nhóm) đang giữ, tự tạo thêm 1 entry INBOUND "đọc lại tin của chính mình"
+// từ initialSessionKey của nó -- Megolm là ratchet CHỈ TIẾN, biết khoá tại vị trí BAN ĐẦU giải được
+// MỌI tin đã/sẽ mã hoá bằng ĐÚNG session đó, kể cả tin gửi SAU thời điểm backup này (miễn chưa rotate
+// sang session khác) -- vá lỗ hổng "tin mình tự gửi trong khoảng gap không khôi phục được" ngay cả khi
+// chỉ dùng 1 thiết bị duy nhất (khác e2eDistributeGroupSessionKeyToOwnDevices, cái đó cần ≥2 thiết bị
+// CÙNG online). Trả về CÙNG format {key, exportedSessionKey} với e2eExportGroupInboundEntries để nhập
+// lại bằng đúng e2eImportGroupInboundEntries, không cần thêm code riêng ở phía khôi phục.
+function e2eExportOwnOutboundAsInboundEntries(outboundEntries) {
+    return outboundEntries.map(function (e) {
+        var conversationId = e.key.split('|')[2]; // key gốc: myUserId|deviceId|conversationId
+        var outbound = new Olm.OutboundGroupSession();
+        outbound.unpickle(e2ePickleKey, e.value.pickle);
+        var initialSessionKey = e.value.initialSessionKey || outbound.session_key();
+        var asInbound = new Olm.InboundGroupSession();
+        asInbound.create(initialSessionKey);
+        return {
+            key: myUserId + '|' + conversationId + '|' + myUserId + '|' + outbound.session_id(),
+            exportedSessionKey: asInbound.export_session(asInbound.first_known_index())
+        };
+    });
+}
+
+// Khoá pickle cục bộ (mã hoá Account/Session lúc lưu IndexedDB) -- sinh 1 lần/trình duyệt, KHÔNG BAO
+// GIỜ gửi lên server, namespace theo myUserId (tránh 2 tài khoản từng dùng chung trình duyệt lẫn khoá).
 function e2eGetOrCreatePickleKey() {
     var storageKey = E2E_PICKLE_KEY_STORAGE + ':' + myUserId;
     var existing = localStorage.getItem(storageKey);
@@ -153,10 +157,8 @@ function e2eGetOrCreatePickleKey() {
     return key;
 }
 
-// id CỦA THIẾT BỊ NÀY (không phải của user) -- sinh 1 LẦN/trình duyệt bằng crypto.randomUUID(),
-// KHÔNG BAO GIỜ đổi (khác pickle key, cái này CÓ gửi lên server -- public, chỉ để server biết "gửi
-// cho ai" khi fan-out per-device, xem HallApiHandlers's PUT /e2e/keys). Namespace theo myUserId cùng
-// lý do e2eGetOrCreatePickleKey.
+// Id của THIẾT BỊ này (không phải của user) -- sinh 1 lần/trình duyệt, public (gửi lên server để biết
+// "gửi cho ai" khi fan-out per-device), khác pickle key ở chỗ đó.
 function e2eGetOrCreateDeviceId() {
     var storageKey = E2E_DEVICE_ID_STORAGE + ':' + myUserId;
     var existing = localStorage.getItem(storageKey);
@@ -166,9 +168,8 @@ function e2eGetOrCreateDeviceId() {
     return id;
 }
 
-// Tên GỢI Ý cho thiết bị này (vd "Chrome trên macOS") -- CHỈ để người dùng tự nhận diện trong danh
-// sách "Thiết bị của tôi" (xem e2eListDevices), KHÔNG có ý nghĩa kỹ thuật/bảo mật gì (khác identity
-// key). Đoán thô từ navigator.userAgent -- sai/thiếu 1 vài trình duyệt lạ không sao, chỉ là gợi ý.
+// Tên gợi ý cho thiết bị (vd "Chrome trên macOS") -- chỉ để người dùng tự nhận diện trong "Thiết bị
+// của tôi", không có ý nghĩa kỹ thuật/bảo mật.
 function e2eGuessDeviceLabel() {
     var ua = navigator.userAgent || '';
     var browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
@@ -182,10 +183,7 @@ function e2eSaveAccount() {
     return e2eDbPut('account', myUserId, {pickle: e2eAccount.pickle(e2ePickleKey)});
 }
 
-// Sinh thêm 1 lô one-time prekey MỚI + upload lên server -- gọi lúc chưa từng bật E2E, và định kỳ
-// khi GET /e2e/prekey-count báo còn ít (xem e2eMaybeTopUpPrekeys). keyId tự sinh bằng newId() (đã
-// có sẵn toàn cục, xem messaging-core.js) -- không cần trùng khớp gì với server, chỉ cần DUY NHẤT
-// trong phạm vi CHÍNH MÌNH.
+// Sinh + upload 1 lô one-time prekey mới -- gọi lúc chưa từng bật E2E, và định kỳ khi server báo còn ít.
 function e2eGenerateAndUploadPrekeys(count) {
     e2eAccount.generate_one_time_keys(count);
     var otks = JSON.parse(e2eAccount.one_time_keys()).curve25519 || {};
@@ -203,9 +201,7 @@ function e2eGenerateAndUploadPrekeys(count) {
     });
 }
 
-// Kiểm tra còn bao nhiêu prekey trên server, top-up nếu dưới ngưỡng -- gọi mỗi lần enterApp() (xem
-// e2eInit), KHÔNG cần định kỳ liên tục vì prekey chỉ bị tiêu lúc có người MỚI thiết lập session với
-// mình, tần suất thấp.
+// Kiểm tra còn bao nhiêu prekey trên server, top-up nếu dưới ngưỡng -- gọi mỗi lần enterApp().
 var E2E_PREKEY_LOW_WATERMARK = 10;
 var E2E_PREKEY_TOP_UP_COUNT = 20;
 function e2eMaybeTopUpPrekeys() {
@@ -219,12 +215,8 @@ function e2eMaybeTopUpPrekeys() {
         .catch(function (err) { console.warn('không top-up được e2e prekey', err); });
 }
 
-// Gọi 1 lần lúc enterApp() (xem sidebar-conversations.js) -- nạp/tạo Account CỦA THIẾT BỊ NÀY, đảm
-// bảo server có sẵn identity key + prekey để người khác thiết lập session với ĐÚNG thiết bị này bất
-// cứ lúc nào (kể cả khi mình đang offline lúc họ bắt đầu chat mã hoá lần đầu). Đăng ký theo
-// {@code deviceId} riêng (xem HallApiHandlers#uploadE2eKeys) -- KHÔNG còn khái niệm "xung đột identity"
-// của bản trước (1 identity dùng chung cả tài khoản): mỗi thiết bị/trình duyệt có 1 deviceId + 1
-// identity key RIÊNG, mở bao nhiêu nơi cũng không ai ghi đè ai, luôn thành công.
+// Đăng ký identity key của THIẾT BỊ này với server (theo deviceId riêng, xem HallApiHandlers#uploadE2eKeys)
+// -- mỗi thiết bị/trình duyệt có 1 deviceId + identity key riêng, mở bao nhiêu nơi cũng không ghi đè nhau.
 function e2eUploadIdentityKey() {
     return fetch(HISTORY_API_BASE + '/e2e/keys', {
         method: 'PUT',
@@ -236,11 +228,9 @@ function e2eUploadIdentityKey() {
 }
 
 // === Quản lý thiết bị ("Thiết bị của tôi") ===
-// Liệt kê/gỡ các thiết bị mã hoá của CHÍNH MÌNH -- xem HallApiHandlers's GET/DELETE /e2e/devices.
-// Gỡ 1 thiết bị KHÔNG thu hồi được các Olm session người khác đã lỡ thiết lập với nó (đã gửi rồi thì
-// thôi, xem javadoc E2eKeyRegistry#deleteDevice) -- chỉ ngăn không ai THIẾT LẬP MỚI với thiết bị đó
-// nữa (server không còn key bundle nào cho nó). Không cho gỡ ĐÚNG thiết bị đang dùng (xem UI phía
-// sidebar-conversations.js) -- muốn "đăng xuất" thiết bị hiện tại thì dùng nút Đăng xuất thường.
+// Gỡ 1 thiết bị KHÔNG thu hồi được các Olm session người khác đã lỡ thiết lập với nó -- chỉ ngăn không
+// ai THIẾT LẬP MỚI với thiết bị đó nữa. Không cho gỡ đúng thiết bị đang dùng (UI phía
+// sidebar-conversations.js) -- muốn đăng xuất thiết bị hiện tại thì dùng nút Đăng xuất thường.
 function e2eListDevices() {
     return fetch(HISTORY_API_BASE + '/e2e/devices', {headers: {'Authorization': 'Bearer ' + authToken}})
         .then(function (res) { return res.ok ? res.json() : {devices: []}; })
@@ -256,19 +246,28 @@ function e2eDeleteDevice(deviceId) {
     });
 }
 
-var e2eInitPromise = null; // theo dõi lệnh gọi ĐANG CHẠY DỞ -- Olm.init() không idempotent, gọi
-// chồng 1 lần thứ 2 lúc lần đầu CHƯA XONG (race thật đã gặp: enterApp() có thể bị kích 2 lần gần
-// nhau) sẽ TREO VĨNH VIỄN (không resolve/reject), không chỉ đơn thuần lỗi -- e2eReady vẫn false lúc
-// đó nên guard "if (e2eReady) return" KHÔNG đủ, phải nhớ đúng cái Promise đang chạy mà trả lại.
-var e2eInitializedForUserId = null; // userId mà e2eReady/e2eAccount/... ĐANG đại diện -- xem reset bên dưới.
+var e2eInitPromise = null; // theo dõi lệnh gọi đang chạy dở -- Olm.init() không idempotent, gọi chồng
+// 1 lần thứ 2 lúc lần đầu chưa xong sẽ TREO VĨNH VIỄN (không resolve/reject) -- "if (e2eReady) return"
+// không đủ vì e2eReady vẫn false lúc đó, phải nhớ đúng Promise đang chạy mà trả lại.
+var e2eInitializedForUserId = null; // userId mà e2eReady/e2eAccount/... đang đại diện -- xem reset bên dưới.
+
+// Nạp Account đã pickle từ IndexedDB, hoặc tạo mới nếu chưa từng có -- tách riêng khỏi e2eInit() để
+// mỗi bước của chuỗi khởi tạo có tên rõ ràng.
+function e2eLoadOrCreateAccount() {
+    return e2eDbGet('account', myUserId).then(function (stored) {
+        e2eAccount = new Olm.Account();
+        if (stored && stored.pickle) e2eAccount.unpickle(e2ePickleKey, stored.pickle);
+        else e2eAccount.create();
+        e2eIdentityKeys = JSON.parse(e2eAccount.identity_keys());
+    });
+}
+
+// Gọi 1 lần lúc enterApp() -- nạp/tạo Account của thiết bị này, đảm bảo server có sẵn identity
+// key/prekey để người khác thiết lập session bất cứ lúc nào (kể cả khi mình đang offline).
 function e2eInit() {
     if (e2eInitializedForUserId !== myUserId) {
-        // Đăng xuất rồi đăng nhập TÀI KHOẢN KHÁC trong CÙNG 1 lần tải trang (không F5) -- mọi state
-        // module-level ở đây (e2eReady, Account/identityKeys đang mở, promise init đang chạy dở...)
-        // vẫn còn đại diện tài khoản CŨ, không reset thì tài khoản MỚI sẽ ÂM THẦM DÙNG NHẦM Account
-        // của người trước (bug thật đã gặp: đăng nhập lần lượt 3 tài khoản test để thử group-E2E,
-        // "e2eReady" từ tài khoản đầu tiên khiến 2 tài khoản sau bỏ qua hẳn bước init, không bao giờ
-        // tự tạo Account/đăng identity key riêng của họ).
+        // Đăng xuất rồi đăng nhập tài khoản KHÁC trong cùng 1 lần tải trang (không F5) -- reset mọi
+        // state module-level, nếu không tài khoản mới sẽ dùng nhầm Account của tài khoản trước.
         e2eReady = false;
         e2eInitPromise = null;
         e2eAccount = null;
@@ -278,32 +277,19 @@ function e2eInit() {
     }
     if (e2eInitPromise) return e2eInitPromise;
     if (e2eReady) return Promise.resolve();
-    if (typeof Olm === 'undefined') return Promise.resolve(); // vendor/olm.js chưa load được (vd offline lần đầu) -- E2E tự tắt, phần còn lại của app vẫn chạy bình thường
+    if (typeof Olm === 'undefined') return Promise.resolve(); // vendor/olm.js chưa load được -- E2E tự tắt, phần còn lại của app vẫn chạy bình thường
     e2eInitializedForUserId = myUserId;
     e2ePickleKey = e2eGetOrCreatePickleKey();
     e2eDeviceId = e2eGetOrCreateDeviceId();
     e2eInitPromise = Olm.init({locateFile: function () { return 'vendor/olm.wasm'; }})
-        .then(function () { return e2eDbGet('account', myUserId); })
-        .then(function (stored) {
-            e2eAccount = new Olm.Account();
-            if (stored && stored.pickle) {
-                e2eAccount.unpickle(e2ePickleKey, stored.pickle);
-                e2eIdentityKeys = JSON.parse(e2eAccount.identity_keys());
-            } else {
-                e2eAccount.create();
-                e2eIdentityKeys = JSON.parse(e2eAccount.identity_keys());
-            }
-            // LUÔN re-upload identity key (idempotent phía server, đăng ký theo deviceId RIÊNG -- xem
-            // javadoc e2eUploadIdentityKey) dù Account cũ hay mới -- account có thể đã pickle sẵn cục
-            // bộ nhưng lần trước upload lên server LỠ fail (mất mạng, deploy lại giữa chừng...) mà code
-            // cũ chỉ upload ở nhánh "tạo mới", nên 1 lần fail là kẹt vĩnh viễn không bao giờ thử lại
-            // -- bug thật đã gặp lúc test.
-            return e2eSaveAccount()
-                .then(e2eUploadIdentityKey)
-                .then(function () {
-                    e2eReady = true;
-                    return e2eMaybeTopUpPrekeys();
-                });
+        .then(e2eLoadOrCreateAccount)
+        // Luôn re-upload identity key (idempotent phía server) dù Account cũ hay mới -- lần trước có
+        // thể đã lỡ fail (mất mạng...), không được kẹt vĩnh viễn không bao giờ thử lại.
+        .then(e2eSaveAccount)
+        .then(e2eUploadIdentityKey)
+        .then(function () {
+            e2eReady = true;
+            return e2eMaybeTopUpPrekeys();
         })
         .catch(function (err) {
             console.warn('e2eInit lỗi -- mã hoá đầu cuối sẽ không dùng được phiên này', err);
@@ -312,7 +298,7 @@ function e2eInit() {
     return e2eInitPromise;
 }
 
-// Bật mã hoá đầu cuối cho 1 conversation -- DM (2 người) trong Phase 1 này; group (Megolm) xem TODO.
+// Bật mã hoá đầu cuối cho 1 conversation -- DM dùng Olm 1-1; group dùng Megolm (xem e2eEncryptGroupOutgoing).
 function e2eEnableConversation(conversationId) {
     return fetch(HISTORY_API_BASE + '/conversations/e2e?conversationId=' + encodeURIComponent(conversationId), {
         method: 'PUT',
@@ -323,11 +309,8 @@ function e2eEnableConversation(conversationId) {
     });
 }
 
-// Key GẮN THEO myUserId (xem javadoc e2eGetOrCreatePickleKey) + THEO ĐÚNG 1 THIẾT BỊ ĐÍCH cụ thể
-// (ownerUserId/deviceId của đầu bên kia -- ownerUserId có thể LÀ CHÍNH myUserId khi đây là 1 trong
-// các thiết bị KHÁC của MÌNH, xem javadoc e2eEncryptOutgoing) -- session của "mình <-> 1 thiết bị cụ
-// thể", KHÔNG còn gộp chung mọi thiết bị của 1 người như bản 1-identity/user cũ (Sesame thật: mỗi
-// cặp (mình, họ) x (thiết bị của họ) là 1 Double Ratchet ĐỘC LẬP).
+// Session DM gắn theo (myUserId, ownerUserId, deviceId) -- 1 Double Ratchet ĐỘC LẬP cho mỗi (mình,
+// đúng 1 thiết bị của họ). ownerUserId có thể là chính myUserId khi đây là 1 thiết bị KHÁC của mình.
 function e2eLoadDmSession(ownerUserId, deviceId) {
     return e2eDbGet('dmSessions', myUserId + '|' + ownerUserId + '|' + deviceId).then(function (stored) {
         if (!stored || !stored.pickle) return null;
@@ -341,10 +324,8 @@ function e2eSaveDmSession(ownerUserId, deviceId, session) {
     return e2eDbPut('dmSessions', myUserId + '|' + ownerUserId + '|' + deviceId, {pickle: session.pickle(e2ePickleKey)});
 }
 
-// Lấy danh sách THIẾT BỊ (không phải 1 identity duy nhất nữa) của {@code userId} -- mỗi phần tử đã
-// tự CHIẾM (xoá) sẵn 1 one-time prekey của chính thiết bị đó (xem HallApiHandlers#getE2eKeyBundle,
-// E2eKeyRegistry#claimKeyBundlesForUser). Mảng RỖNG (không phải lỗi/404) nếu userId chưa từng bật
-// E2E ở bất kỳ thiết bị nào.
+// Danh sách thiết bị của userId -- mỗi phần tử đã CHIẾM (xoá) sẵn 1 one-time prekey của thiết bị đó
+// (xem HallApiHandlers#getE2eKeyBundle). Mảng rỗng (không phải lỗi) nếu userId chưa từng bật E2E.
 function e2eFetchDeviceBundles(userId) {
     return fetch(HISTORY_API_BASE + '/e2e/keys/bundle?userId=' + encodeURIComponent(userId), {
         headers: {'Authorization': 'Bearer ' + authToken}
@@ -354,10 +335,8 @@ function e2eFetchDeviceBundles(userId) {
     }).then(function (data) { return data.devices || []; });
 }
 
-// Giống e2eFetchDeviceBundles nhưng KHÔNG claim/xoá prekey nào (gọi {@code GET /e2e/keys/devices}
-// thay vì {@code .../bundle}) -- dùng để KIỂM TRA rẻ "người này có thiết bị nào chưa từng nhận 1
-// khoá phiên Megolm cụ thể hay không" (xem e2eGetOrCreateOutboundGroupSession) mà không phải trả giá
-// tiêu tốn 1 one-time prekey mỗi lần chỉ để kiểm tra.
+// Giống e2eFetchDeviceBundles nhưng KHÔNG claim/xoá prekey (GET /e2e/keys/devices) -- dùng để kiểm tra
+// rẻ "người này có thiết bị nào chưa nhận 1 khoá Megolm cụ thể" mà không tốn prekey chỉ để kiểm tra.
 function e2eListDevicesForUser(userId) {
     return fetch(HISTORY_API_BASE + '/e2e/keys/devices?userId=' + encodeURIComponent(userId), {
         headers: {'Authorization': 'Bearer ' + authToken}
@@ -367,10 +346,9 @@ function e2eListDevicesForUser(userId) {
     }).then(function (data) { return data.devices || []; });
 }
 
-// Lấy session đã có với ĐÚNG 1 thiết bị (ownerUserId, device.deviceId), hoặc tạo outbound session
-// MỚI bằng identity+one-time key của thiết bị đó nếu chưa từng chat -- {@code device.oneTimePrekey}
-// có thể null (thiết bị đó hết prekey, Olm vẫn tạo outbound được, chỉ kém 1 lớp forward-secrecy ở
-// tin đầu, xem javadoc E2eKeyRegistry#claimKeyBundlesForUser).
+// Lấy session đã có với đúng 1 thiết bị, hoặc tạo outbound session mới bằng identity+one-time key của
+// thiết bị đó -- {@code device.oneTimePrekey} có thể null (hết prekey, Olm vẫn tạo được, chỉ kém 1 lớp
+// forward-secrecy ở tin đầu).
 function e2eGetOrCreateDmSessionForDevice(ownerUserId, device) {
     return e2eLoadDmSession(ownerUserId, device.deviceId).then(function (session) {
         if (session) return session;
@@ -380,25 +358,24 @@ function e2eGetOrCreateDmSessionForDevice(ownerUserId, device) {
     });
 }
 
-// Mã hoá 1 tin gửi cho peerUserId trong DM đã bật E2E (CŨNG dùng lại để mã hoá payload to-device như
-// megolm_session -- xem e2eDistributeGroupSessionKey) -- trả về ENVELOPE {@code {perDevice: {deviceId:
-// {olmType, ciphertext}, ...}, senderDeviceId}} để gửi đi thay cho body gốc. Mã hoá RIÊNG cho TỪNG
-// thiết bị của peerUserId (fan-out per-device, đúng chuẩn Signal/Sesame -- xem javadoc đầu file) VÀ
-// cho các thiết bị KHÁC của CHÍNH MÌNH (để tự đọc lại được tin mình gửi trên thiết bị khác, không chỉ
-// nhờ cache cục bộ như bản 1-identity cũ). 404/rỗng nếu peerUserId CHƯA TỪNG bật E2E ở bất kỳ thiết bị
-// nào -- ném lỗi rõ ràng cho người gọi (vd báo "người này chưa bật mã hoá đầu cuối"), khác với việc 1
-// vài thiết bị lẻ tẻ của họ lỗi/hết prekey (bỏ qua từng cái, không chặn cả gửi).
-//
-// replyTo.fromUserId + mentionedUserIds được LẶP LẠI dạng CLEARTEXT ở ngoài (đã thoả thuận với người
-// dùng: nội dung tin kín hoàn toàn, nhưng "ai được reply/mention" vẫn lộ để server bắn đúng thông báo
-// riêng như cũ, xem ChatSessionManager#extractSpecialNotifyUserIds bên colony).
-function e2eEncryptOutgoing(peerUserId, plainBody) {
+// Danh sách đích cần mã hoá riêng cho 1 tin DM gửi tới peerUserId: mọi thiết bị của họ + mọi thiết bị
+// KHÁC của chính mình (để tự đọc lại được tin mình gửi trên thiết bị khác).
+function e2eBuildOutgoingTargets(peerUserId) {
     return Promise.all([e2eFetchDeviceBundles(peerUserId), e2eFetchDeviceBundles(myUserId)]).then(function (results) {
         var peerDevices = results[0];
         if (!peerDevices.length) throw new Error('người này chưa bật mã hoá đầu cuối');
         var myOtherDevices = results[1].filter(function (d) { return d.deviceId !== e2eDeviceId; });
-        var targets = peerDevices.map(function (d) { return {ownerUserId: peerUserId, device: d}; })
+        return peerDevices.map(function (d) { return {ownerUserId: peerUserId, device: d}; })
             .concat(myOtherDevices.map(function (d) { return {ownerUserId: myUserId, device: d}; }));
+    });
+}
+
+// Mã hoá 1 tin gửi cho peerUserId trong DM đã bật E2E (cũng dùng lại để mã hoá payload to-device như
+// megolm_session). Trả envelope {@code {perDevice: {deviceId: {olmType, ciphertext}}, senderDeviceId}}.
+// replyTo.fromUserId + mentionedUserIds lặp lại dạng cleartext ở ngoài (nội dung tin kín hoàn toàn,
+// nhưng "ai được reply/mention" vẫn lộ để server bắn đúng thông báo, xem ChatSessionManager).
+function e2eEncryptOutgoing(peerUserId, plainBody) {
+    return e2eBuildOutgoingTargets(peerUserId).then(function (targets) {
         var plaintext = JSON.stringify(plainBody);
         return Promise.all(targets.map(function (t) {
             return e2eGetOrCreateDmSessionForDevice(t.ownerUserId, t.device).then(function (session) {
@@ -425,39 +402,35 @@ function e2eEncryptOutgoing(peerUserId, plainBody) {
     });
 }
 
-// Giải mã 1 tin nhận được từ fromUserId trong DM đã bật E2E -- trả plain body gốc (đúng shape
-// {message, files, replyTo, ...} như tin không mã hoá) để phần render còn lại KHÔNG cần biết gì về
-// E2E. {@code fromUserId} có thể LÀ CHÍNH myUserId (đọc lại tin MÌNH đã gửi từ 1 thiết bị KHÁC, xem
-// javadoc e2eEncryptOutgoing) -- vẫn tra đúng session theo (fromUserId, envelope.senderDeviceId).
-// Không giải mã được (không có phần dành cho THIẾT BỊ NÀY trong perDevice, hoặc lỗi ratchet) thì trả
-// placeholder rõ ràng thay vì throw làm vỡ cả pipeline render.
+// Chọn (hoặc tạo) đúng Olm session để giải 1 ciphertext DM: dùng lại session cũ nếu còn khớp (tin
+// ratchet thường, hoặc prekey message trùng session đã có do 2 bên cùng lúc tạo outbound -- xem
+// olm.js README mục matches_inbound); ngược lại, nếu là prekey message thì tạo inbound session mới.
+function e2eResolveDmSessionForDecrypt(fromUserId, senderDeviceId, mine) {
+    return e2eLoadDmSession(fromUserId, senderDeviceId).then(function (session) {
+        if (session && (mine.olmType === 1 || session.matches_inbound(mine.ciphertext))) {
+            return {session: session, plaintext: session.decrypt(mine.olmType, mine.ciphertext)};
+        }
+        if (mine.olmType === 0) {
+            var newSession = new Olm.Session();
+            newSession.create_inbound(e2eAccount, mine.ciphertext);
+            var plaintext = newSession.decrypt(mine.olmType, mine.ciphertext);
+            e2eAccount.remove_one_time_keys(newSession);
+            return e2eSaveAccount().then(function () { return {session: newSession, plaintext: plaintext}; });
+        }
+        throw new Error('không có session để giải mã tin này (olmType=1 nhưng chưa từng thiết lập session)');
+    });
+}
+
+// Giải mã 1 tin nhận được từ fromUserId trong DM đã bật E2E -- fromUserId có thể là chính myUserId
+// (đọc lại tin mình gửi từ thiết bị khác). Không giải mã được (không có phần dành cho thiết bị này
+// trong perDevice, hoặc lỗi ratchet) thì trả placeholder rõ ràng thay vì throw làm vỡ pipeline render.
 function e2eDecryptIncoming(fromUserId, envelope) {
     var mine = envelope && envelope.perDevice ? envelope.perDevice[e2eDeviceId] : null;
     if (!mine) {
         return Promise.resolve({message: '🔒 Tin nhắn đã mã hoá (không gửi cho thiết bị này -- có thể thiết bị vừa liên kết sau lúc tin được gửi)', e2eFailed: true});
     }
     var senderDeviceId = envelope.senderDeviceId;
-    return e2eLoadDmSession(fromUserId, senderDeviceId)
-        .then(function (session) {
-            if (session && mine.olmType === 1) {
-                // Tin RATCHET thường (không phải tin đầu) -- PHẢI có session cũ mới đúng, không tự tạo mới.
-                return {session: session, plaintext: session.decrypt(mine.olmType, mine.ciphertext)};
-            }
-            if (session && mine.olmType === 0 && session.matches_inbound(mine.ciphertext)) {
-                // PREKEY message nhưng KHỚP đúng session đã có (vd 2 bên cùng lúc tự tạo outbound,
-                // xem olm.js README matches_inbound) -- dùng lại session cũ, không tạo trùng.
-                return {session: session, plaintext: session.decrypt(mine.olmType, mine.ciphertext)};
-            }
-            if (mine.olmType === 0) {
-                // Tin ĐẦU TIÊN từ thiết bị này (hoặc session cũ không khớp) -- tạo inbound session mới.
-                var newSession = new Olm.Session();
-                newSession.create_inbound(e2eAccount, mine.ciphertext);
-                var plaintext = newSession.decrypt(mine.olmType, mine.ciphertext);
-                e2eAccount.remove_one_time_keys(newSession);
-                return e2eSaveAccount().then(function () { return {session: newSession, plaintext: plaintext}; });
-            }
-            throw new Error('không có session để giải mã tin này (olmType=1 nhưng chưa từng thiết lập session)');
-        })
+    return e2eResolveDmSessionForDecrypt(fromUserId, senderDeviceId, mine)
         .then(function (result) {
             return e2eSaveDmSession(fromUserId, senderDeviceId, result.session).then(function () { return JSON.parse(result.plaintext); });
         })
@@ -467,14 +440,10 @@ function e2eDecryptIncoming(fromUserId, envelope) {
         });
 }
 
-// Cache plaintext cục bộ theo messageId (IndexedDB, cùng trình duyệt) -- vẫn cần dù giờ đã fan-out
-// per-device (đọc lại tin mình gửi trên thiết bị KHÁC không còn PHỤ THUỘC HOÀN TOÀN vào cache nữa,
-// xem e2eResolveIncomingBody), vì Megolm/Olm vẫn là RATCHET DÙNG 1 LẦN cho mỗi vị trí tin -- decrypt()
-// xong 1 tin thì trạng thái đã tiến lên, KHÔNG decrypt lại được CHÍNH tin đó lần 2 (khác đọc file
-// tĩnh, đây là stream). Load lại lịch sử (F5, mở lại conversation) mà không có cache sẽ cố decrypt
-// lại ciphertext ĐÃ decrypt trước đó -> lỗi ratchet, mất luôn nội dung (bug thật đã gặp lúc test).
-// Nên: decrypt-1-LẦN, cache plaintext lại, mọi lần sau đọc CACHE, không bao giờ decrypt lại ciphertext
-// đã xử lý rồi -- kể cả tin của CHÍNH MÌNH đọc qua fan-out từ 1 thiết bị khác.
+// Cache plaintext cục bộ theo messageId -- Olm/Megolm là ratchet DÙNG 1 LẦN cho mỗi vị trí tin, decrypt
+// xong không decrypt lại được chính ciphertext đó lần 2. Load lại lịch sử (F5, mở lại conversation) mà
+// không cache sẽ cố decrypt lại ciphertext đã xử lý rồi -> lỗi ratchet, mất nội dung. Nên: decrypt 1
+// lần, cache plaintext, mọi lần sau đọc cache -- kể cả tin của chính mình đọc qua fan-out từ thiết bị khác.
 function e2eCachePlaintext(messageId, plainBody) {
     return e2eDbPut('msgPlaintext', myUserId + '|' + messageId, {body: plainBody});
 }
@@ -483,10 +452,8 @@ function e2eGetCachedPlaintext(messageId) {
     return e2eDbGet('msgPlaintext', myUserId + '|' + messageId).then(function (stored) { return stored ? stored.body : null; });
 }
 
-// Mã hoá body TRƯỚC KHI gửi đi nếu conversation đã bật E2E -- gọi từ sendChatMessage (điểm vào DUY
-// NHẤT gửi MESSAGE, xem messaging-core.js). Trả nguyên {@code plainBody} không đổi nếu conversation
-// KHÔNG bật E2E (đường đi cũ, không ảnh hưởng gì). DM (đúng 1 người khác) dùng Olm 1-1; GROUP (>1
-// người khác) dùng Megolm (xem e2eEncryptGroupOutgoing).
+// Mã hoá body TRƯỚC KHI gửi nếu conversation đã bật E2E -- gọi từ sendChatMessage (điểm vào duy nhất
+// gửi MESSAGE, xem messaging-core.js). DM (đúng 1 người khác) dùng Olm 1-1; group dùng Megolm.
 function e2eMaybeEncryptForSend(conversationId, plainBody) {
     var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
     if (!conv || !conv.e2eEnabled) return Promise.resolve(plainBody);
@@ -496,16 +463,9 @@ function e2eMaybeEncryptForSend(conversationId, plainBody) {
     return e2eEncryptGroupOutgoing(conversationId, conv.memberUserIds, plainBody);
 }
 
-// Giải mã body NHẬN VỀ nếu là tin e2e -- dùng cho MỌI nguồn tin (WS sống, GET /messages lịch sử,
-// jump-to-message...), xem các call site trong history-ws.js/messages-render.js. LUÔN tra cache
-// TRƯỚC (xem javadoc e2eCachePlaintext) -- chỉ decrypt khi cache MISS thật (lần đầu thấy đúng tin
-// này), rồi lưu lại kết quả ngay để lần sau không decrypt lại ciphertext đã dùng (session không cho
-// phép). {@code body.megolm} quyết định dùng Olm 1-1 hay Megolm group để giải (xem
-// e2eDecryptIncoming/e2eDecryptGroupIncoming). Tin CỦA CHÍNH MÌNH giờ CŨNG thử decrypt bình thường
-// (khác bản 1-identity cũ luôn coi là "không đọc lại được") -- fan-out per-device (xem
-// e2eEncryptOutgoing) gửi kèm 1 bản cho các thiết bị KHÁC của mình, nên đọc lại được nếu THIẾT BỊ
-// NÀY có mặt trong {@code perDevice} lúc gửi; không có (vd thiết bị vừa liên kết SAU lúc tin đó được
-// gửi) thì decrypt tự trả placeholder rõ ràng (xem e2eDecryptIncoming), không throw.
+// Giải mã body nhận về nếu là tin e2e -- dùng cho mọi nguồn (WS sống, GET /messages lịch sử,
+// jump-to-message...). Luôn tra cache trước, chỉ decrypt khi cache miss thật. {@code body.megolm}
+// quyết định dùng Olm 1-1 hay Megolm group.
 function e2eResolveIncomingBody(fromUserId, body, messageId, conversationId) {
     if (!body || !body.e2e) return Promise.resolve(body);
     return e2eGetCachedPlaintext(messageId).then(function (cached) {
@@ -513,17 +473,37 @@ function e2eResolveIncomingBody(fromUserId, body, messageId, conversationId) {
         if (!e2eReady) return {message: '🔒 Tin nhắn đã mã hoá (thiết bị này chưa sẵn sàng đọc)', e2eFailed: true};
         var decryptPromise = body.megolm ? e2eDecryptGroupIncoming(conversationId, fromUserId, body) : e2eDecryptIncoming(fromUserId, body);
         return decryptPromise.then(function (plain) {
-            // KHÔNG cache khi decrypt thất bại (e2eFailed) -- để lần sau còn thử lại (vd session key
-            // vừa nhận được qua to-device), cache thành công thật thì mới chốt luôn không decrypt lại nữa.
-            if (plain && plain.e2eFailed) return plain;
+            // KHÔNG cache khi thất bại -- để lần sau còn thử lại (vd session key vừa nhận được qua
+            // to-device); giữ lại phong bì gốc (xem e2eFailedEnvelopesByMessageId) cho lần thử đó.
+            if (plain && plain.e2eFailed) {
+                if (messageId) e2eFailedEnvelopesByMessageId[messageId] = {fromUserId: fromUserId, conversationId: conversationId, body: body};
+                return plain;
+            }
+            if (messageId) delete e2eFailedEnvelopesByMessageId[messageId];
             return e2eCachePlaintext(messageId, plain).then(function () { return plain; });
         });
     });
 }
 
-// Giống e2eResolveIncomingBody nhưng dùng RIÊNG cho tin VỪA ĐƯỢC SỬA (EDIT) của NGƯỜI KHÁC -- BỎ
-// QUA cache đọc (nội dung cache đang giữ là bản CŨ trước khi sửa), luôn decrypt ciphertext MỚI rồi
-// GHI ĐÈ cache bằng kết quả mới -- xem history-ws.js case "EDIT".
+// Thử giải mã lại mọi tin của conversationId đang kẹt ở trạng thái thất bại -- gọi sau khi vừa nhận 1
+// khoá phiên Megolm mới (to-device, sống qua WS hoặc drain lúc offline, xem e2eHandleToDeviceItem) để
+// màn hình đang mở tự cập nhật ngay, không bắt người dùng phải F5 mới thấy. Chỉ sửa các bubble đang
+// hiển thị qua handleMessageEdited (đã có sẵn, dùng chung với tính năng sửa tin).
+function e2eRetryFailedMessagesIn(conversationId) {
+    var pendingIds = Object.keys(e2eFailedEnvelopesByMessageId).filter(function (id) {
+        return e2eFailedEnvelopesByMessageId[id].conversationId === conversationId;
+    });
+    if (!pendingIds.length) return;
+    pendingIds.forEach(function (messageId) {
+        var entry = e2eFailedEnvelopesByMessageId[messageId];
+        e2eResolveIncomingBody(entry.fromUserId, entry.body, messageId, entry.conversationId).then(function (resolvedBody) {
+            if (!resolvedBody || !resolvedBody.e2eFailed) handleMessageEdited(conversationId, messageId, resolvedBody);
+        });
+    });
+}
+
+// Giống e2eResolveIncomingBody nhưng dùng riêng cho tin VỪA ĐƯỢC SỬA của người khác -- bỏ qua cache
+// đọc (đang giữ bản cũ trước khi sửa), luôn decrypt ciphertext mới rồi ghi đè cache.
 function e2eResolveEditedBody(fromUserId, body, messageId, conversationId) {
     if (!body || !body.e2e) return Promise.resolve(body);
     if (!e2eReady) return Promise.resolve({message: '🔒 Tin nhắn đã mã hoá (thiết bị này chưa sẵn sàng đọc)', e2eFailed: true});
@@ -534,10 +514,8 @@ function e2eResolveEditedBody(fromUserId, body, messageId, conversationId) {
     });
 }
 
-// Giải mã 1 LÔ tin theo đúng THỨ TỰ ban đầu (Promise.all giữ index, không phụ thuộc tin nào xong
-// trước) -- dùng cho mọi chỗ nạp lịch sử hàng loạt (loadLatestPage, loadAroundReadCursor,
-// maybeLoadOlder, jump-to-message). {@code conversationId} truyền riêng (không đọc từ {@code m}) vì
-// GET /messages không trả lại field đó trên từng tin -- nơi gọi đã biết sẵn theo query.
+// Giải mã 1 lô tin theo đúng thứ tự ban đầu (Promise.all giữ index) -- dùng cho mọi chỗ nạp lịch sử
+// hàng loạt (loadLatestPage, loadAroundReadCursor, maybeLoadOlder, jump-to-message).
 function e2eResolveIncomingBatch(conversationId, messages) {
     return Promise.all(messages.map(function (m) {
         return e2eResolveIncomingBody(m.fromUserId, m.body, m.id, conversationId).then(function (resolvedBody) {
@@ -547,32 +525,25 @@ function e2eResolveIncomingBatch(conversationId, messages) {
 }
 
 // ================= Group (Megolm) =================
-// Khác Olm 1-1 (1 session DÙNG CHUNG cho cả 2 chiều gửi/nhận giữa đúng 2 THIẾT BỊ): Megolm là ratchet
-// 1 CHIỀU, mỗi THIẾT BỊ tự giữ ĐÚNG 1 "outbound session" cho tin MÌNH gửi (không share giữa các thiết
-// bị của CHÍNH MÌNH -- cùng lý do không share Olm Session DM, xem javadoc mục "Liên kết thiết bị" cuối
-// file: 2 thiết bị cùng ratchet 1 outbound session độc lập sẽ vô tình dùng chung message key), và giữ
-// N inbound session (1 cho MỖI (người gửi, thiết bị của họ)) để đọc tin của họ -- xem create()/
+// Khác Olm 1-1 (1 session dùng chung cho cả 2 chiều giữa đúng 2 thiết bị): Megolm là ratchet 1 CHIỀU,
+// mỗi thiết bị tự giữ đúng 1 "outbound session" cho tin mình gửi (không share giữa các thiết bị của
+// chính mình -- 2 thiết bị cùng ratchet 1 outbound session sẽ vô tình dùng chung message key), và giữ
+// N inbound session (1 cho mỗi cặp người gửi + thiết bị của họ) để đọc tin của họ -- xem create()/
 // session_key() (outbound) vs create(session_key) (inbound) trong olm.js README mục "Group chat".
-// session_key() là bí mật DÙNG CHUNG cho toàn bộ history của outbound session đó -- KHÔNG gửi rõ, luôn
-// mã hoá riêng cho từng THIẾT BỊ nhận qua đúng Olm 1-1 session đã có ở trên (tái dùng e2eEncryptOutgoing,
-// đã tự fan-out per-device), gửi qua {@code POST /e2e/to-device} (type {@code "megolm_session"}) --
-// KHÔNG qua message thường vì đây là key material, không phải nội dung chat. Nội dung tin nhóm THẬT
-// SỰ (ciphertext Megolm) thì KHÔNG cần fan-out per-device -- 1 bản duy nhất, ai có đúng sessionId
-// tương ứng đều giải được, xem e2eEncryptGroupOutgoing/e2eDecryptGroupIncoming.
+// session_key() là bí mật dùng chung cho toàn bộ history của outbound session đó -- không gửi rõ, luôn
+// mã hoá riêng cho từng thiết bị nhận qua đúng Olm 1-1 session (tái dùng e2eEncryptOutgoing), gửi qua
+// POST /e2e/to-device (type "megolm_session"). Ciphertext Megolm của nội dung tin thật sự thì KHÔNG
+// cần fan-out per-device -- 1 bản duy nhất, ai có đúng sessionId đều giải được.
 
-// Key GẮN THEO (myUserId, e2eDeviceId) -- outbound session là CỦA RIÊNG "thiết bị này" cho
-// conversationId đó, KHÔNG share với các thiết bị KHÁC của CHÍNH MÌNH (xem javadoc phía trên) lẫn
-// không lẫn với tài khoản KHÁC lỡ đăng nhập trước đó trên CÙNG trình duyệt.
+// Key gắn theo (myUserId, e2eDeviceId) -- outbound session là của riêng thiết bị này cho
+// conversationId đó, không share với thiết bị khác của chính mình.
 //
-// {@code initialSessionKey} = {@code session.session_key()} gọi ĐÚNG 1 LẦN lúc {@code session.create()},
-// lưu lại RIÊNG (không gọi lại {@code session.session_key()} lúc phân phối) -- bug thật đã gặp lúc
-// test: {@code session_key()} phản ánh vị trí ratchet HIỆN TẠI (đã encrypt bao nhiêu tin), không phải
-// vị trí BAN ĐẦU -- gọi lại nó SAU KHI đã gửi vài tin rồi phân phối cho 1 thiết bị "bắt kịp" (đổi máy/
-// khôi phục backup) sẽ cho họ khoá CHỈ đọc được tin TỪ THỜI ĐIỂM ĐÓ trở đi, tạo "khoảng trống" không
-// đọc được các tin gửi TRƯỚC lúc phân phối lại nhưng SAU lúc backup cũ của họ (xác nhận bằng
-// OLM.UNKNOWN_MESSAGE_INDEX khi test trực tiếp). Lưu {@code initialSessionKey} lúc tạo, dùng lại
-// ĐÚNG giá trị đó cho MỌI lần phân phối tới THÀNH VIÊN CŨ (xem e2eGetOrCreateOutboundGroupSession) là
-// cách duy nhất đảm bảo họ luôn đọc lại được TOÀN BỘ lịch sử của session, không có khoảng trống.
+// {@code initialSessionKey} = session_key() gọi ĐÚNG 1 LẦN lúc session.create(), lưu lại riêng --
+// session_key() phản ánh vị trí ratchet HIỆN TẠI (không phải vị trí ban đầu), gọi lại nó sau khi đã
+// gửi vài tin rồi phân phối cho 1 thiết bị "bắt kịp" sẽ chỉ cho họ đọc được tin TỪ LÚC ĐÓ trở đi, tạo
+// khoảng trống không đọc được các tin gửi trước đó. Dùng lại đúng initialSessionKey cho mọi lần phân
+// phối tới THÀNH VIÊN CŨ (xem e2eGetOrCreateOutboundGroupSession) là cách duy nhất đảm bảo họ luôn đọc
+// lại được toàn bộ lịch sử của session.
 function e2eLoadOutboundGroupSession(conversationId) {
     return e2eDbGet('groupOutbound', myUserId + '|' + e2eDeviceId + '|' + conversationId).then(function (stored) {
         if (!stored || !stored.pickle) return null;
@@ -600,20 +571,14 @@ function e2eSaveInboundGroupSession(conversationId, senderUserId, sessionId, ses
     return e2eDbPut('groupInbound', myUserId + '|' + conversationId + '|' + senderUserId + '|' + sessionId, {pickle: session.pickle(e2ePickleKey)});
 }
 
-// Gửi {@code sessionKey} (do NGƯỜI GỌI cung cấp SẴN, xem javadoc e2eLoadOutboundGroupSession vì sao
-// KHÔNG tự gọi {@code session.session_key()} ở đây) cho 1 loạt NGƯỜI qua to-device -- mã hoá RIÊNG
-// từng người bằng đúng Olm DM session 1-1 (tái dùng e2eEncryptOutgoing, đã tự fan-out cho MỌI thiết
-// bị HIỆN TẠI của người đó) rồi POST lên hàng đợi to-device, KHÔNG gửi rõ session_key vì ai có nó đọc
-// được MỌI tin mã hoá bằng chain key TỪ VỊ TRÍ ĐÓ trở đi. LƯU Ý: chỉ fan-out tới thiết bị của NGƯỜI
-// NHẬN, chưa tự động đồng bộ session_key này sang các thiết bị KHÁC của CHÍNH MÌNH (to-device địa chỉ
-// theo recipientUserId ở tầng server, phần "gửi kèm cho chính mình" bên trong envelope của
-// e2eEncryptOutgoing không tới đâu vì gói được queue dưới recipientUserId của NGƯỜI NHẬN, không phải
-// mình) -- thiết bị khác của mình sẽ đọc được các tin nhóm CŨ này qua tính năng "liên kết thiết bị"
-// (chuyển hẳn groupInbound, xem mục cuối file) thay vì tự động ngay lúc gửi, giới hạn CHẤP NHẬN ĐƯỢC.
-// Trả về đúng danh sách recipientUserId GỬI THÀNH CÔNG (không phải tất cả) -- người gọi chỉ được đánh
-// dấu "đã phân phối" cho những ai THẬT SỰ nhận được, không phải cả danh sách đã CỐ gửi. Lỗi 1 người
-// (vd họ chưa từng bật E2E) không được chặn/làm rớt kết quả của những người còn lại -- mỗi delivery
-// độc lập, catch riêng từng cái.
+// Gửi {@code sessionKey} (do người gọi cung cấp sẵn -- không tự gọi session_key() ở đây, xem javadoc
+// e2eLoadOutboundGroupSession) cho 1 loạt người qua to-device -- mã hoá riêng từng người bằng Olm DM
+// session 1-1 (tái dùng e2eEncryptOutgoing, đã tự fan-out mọi thiết bị hiện tại của người đó). Chưa tự
+// động đồng bộ sessionKey này sang thiết bị KHÁC của CHÍNH MÌNH (to-device địa chỉ theo recipientUserId
+// ở tầng server) -- thiết bị khác của mình đọc lại lịch sử qua "liên kết thiết bị"/sao lưu lạnh thay vì
+// tự động ngay lúc gửi, giới hạn chấp nhận được. Trả về đúng danh sách recipientUserId GỬI THÀNH CÔNG
+// (không phải tất cả) -- người gọi chỉ đánh dấu "đã phân phối" cho ai thật sự nhận được; lỗi 1 người
+// không chặn kết quả của những người còn lại.
 function e2eDistributeGroupSessionKey(conversationId, session, recipientUserIds, sessionKey) {
     if (!recipientUserIds.length) return Promise.resolve([]);
     var payload = {conversationId: conversationId, sessionId: session.session_id(), sessionKey: sessionKey};
@@ -631,12 +596,10 @@ function e2eDistributeGroupSessionKey(conversationId, session, recipientUserIds,
     })).then(function (results) { return results.filter(function (id) { return id !== null; }); });
 }
 
-// Lấy danh sách "userId|deviceId" CHO MỌI THIẾT BỊ HIỆN TẠI của từng userId trong {@code userIds} --
-// dùng SAU KHI đã gửi thành công, để ghi lại đúng CÁC THIẾT BỊ nào vừa thật sự nhận được (xem
-// e2eDistributeGroupSessionKey's javadoc: e2eEncryptOutgoing bên trong đã tự fan-out cho MỌI thiết
-// bị hiện tại của người đó, nên coi như TẤT CẢ thiết bị hiện tại của 1 người "succeeded" đều đã nhận).
-// Dùng {@link e2eListDevicesForUser} (KHÔNG claim prekey) vì chỉ cần ĐỌC danh sách để ghi sổ, không
-// cần thiết lập session gì thêm ở bước này.
+// Danh sách "userId|deviceId" cho mọi thiết bị hiện tại của từng userId -- dùng SAU KHI đã gửi thành
+// công để ghi sổ đúng thiết bị nào vừa nhận (e2eEncryptOutgoing bên trong đã tự fan-out mọi thiết bị
+// hiện tại của người đó, nên coi như tất cả thiết bị hiện tại của 1 người "succeeded" đều đã nhận).
+// Dùng e2eListDevicesForUser (không claim prekey) vì chỉ cần đọc danh sách để ghi sổ.
 function e2eCurrentDeviceKeysFor(userIds) {
     return Promise.all(userIds.map(function (userId) {
         return e2eListDevicesForUser(userId).then(function (devices) {
@@ -645,87 +608,140 @@ function e2eCurrentDeviceKeysFor(userIds) {
     })).then(function (lists) { return lists.reduce(function (acc, l) { return acc.concat(l); }, []); });
 }
 
-// Lấy (hoặc tạo mới) outbound Megolm session CỦA CHÍNH THIẾT BỊ NÀY cho conversationId -- đảm bảo MỌI
-// THIẾT BỊ HIỆN TẠI của mọi thành viên khác đã nhận được session_key, phân phối bù cho ai/thiết bị nào
-// chưa có. 2 trường hợp "chưa có" khác hẳn nhau, PHẢI phân biệt (xem {@code hasAnyDeviceOfUser} bên
-// dưới):
-//  - THÀNH VIÊN CŨ vừa đổi sang thiết bị MỚI (mất hết local storage rồi đăng nhập lại/khôi phục
-//    backup) -- họ ĐÃ có ít nhất 1 thiết bị khác từng nhận session này rồi, chỉ thiết bị MỚI là chưa
-//    -- PHẢI gửi {@code initialSessionKey} (chốt lúc {@code session.create()}, xem javadoc
-//    e2eLoadOutboundGroupSession) để họ đọc lại được TOÀN BỘ lịch sử session, không có "khoảng trống"
-//    (bug thật đã gặp: gọi lại {@code session.session_key()} lúc phân phối muộn chỉ cho đọc được tin
-//    TỪ LÚC ĐÓ trở đi, mất hẳn các tin gửi giữa lúc backup cũ và lúc phân phối lại).
-//  - THÀNH VIÊN MỚI thật sự (chưa từng có bất kỳ thiết bị nào nhận session này) -- PHẢI gửi khoá
-//    HIỆN TẠI ({@code session.session_key()} gọi tươi lúc này), KHÔNG phải initialSessionKey -- nếu
-//    không sẽ phá vỡ backward secrecy đã thống nhất trước đó (thành viên mới không được đọc lịch sử
-//    trước lúc họ vào nhóm).
-function e2eGetOrCreateOutboundGroupSession(conversationId, memberUserIds) {
-    var others = memberUserIds.filter(function (id) { return id !== myUserId; });
-    return e2eLoadOutboundGroupSession(conversationId).then(function (existing) {
-        var session = existing ? existing.session : new Olm.OutboundGroupSession();
-        var initialSessionKey = existing ? existing.initialSessionKey : null;
-        if (!existing) {
-            session.create();
-            initialSessionKey = session.session_key(); // CHỈ gọi 1 LẦN DUY NHẤT ở đây, xem javadoc phía trên.
-        } else if (!initialSessionKey) {
-            // Session được TẠO TỪ TRƯỚC bản fix này (chưa từng lưu initialSessionKey) -- đành lấy tạm
-            // khoá HIỆN TẠI làm phương án dự phòng (giống hệt hành vi CŨ trước fix, không phải lỗi mới
-            // phát sinh) -- session này sẽ tự "chữa lành" (có initialSessionKey đúng nghĩa) ngay khi
-            // rotate lần kế tiếp (kick/rời, xem e2eRotateOutboundGroupSession) hoặc lần tới đây bị bỏ
-            // rồi tạo lại (vd đổi thiết bị của CHÍNH MÌNH).
-            initialSessionKey = session.session_key();
-        }
-        var distributedTo = existing ? existing.distributedTo : [];
-        var hasAnyDeviceOfUser = function (userId) {
-            return distributedTo.some(function (entry) { return entry.indexOf(userId + '|') === 0; });
-        };
-        return Promise.all(others.map(function (userId) {
-            return e2eListDevicesForUser(userId).then(function (devices) {
-                var hasMissingDevice = devices.some(function (d) { return distributedTo.indexOf(userId + '|' + d.deviceId) === -1; });
-                if (!hasMissingDevice) return null;
-                return {userId: userId, catchingUp: hasAnyDeviceOfUser(userId)};
-            });
-        })).then(function (results) {
-            var pending = results.filter(function (r) { return r !== null; });
-            if (!pending.length) return {session: session, distributedTo: distributedTo, initialSessionKey: initialSessionKey};
-            var catchUpIds = pending.filter(function (r) { return r.catchingUp; }).map(function (r) { return r.userId; });
-            var newMemberIds = pending.filter(function (r) { return !r.catchingUp; }).map(function (r) { return r.userId; });
-            return Promise.all([
-                e2eDistributeGroupSessionKey(conversationId, session, catchUpIds, initialSessionKey),
-                e2eDistributeGroupSessionKey(conversationId, session, newMemberIds, session.session_key())
-            ]).then(function (successLists) {
-                // CHỈ thêm người THẬT SỰ nhận được (xem javadoc e2eDistributeGroupSessionKey) -- ai gửi
-                // lỗi (vd họ chưa bật E2E) vẫn ở lại "pending", lần gửi tin KẾ TIẾP sẽ tự thử lại, không
-                // bị đánh dấu nhầm "đã phân phối" rồi không bao giờ thử lại nữa (bug thật đã gặp lúc test).
-                var succeeded = successLists[0].concat(successLists[1]);
-                return e2eCurrentDeviceKeysFor(succeeded).then(function (newKeys) {
-                    var newDistributedTo = distributedTo.slice();
-                    newKeys.forEach(function (k) { if (newDistributedTo.indexOf(k) === -1) newDistributedTo.push(k); });
-                    return e2eSaveOutboundGroupSession(conversationId, session, newDistributedTo, initialSessionKey).then(function () {
-                        return {session: session, distributedTo: newDistributedTo, initialSessionKey: initialSessionKey};
+// Gửi {@code sessionKey} cho các THIẾT BỊ KHÁC CỦA CHÍNH MÌNH đang online cùng lúc -- để tin nhóm MÌNH
+// vừa gửi hiện ra ngay ở thiết bị khác của mình (giống Signal/WhatsApp: mọi tin mới đều mã hoá gửi cho
+// MỌI thiết bị hiện tại của người gửi, xem thảo luận). CHỈ áp dụng cho session đang được TẠO/GỬI BÂY
+// GIỜ -- không phải cơ chế "tự động đọc lại lịch sử cũ" cho 1 thiết bị mới đăng nhập (cái đó cố ý
+// không tự động, chỉ qua liên kết thiết bị/backup). Viết riêng thay vì tái dùng
+// e2eEncryptOutgoing/e2eDistributeGroupSessionKey với peerUserId=myUserId -- gọi vậy sẽ tự đếm luôn
+// CHÍNH thiết bị đang gửi vào đích (peerDevices không loại trừ e2eDeviceId) và claim trùng prekey 2
+// lần cho cùng 1 thiết bị khác trong 1 lượt.
+function e2eDistributeGroupSessionKeyToOwnDevices(conversationId, session, sessionKey) {
+    return e2eFetchDeviceBundles(myUserId).then(function (devices) {
+        var others = devices.filter(function (d) { return d.deviceId !== e2eDeviceId; });
+        if (!others.length) return [];
+        var payload = {conversationId: conversationId, sessionId: session.session_id(), sessionKey: sessionKey};
+        var plaintext = JSON.stringify(payload);
+        return Promise.all(others.map(function (device) {
+            return e2eGetOrCreateDmSessionForDevice(myUserId, device).then(function (dmSession) {
+                var enc = dmSession.encrypt(plaintext);
+                return e2eSaveDmSession(myUserId, device.deviceId, dmSession).then(function () {
+                    var perDevice = {};
+                    perDevice[device.deviceId] = {olmType: enc.type, ciphertext: enc.body};
+                    var envelope = {e2e: true, perDevice: perDevice, senderDeviceId: e2eDeviceId};
+                    return fetch(HISTORY_API_BASE + '/e2e/to-device', {
+                        method: 'POST',
+                        headers: {'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json'},
+                        body: JSON.stringify({deliveries: [{recipientUserId: myUserId, type: 'megolm_session', conversationId: conversationId, body: envelope}]})
                     });
                 });
+            }).then(function (res) { return res.ok ? device.deviceId : null; })
+                .catch(function (err) { console.warn('không đồng bộ được session nhóm sang thiết bị khác của mình', device.deviceId, err); return null; });
+        })).then(function (results) { return results.filter(function (id) { return id !== null; }); });
+    }).catch(function (err) { console.warn('không lấy được danh sách thiết bị khác của mình', err); return []; });
+}
+
+// Thiết bị khác của chính mình có đang thiếu sessionKey hiện tại không? Coi như luôn "bắt kịp" (không
+// có khái niệm backward secrecy giữa các thiết bị của CHÍNH MÌNH -- đã là mình thì đọc toàn bộ lịch sử
+// của mình luôn hợp lý).
+function e2eHasOwnDevicesPending(distributedTo) {
+    return e2eListDevicesForUser(myUserId).then(function (devices) {
+        return devices.some(function (d) { return d.deviceId !== e2eDeviceId && distributedTo.indexOf(myUserId + '|' + d.deviceId) === -1; });
+    });
+}
+
+// Trong số {@code others}, ai đang có ít nhất 1 thiết bị chưa nằm trong {@code distributedTo}? Tách
+// riêng 2 loại (xem e2eGetOrCreateOutboundGroupSession's javadoc):
+//  - catchUpIds: THÀNH VIÊN CŨ vừa đổi/thêm thiết bị (đã có ít nhất 1 thiết bị khác từng nhận session
+//    này rồi) -- phải nhận initialSessionKey để đọc lại được TOÀN BỘ lịch sử, không có khoảng trống.
+//  - newMemberIds: thành viên MỚI thật sự (chưa từng có thiết bị nào nhận) -- phải nhận khoá HIỆN TẠI,
+//    không phải initialSessionKey, để giữ đúng backward secrecy (không đọc được lịch sử trước lúc vào nhóm).
+function e2eFindPendingGroupRecipients(others, distributedTo) {
+    var hasAnyDeviceOfUser = function (userId) {
+        return distributedTo.some(function (entry) { return entry.indexOf(userId + '|') === 0; });
+    };
+    return Promise.all(others.map(function (userId) {
+        return e2eListDevicesForUser(userId).then(function (devices) {
+            var hasMissingDevice = devices.some(function (d) { return distributedTo.indexOf(userId + '|' + d.deviceId) === -1; });
+            if (!hasMissingDevice) return null;
+            return {userId: userId, catchingUp: hasAnyDeviceOfUser(userId)};
+        });
+    })).then(function (results) {
+        var pending = results.filter(function (r) { return r !== null; });
+        return {
+            catchUpIds: pending.filter(function (r) { return r.catchingUp; }).map(function (r) { return r.userId; }),
+            newMemberIds: pending.filter(function (r) { return !r.catchingUp; }).map(function (r) { return r.userId; })
+        };
+    });
+}
+
+// Phân phối bù cho catchUpIds/newMemberIds (+ thiết bị khác của chính mình nếu {@code ownPending})
+// rồi ghi lại distributedTo + lưu session -- tách riêng khỏi e2eGetOrCreateOutboundGroupSession để hàm
+// đó chỉ còn lo "cần phân phối bù hay không".
+function e2eRecordGroupDistribution(conversationId, session, distributedTo, initialSessionKey, catchUpIds, newMemberIds, ownPending) {
+    return Promise.all([
+        e2eDistributeGroupSessionKey(conversationId, session, catchUpIds, initialSessionKey),
+        e2eDistributeGroupSessionKey(conversationId, session, newMemberIds, session.session_key()),
+        ownPending ? e2eDistributeGroupSessionKeyToOwnDevices(conversationId, session, initialSessionKey) : Promise.resolve([])
+    ]).then(function (successLists) {
+        // Chỉ thêm người/thiết bị THẬT SỰ nhận được -- ai gửi lỗi vẫn ở lại pending, lần gửi tin kế
+        // tiếp tự thử lại, không bị đánh dấu nhầm "đã phân phối" rồi không bao giờ thử lại nữa.
+        var succeededUserIds = successLists[0].concat(successLists[1]);
+        var ownSucceededDeviceIds = successLists[2];
+        return e2eCurrentDeviceKeysFor(succeededUserIds).then(function (newKeys) {
+            var newDistributedTo = distributedTo.slice();
+            newKeys.forEach(function (k) { if (newDistributedTo.indexOf(k) === -1) newDistributedTo.push(k); });
+            ownSucceededDeviceIds.forEach(function (deviceId) {
+                var k = myUserId + '|' + deviceId;
+                if (newDistributedTo.indexOf(k) === -1) newDistributedTo.push(k);
+            });
+            return e2eSaveOutboundGroupSession(conversationId, session, newDistributedTo, initialSessionKey).then(function () {
+                return {session: session, distributedTo: newDistributedTo, initialSessionKey: initialSessionKey};
             });
         });
     });
 }
 
-// Bắt buộc tạo session MỚI (bỏ hẳn session cũ, không tái dùng) -- gọi khi phát hiện có người vừa bị
-// kick/rời khỏi 1 group đã mã hoá (xem e2eCheckGroupRotations), để họ KHÔNG đọc được tin MÌNH gửi
-// SAU thời điểm đó (vẫn đọc được tin CŨ trước lúc rời, vì họ đã giữ sẵn session_key cũ -- đúng kỳ
-// vọng đã thống nhất "chỉ rotate khi rời/bị kick", group Megolm vốn không có forward-secrecy
-// per-message như DM, xem javadoc đầu file/thảo luận trước đó). Mọi thành viên CÒN LẠI đều là thành
-// viên "gốc" của session MỚI này (không ai "bắt kịp" cả, session vừa tạo) -- gửi thẳng
-// {@code initialSessionKey} luôn (giống nhau ở đây vì session hoàn toàn mới, ai cũng nhận NGAY lúc
-// vị trí ratchet = 0).
+// Lấy (hoặc tạo mới) outbound Megolm session của CHÍNH THIẾT BỊ NÀY cho conversationId, đảm bảo mọi
+// thiết bị hiện tại của mọi thành viên khác (VÀ thiết bị khác của chính mình) đã nhận được
+// session_key -- phân phối bù cho ai còn thiếu.
+function e2eGetOrCreateOutboundGroupSession(conversationId, memberUserIds) {
+    var others = memberUserIds.filter(function (id) { return id !== myUserId; });
+    return e2eLoadOutboundGroupSession(conversationId).then(function (existing) {
+        var session = existing ? existing.session : new Olm.OutboundGroupSession();
+        var initialSessionKey = existing ? existing.initialSessionKey : null;
+        if (!initialSessionKey) {
+            // Session mới toanh, HOẶC session tạo từ trước bản có initialSessionKey (đành lấy tạm khoá
+            // hiện tại làm phương án dự phòng -- tự "chữa lành" ngay lần rotate/tạo lại kế tiếp).
+            if (!existing) session.create();
+            initialSessionKey = session.session_key(); // gọi đúng 1 lần ở đây, xem javadoc phía trên
+        }
+        var distributedTo = existing ? existing.distributedTo : [];
+        return Promise.all([
+            e2eFindPendingGroupRecipients(others, distributedTo),
+            e2eHasOwnDevicesPending(distributedTo)
+        ]).then(function (checkResults) {
+            var pending = checkResults[0], ownPending = checkResults[1];
+            if (!pending.catchUpIds.length && !pending.newMemberIds.length && !ownPending) {
+                return {session: session, distributedTo: distributedTo, initialSessionKey: initialSessionKey};
+            }
+            return e2eRecordGroupDistribution(conversationId, session, distributedTo, initialSessionKey, pending.catchUpIds, pending.newMemberIds, ownPending);
+        });
+    });
+}
+
+// Bắt buộc tạo session MỚI (bỏ hẳn session cũ) -- gọi khi phát hiện có người vừa bị kick/rời khỏi 1
+// group đã mã hoá (xem e2eCheckGroupRotations), để họ không đọc được tin mình gửi SAU thời điểm đó
+// (vẫn đọc được tin cũ, vì đã giữ sẵn session_key cũ -- Megolm nhóm không có forward-secrecy
+// per-message như DM, chỉ rotate khi rời/bị kick). Mọi thành viên còn lại (và thiết bị khác của chính
+// mình) đều là "gốc" của session mới này -- dùng chung đường phân phối "catch up" (initialSessionKey)
+// của e2eRecordGroupDistribution, không có ai thuộc diện "thành viên mới cần giới hạn backward secrecy".
 function e2eRotateOutboundGroupSession(conversationId, memberUserIds) {
     var session = new Olm.OutboundGroupSession();
     session.create();
     var initialSessionKey = session.session_key();
     var others = memberUserIds.filter(function (id) { return id !== myUserId; });
-    return e2eDistributeGroupSessionKey(conversationId, session, others, initialSessionKey)
-        .then(function (succeeded) { return e2eCurrentDeviceKeysFor(succeeded); })
-        .then(function (distributedTo) { return e2eSaveOutboundGroupSession(conversationId, session, distributedTo, initialSessionKey); });
+    return e2eRecordGroupDistribution(conversationId, session, [], initialSessionKey, others, [], true);
 }
 
 function e2eEncryptGroupOutgoing(conversationId, memberUserIds, plainBody) {
@@ -742,13 +758,11 @@ function e2eEncryptGroupOutgoing(conversationId, memberUserIds, plainBody) {
     });
 }
 
-// Giải 1 tin group -- tra ĐÚNG inbound session theo (conversationId, fromUserId, sessionId trong
-// envelope, xem e2eSaveInboundGroupSession) vì mỗi người gửi có session RIÊNG (sessionId đã tự phân
-// biệt theo từng THIẾT BỊ gửi, không cần thêm senderDeviceId vào key). Chưa có session (vd to-device
-// phân phối khoá chưa kịp tới, hoặc mình vào nhóm SAU lúc session đó được tạo, hoặc là thiết bị KHÁC
-// của người gửi mà session_key đó chưa từng được đồng bộ tới) thì báo lỗi rõ ràng thay vì throw làm
-// vỡ pipeline render -- KHÔNG cache (xem e2eResolveIncomingBody), để lần GET /messages/mở lại sau còn
-// tự thử lại nếu lúc đó khoá đã tới.
+// Giải 1 tin group -- tra đúng inbound session theo (conversationId, fromUserId, sessionId) vì mỗi
+// người gửi có session riêng. Chưa có session (to-device chưa kịp tới, mình vào nhóm sau lúc session
+// được tạo, hoặc thiết bị khác của người gửi mà session_key chưa từng đồng bộ tới) thì báo lỗi rõ ràng
+// thay vì throw làm vỡ pipeline render -- KHÔNG cache (xem e2eResolveIncomingBody) để lần mở lại sau
+// còn tự thử lại nếu khoá đã tới.
 function e2eDecryptGroupIncoming(conversationId, fromUserId, envelope) {
     return e2eLoadInboundGroupSession(conversationId, fromUserId, envelope.sessionId)
         .then(function (session) {
@@ -763,71 +777,32 @@ function e2eDecryptGroupIncoming(conversationId, fromUserId, envelope) {
         });
 }
 
-// Xử lý 1 tin to-device (dùng chung cho relay sống qua WS -- xem history-ws.js case "E2E_TO_DEVICE"
-// -- và drain lúc connect lại -- xem e2eDrainToDevice). An toàn khi CÙNG LÚC nhiều thiết bị của cùng
-// 1 user đều nhận được relay/drain của 1 item -- e2eDecryptIncoming tự bỏ qua (trả placeholder) nếu
-// {@code perDevice} không có phần dành cho THIẾT BỊ NÀY, không cần lọc theo deviceId ở tầng này. 3
-// loại: phân phối Megolm session key (xem e2eDistributeGroupSessionKey); YÊU CẦU gửi lại khoá (xem
-// e2eRequestMissingGroupKeys/e2eHandleGroupKeyRequest ngay dưới); hoặc gói chuyển giao LỊCH SỬ lúc
-// liên kết thiết bị (xem e2eApproveDeviceLink/e2eHandleDeviceLinkPayload bên dưới).
+// Xử lý 1 tin to-device (dùng chung cho relay sống qua WS -- xem history-ws.js case "E2E_TO_DEVICE" --
+// và drain lúc connect lại, xem e2eDrainToDevice). An toàn khi cùng lúc nhiều thiết bị của cùng 1 user
+// đều nhận được relay/drain của 1 item -- e2eDecryptIncoming tự bỏ qua nếu {@code perDevice} không có
+// phần dành cho thiết bị này. 2 loại: phân phối Megolm session key; hoặc gói chuyển giao lịch sử lúc
+// liên kết thiết bị (xem e2eApproveDeviceLink/e2eHandleDeviceLinkPayload bên dưới) -- KHÔNG có đường
+// tự động nào khác: chỉ 2 đường CÓ hành động rõ ràng của người dùng (nhập mã liên kết thiết bị, hoặc
+// phục hồi từ file backup) mới được cấp quyền đọc lại lịch sử.
 function e2eHandleToDeviceItem(type, senderUserId, conversationId, olmEnvelope) {
     if (type === 'device_link_payload') return e2eHandleDeviceLinkPayload(olmEnvelope);
-    if (type === 'megolm_key_request') return e2eHandleGroupKeyRequest(conversationId);
     if (type !== 'megolm_session' || !olmEnvelope) return Promise.resolve();
     return e2eDecryptIncoming(senderUserId, olmEnvelope).then(function (payload) {
         if (!payload || payload.e2eFailed || !payload.sessionKey || !payload.sessionId) return;
         var session = new Olm.InboundGroupSession();
         session.create(payload.sessionKey);
-        return e2eSaveInboundGroupSession(payload.conversationId || conversationId, senderUserId, payload.sessionId, session);
-    });
-}
-
-// === Chủ động xin lại khoá Megolm còn thiếu (giống m.room_key_request của Matrix) ===
-// Vá lỗ hổng CÒN LẠI sau fix initialSessionKey: dù khoá đã đúng (đọc lại được CẢ lịch sử), nó vẫn
-// CHỈ được gửi lại lúc có người GỬI 1 tin mới (xem javadoc e2eGetOrCreateOutboundGroupSession -- chỉ
-// người GIỮ outbound session mới tự kiểm tra "ai đang thiếu" MỖI LẦN HỌ GỬI) -- thiết bị vừa khôi
-// phục KHÔNG có cách nào tự "xin lại" nếu chẳng may không ai gửi gì mới. Nên: thiết bị vừa online chủ
-// động BÁO cho mọi thành viên khác trong các nhóm đã mã hoá "kiểm tra giúp xem tôi có đang thiếu khoá
-// phiên nào không" -- không cần biết CHÍNH XÁC thiếu gì (tốn công quét lại toàn bộ lịch sử tin nhắn),
-// cứ hỏi hết, ai đang giữ outbound session cho conversation đó tự chạy lại ĐÚNG logic kiểm tra+phân
-// phối bù đã có (e2eGetOrCreateOutboundGroupSession), tự nhiên chỉ gửi cho ai THẬT SỰ đang thiếu.
-
-// Nhận yêu cầu "xin lại khoá" -- nếu MÌNH có giữ outbound session cho conversationId đó thì chạy lại
-// nguyên logic phân phối bù sẵn có, không thêm logic mới nào (đã tự chỉ gửi cho ai thiếu thật).
-function e2eHandleGroupKeyRequest(conversationId) {
-    var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
-    if (!conv || !conv.e2eEnabled) return Promise.resolve();
-    return e2eGetOrCreateOutboundGroupSession(conversationId, conv.memberUserIds)
-        .catch(function (err) { console.warn('xử lý yêu cầu xin khoá lỗi', err); });
-}
-
-// Gọi 1 lần lúc enterApp() (SAU e2eDrainToDevice -- xem sidebar-conversations.js), broadcast yêu cầu
-// tới TẤT CẢ thành viên khác của MỌI group đã mã hoá đang có trong {@code lastConvList}. Rẻ (chỉ 1
-// to-device rỗng mỗi người, không tốn prekey/không cần mã hoá gì thêm -- conversationId vốn đã lộ
-// cleartext ở tầng to-device y hệt megolm_session, xem javadoc E2eKeyRegistry) -- an toàn để gọi mỗi
-// lần mở app dù thường sẽ không thiếu gì (người nhận tự no-op nếu không có gì để gửi thêm).
-function e2eRequestMissingGroupKeys() {
-    if (!e2eReady) return Promise.resolve();
-    var deliveries = [];
-    lastConvList.forEach(function (conv) {
-        if (!conv.e2eEnabled) return;
-        var others = conv.memberUserIds.filter(function (id) { return id !== myUserId; });
-        if (others.length <= 1) return; // DM -- không có khái niệm session Megolm ở đây
-        others.forEach(function (otherId) {
-            deliveries.push({recipientUserId: otherId, type: 'megolm_key_request', conversationId: conv.conversationId, body: {}});
+        var resolvedConversationId = payload.conversationId || conversationId;
+        return e2eSaveInboundGroupSession(resolvedConversationId, senderUserId, payload.sessionId, session).then(function () {
+            // Khoá vừa lưu xong -- màn hình (nếu đang mở đúng conversation này) có thể đang giữ vài
+            // bubble cũ kẹt ở nhãn lỗi từ trước lúc khoá tới, tự thử lại ngay thay vì đợi F5.
+            e2eRetryFailedMessagesIn(resolvedConversationId);
         });
     });
-    if (!deliveries.length) return Promise.resolve();
-    return fetch(HISTORY_API_BASE + '/e2e/to-device', {
-        method: 'POST',
-        headers: {'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json'},
-        body: JSON.stringify({deliveries: deliveries})
-    }).catch(function (err) { console.warn('không gửi được yêu cầu xin khoá', err); });
 }
 
-// Bù các tin to-device gửi lúc mình OFFLINE (relay sống qua WS lúc đó không tới đâu được, xem
-// javadoc E2eKeyRegistry#queueToDeviceMessage) -- gọi 1 lần lúc enterApp(), xử lý TUẦN TỰ (không
-// Promise.all) để giữ đúng thứ tự nếu có nhiều lần rotate liên tiếp trên cùng 1 conversation.
+// Bù các tin to-device gửi lúc mình offline (relay sống qua WS lúc đó không tới đâu được) -- gọi 1 lần
+// lúc enterApp(), xử lý tuần tự (không Promise.all) để giữ đúng thứ tự nếu có nhiều lần rotate liên
+// tiếp trên cùng 1 conversation.
 function e2eDrainToDevice() {
     if (!e2eReady) return Promise.resolve();
     return fetch(HISTORY_API_BASE + '/e2e/to-device', {headers: {'Authorization': 'Bearer ' + authToken}})
@@ -840,32 +815,26 @@ function e2eDrainToDevice() {
         .catch(function (err) { console.warn('không drain được e2e to-device', err); });
 }
 
-// === Liên kết thiết bị (KHÔNG quét QR -- gõ tay mã 6 ký tự) ===
-// Mỗi thiết bị giờ tự có identity riêng NGAY TỪ ĐẦU (xem e2eInit) -- KHÔNG còn "xung đột identity"
-// hay chờ liên kết mới dùng được E2E như bản trước. Tính năng này giờ CHỈ còn 1 việc: chuyển giao
-// LỊCH SỬ ĐÃ GIẢI MÃ (msgPlaintext + Megolm inbound session) từ 1 thiết bị CŨ sang thiết bị MỚI --
-// giống hệt "message history sync" của chính Signal thật khi liên kết thiết bị mới (xem
-// https://signal.org/blog/a-synchronized-start-for-linked-devices/: Signal cũng KHÔNG chia sẻ session
-// sống, chỉ đóng gói lịch sử đã giải mã sẵn rồi chuyển an toàn 1 lần).
+// === Liên kết thiết bị (gõ tay mã 6 ký tự) ===
+// Mỗi thiết bị tự có identity riêng ngay từ đầu (xem e2eInit) -- tính năng này chỉ còn 1 việc: chuyển
+// giao LỊCH SỬ ĐÃ GIẢI MÃ (msgPlaintext + Megolm inbound session) từ 1 thiết bị cũ sang thiết bị mới,
+// giống "message history sync" của Signal (https://signal.org/blog/a-synchronized-start-for-linked-devices/
+// -- Signal cũng không chia sẻ session sống, chỉ đóng gói lịch sử đã giải mã sẵn rồi chuyển 1 lần).
 //
-// Cơ chế: thiết bị MỚI tự tạo 1 Olm.Account TẠM (chỉ dùng 1 lần cho việc chuyển giao này, KHÔNG phải
-// Account thật của nó -- Account thật đã có sẵn từ e2eInit rồi) + xin server 1 mã 6 ký tự ngắn hạn (5
-// phút). Thiết bị CŨ gõ mã đó vào, lấy bundle tạm của thiết bị mới, mã hoá gói {msgPlaintext,
-// groupInbound} của MÌNH bằng 1 Olm session outbound bình thường (y hệt gửi 1 tin DM, dùng 1 lần rồi
-// bỏ), gửi qua đúng {@code POST /e2e/to-device} sẵn có, địa chỉ đến CHÍNH MÌNH.
+// Cơ chế: thiết bị MỚI tự tạo 1 Olm.Account tạm (chỉ dùng 1 lần cho việc chuyển giao, khác Account
+// thật đã có sẵn từ e2eInit) + xin server 1 mã 6 ký tự ngắn hạn (5 phút). Thiết bị CŨ gõ mã đó, lấy
+// bundle tạm của thiết bị mới, mã hoá gói {msgPlaintext, groupInbound} của mình bằng 1 Olm session
+// outbound bình thường (dùng 1 lần rồi bỏ), gửi qua POST /e2e/to-device sẵn có, địa chỉ đến CHÍNH MÌNH.
 //
-// GIỚI HẠN THẬT SỰ (không tránh được, lý do an toàn -- giống chính Signal): KHÔNG chuyển session DM
-// 1-1 (dmSessions) hay Megolm OUTBOUND session (groupOutbound) -- đây là ratchet dùng để GỬI, nếu 2
-// thiết bị cùng giữ 1 bản sao rồi CÙNG mã hoá trước khi đồng bộ lại, cả 2 sẽ vô tình dùng CHUNG 1
-// message key cho 2 tin KHÁC NHAU -- lỗi mã hoá nghiêm trọng. Thiết bị mới tự thiết lập session GỬI
-// riêng với từng người/nhóm khi cần (độc lập, tự fan-out per-device như mọi thiết bị khác).
-var e2eLinkAccount = null; // Olm.Account TẠM, chỉ tồn tại lúc đang CHỜ được liên kết (thiết bị MỚI)
+// Giới hạn thật sự (lý do an toàn, giống Signal): KHÔNG chuyển session DM 1-1 hay Megolm OUTBOUND
+// session -- đây là ratchet dùng để GỬI, nếu 2 thiết bị cùng giữ 1 bản rồi cùng mã hoá trước khi đồng
+// bộ lại, cả 2 sẽ vô tình dùng chung 1 message key cho 2 tin khác nhau. Thiết bị mới tự thiết lập
+// session gửi riêng khi cần, độc lập, tự fan-out per-device như mọi thiết bị khác.
+var e2eLinkAccount = null; // Olm.Account tạm, chỉ tồn tại lúc đang chờ được liên kết (thiết bị mới)
 var e2eLinkCode = null; // mã đang chờ khớp -- phòng nhận nhầm payload của 1 phiên xin mã cũ/khác
 var e2eLinkWaiters = [];
 
-// Thiết bị MUỐN LẤY lịch sử từ thiết bị khác gọi hàm này để xin 1 mã liên kết -- tạo 1 Account TẠM +
-// 1 one-time key DÙNG ĐÚNG 1 LẦN cho việc chuyển giao (không phải Account thật của mình, xem javadoc
-// phía trên).
+// Thiết bị muốn LẤY lịch sử từ thiết bị khác gọi hàm này để xin 1 mã liên kết.
 function e2eRequestDeviceLink() {
     if (typeof Olm === 'undefined') return Promise.reject(new Error('Mã hoá đầu cuối chưa sẵn sàng ở trình duyệt này'));
     return Olm.init({locateFile: function () { return 'vendor/olm.wasm'; }}).then(function () {
@@ -890,8 +859,8 @@ function e2eRequestDeviceLink() {
     });
 }
 
-// Chờ payload liên kết tới -- KHÔNG polling, dựa hẳn vào relay sống WS (case "E2E_TO_DEVICE" trong
-// history-ws.js) tự gọi e2eHandleToDeviceItem -> e2eHandleDeviceLinkPayload -> resolve các waiter ở đây.
+// Chờ payload liên kết tới -- không polling, dựa vào relay sống WS (case "E2E_TO_DEVICE" trong
+// history-ws.js) tự gọi e2eHandleToDeviceItem -> e2eHandleDeviceLinkPayload -> resolve waiter ở đây.
 function e2eWaitForDeviceLink(timeoutMs) {
     return new Promise(function (resolve, reject) {
         var entry = {resolve: null};
@@ -911,9 +880,7 @@ function e2eCancelDeviceLinkWait() {
     e2eLinkWaiters = [];
 }
 
-// Nhận gói {msgPlaintext, groupInbound} đã giải mã, NHẬP thẳng vào storage của THIẾT BỊ NÀY -- đọc
-// được HẾT lịch sử đã từng giải mã trên thiết bị cũ ngay lập tức (xem javadoc đầu mục). KHÔNG còn
-// đụng gì tới identity/Account của thiết bị này (đã có sẵn từ e2eInit, không cần "nhập" nữa).
+// Nhận gói {msgPlaintext, groupInbound} đã giải mã, nhập thẳng vào storage của thiết bị này.
 function e2eApplyLinkedHistory(transfer) {
     return e2eDbPutAll('msgPlaintext', transfer.msgPlaintext)
         .then(function () { return e2eImportGroupInboundEntries(transfer.groupInbound); })
@@ -923,9 +890,9 @@ function e2eApplyLinkedHistory(transfer) {
         });
 }
 
-// Gọi từ e2eHandleToDeviceItem khi tới đúng loại 'device_link_payload' -- giải mã bằng Account TẠM
-// (e2eLinkAccount) y hệt e2eDecryptIncoming's nhánh PREKEY, rồi nhập lịch sử vừa nhận được. KHÔNG
-// khớp mã đang chờ (payload của 1 phiên xin mã KHÁC, vd tab cũ chưa đóng) thì bỏ qua im lặng.
+// Gọi từ e2eHandleToDeviceItem khi tới đúng loại 'device_link_payload' -- giải mã bằng Account tạm
+// (e2eLinkAccount), rồi nhập lịch sử vừa nhận. Không khớp mã đang chờ (payload của 1 phiên xin mã khác,
+// vd tab cũ chưa đóng) thì bỏ qua im lặng.
 function e2eHandleDeviceLinkPayload(envelope) {
     if (!e2eLinkAccount || !envelope || envelope.code !== e2eLinkCode) return Promise.resolve();
     try {
@@ -945,12 +912,10 @@ function e2eHandleDeviceLinkPayload(envelope) {
     }
 }
 
-// Thiết bị CÓ SẴN lịch sử gọi sau khi user gõ đúng mã hiển thị trên thiết bị MỚI -- lấy bundle
-// (identity+one-time key TẠM của thiết bị mới), gói TOÀN BỘ cache plaintext + Megolm inbound session
-// của MÌNH, mã hoá NGUYÊN gói đó bằng 1 Olm session outbound bình thường (y hệt gửi 1 tin DM, KHÔNG
-// lưu lại session này -- dùng 1 lần rồi bỏ), rồi gửi qua đúng POST /e2e/to-device sẵn có, địa chỉ đến
-// CHÍNH MÌNH (userId khác của thiết bị mới cùng 1 tài khoản, WS relay đã hỗ trợ multi-session cho
-// cùng userId, xem RoutingVersionSync#onE2eToDevice).
+// Thiết bị CÓ SẴN lịch sử gọi sau khi user gõ đúng mã hiển thị trên thiết bị mới -- lấy bundle tạm của
+// thiết bị mới, gói toàn bộ cache plaintext + Megolm inbound session của mình, mã hoá bằng 1 Olm
+// session outbound bình thường rồi gửi qua to-device, địa chỉ đến CHÍNH MÌNH (userId khác của thiết bị
+// mới cùng 1 tài khoản, WS relay đã hỗ trợ multi-session cho cùng userId).
 function e2eApproveDeviceLink(code) {
     if (!e2eReady) return Promise.reject(new Error('Thiết bị này chưa sẵn sàng, thử lại sau'));
     return fetch(HISTORY_API_BASE + '/e2e/device-link/bundle?code=' + encodeURIComponent(code), {
@@ -960,10 +925,11 @@ function e2eApproveDeviceLink(code) {
         if (!res.ok) throw new Error('Không lấy được thông tin thiết bị mới, thử lại sau');
         return res.json();
     }).then(function (bundle) {
-        return Promise.all([e2eDbGetAllForUser('msgPlaintext'), e2eDbGetAllForUser('groupInbound')]).then(function (dumps) {
+        return Promise.all([e2eDbGetAllForUser('msgPlaintext'), e2eDbGetAllForUser('groupInbound'), e2eDbGetAllForUser('groupOutbound')]).then(function (dumps) {
             var session = new Olm.Session();
             session.create_outbound(e2eAccount, bundle.identityKey, bundle.oneTimeKey);
-            var transfer = {msgPlaintext: dumps[0], groupInbound: e2eExportGroupInboundEntries(dumps[1])};
+            var groupInbound = e2eExportGroupInboundEntries(dumps[1]).concat(e2eExportOwnOutboundAsInboundEntries(dumps[2]));
+            var transfer = {msgPlaintext: dumps[0], groupInbound: groupInbound};
             var enc = session.encrypt(JSON.stringify(transfer));
             return fetch(HISTORY_API_BASE + '/e2e/to-device', {
                 method: 'POST',
@@ -976,12 +942,10 @@ function e2eApproveDeviceLink(code) {
     });
 }
 
-// So sánh danh sách thành viên CŨ (trước lần refresh này) với MỚI cho từng group đã mã hoá -- ai đó
-// vừa biến mất (bị kick/tự rời) mà mình ĐÃ TỪNG gửi khoá outbound session hiện tại cho họ thì PHẢI
-// rotate (xem e2eRotateOutboundGroupSession) để họ hết đọc được tin mình gửi SAU đó. Gọi sau mỗi lần
-// refreshConversationList() -- đây là cách duy nhất phát hiện "vừa có người rời" phía những thành
-// viên CÒN LẠI (server chỉ báo sống qua WS riêng cho đúng người BỊ xoá, xem RoutingVersionSync
-// #onMemberRemoved, không báo cho người còn lại).
+// So sánh danh sách thành viên cũ (trước lần refresh này) với mới cho từng group đã mã hoá -- ai đó
+// vừa biến mất (bị kick/tự rời) mà mình đã từng gửi khoá outbound session hiện tại cho họ thì phải
+// rotate. Gọi sau mỗi lần refreshConversationList() -- cách duy nhất phát hiện "vừa có người rời" phía
+// những thành viên còn lại (server chỉ báo sống qua WS riêng cho đúng người bị xoá).
 function e2eCheckGroupRotations(oldList, newList) {
     if (!e2eReady || !oldList.length) return;
     newList.forEach(function (conv) {
@@ -994,8 +958,7 @@ function e2eCheckGroupRotations(oldList, newList) {
         if (!removed.length) return;
         e2eLoadOutboundGroupSession(conv.conversationId).then(function (existing) {
             if (!existing) return; // mình chưa từng gửi gì trong group này -- không có session nào để rotate
-            // distributedTo lưu theo "userId|deviceId" (xem e2eGetOrCreateOutboundGroupSession), không
-            // còn là userId trần -- so khớp PREFIX "id|" thay vì so bằng tuyệt đối.
+            // distributedTo lưu theo "userId|deviceId" -- so khớp prefix "id|" thay vì so tuyệt đối.
             var needsRotate = removed.some(function (id) {
                 return existing.distributedTo.some(function (entry) { return entry.indexOf(id + '|') === 0; });
             });
@@ -1004,24 +967,21 @@ function e2eCheckGroupRotations(oldList, newList) {
     });
 }
 
-// === Backup lạnh (xuất/nhập file mã hoá cục bộ, KHÔNG BAO GIỜ qua server) ===
-// Đã đối chiếu cách 3 hệ thống lớn làm (Matrix "key backup", Signal/WhatsApp "full backup"
-// -- xem thảo luận trong lịch sử trò chuyện): Matrix chỉ backup KHOÁ Megolm vì server họ giữ
-// ciphertext vĩnh viễn (có khoá là tự giải mã lại được, kể cả tin CHƯA TỪNG mở); Signal/WhatsApp
-// backup thẳng NỘI DUNG đã giải mã vì server họ KHÔNG giữ ciphertext lâu dài. App này giống Matrix
-// (bảng {@code messages} giữ ciphertext vĩnh viễn) NÊN với GROUP, backup {@code groupInbound} (khoá
-// Megolm) là đủ và mạnh hơn hẳn backup nội dung; nhưng với DM (Olm Double Ratchet 2 chiều, KHÔNG
-// backup session sống an toàn được -- cùng lý do đã giải thích ở mục "Liên kết thiết bị": rủi ro
-// trùng message key nếu phục hồi rồi lỡ dùng song song với thiết bị khác), buộc phải backup thẳng
-// {@code msgPlaintext} kiểu Signal/WhatsApp. Kết hợp cả 2 -- ĐÚNG NGUYÊN gói {msgPlaintext,
-// groupInbound} đã dùng cho tính năng liên kết thiết bị, chỉ đổi kênh mã hoá.
+// === Backup lạnh (xuất/nhập file mã hoá cục bộ, không bao giờ qua server) ===
+// Đối chiếu cách Matrix/Signal/WhatsApp làm: Matrix chỉ backup KHOÁ Megolm vì server họ giữ ciphertext
+// vĩnh viễn; Signal/WhatsApp backup thẳng nội dung đã giải mã vì server họ không giữ ciphertext lâu
+// dài. App này giống Matrix (bảng {@code messages} giữ ciphertext vĩnh viễn) nên với GROUP, backup
+// {@code groupInbound} (khoá Megolm) là đủ và mạnh hơn backup nội dung; nhưng với DM (Olm Double
+// Ratchet 2 chiều, không backup session sống an toàn được -- cùng lý do ở mục "Liên kết thiết bị"),
+// buộc phải backup thẳng {@code msgPlaintext}. Kết hợp cả 2 -- đúng nguyên gói {msgPlaintext,
+// groupInbound} đã dùng cho liên kết thiết bị, chỉ đổi kênh mã hoá.
 //
-// 2 CÁCH bảo vệ file (người dùng tự chọn, giống Matrix cho cả Security Key lẫn Security Phrase):
-//  - "key": 32 byte ngẫu nhiên (256-bit, đủ entropy dùng THẲNG làm khoá AES, không cần KDF) -- hiện 1
-//    LẦN DUY NHẤT dạng 64 ký tự hex để người dùng tự lưu (sổ tay, password manager...) -- giống đúng
-//    "khoá khôi phục 64 ký tự" của Signal/WhatsApp. KHÔNG LƯU LẠI Ở ĐÂU trong app -- mất là mất thật.
-//  - "phrase": mật khẩu tự đặt, entropy thấp hơn nên PHẢI qua PBKDF2 (210k vòng, khuyến nghị OWASP
-//    2023) + salt ngẫu nhiên trước khi dùng làm khoá AES.
+// 2 cách bảo vệ file (người dùng tự chọn, giống Matrix Security Key/Security Phrase):
+//  - "key": 32 byte ngẫu nhiên (256-bit, dùng thẳng làm khoá AES) -- hiện 1 lần duy nhất dạng 64 ký tự
+//    hex để người dùng tự lưu, giống "khoá khôi phục" của Signal/WhatsApp. Không lưu lại ở đâu trong
+//    app -- mất là mất thật.
+//  - "phrase": mật khẩu tự đặt, entropy thấp hơn nên qua PBKDF2 (210k vòng, khuyến nghị OWASP 2023) +
+//    salt ngẫu nhiên trước khi dùng làm khoá AES.
 
 var E2E_BACKUP_PBKDF2_ITERATIONS = 210000;
 
@@ -1057,13 +1017,13 @@ function e2eImportRawAesKey(keyBytes) {
     return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
-// Tạo nội dung file backup -- {@code mode} 'key' (random 256-bit, trả kèm {@code recoveryKeyHex} để
-// UI hiện cho user LƯU LẠI NGAY, không có cách nào lấy lại lần 2) hoặc 'phrase' (mật khẩu tự đặt,
-// không trả thêm gì vì người dùng tự nhớ). Trả {@code {fileContent, recoveryKeyHex?}} --
-// {@code fileContent} là chuỗi JSON để UI tải xuống thành file.
+// Tạo nội dung file backup -- {@code mode} 'key' (random 256-bit, trả kèm recoveryKeyHex để UI hiện
+// cho user lưu lại ngay, không lấy lại lần 2 được) hoặc 'phrase' (mật khẩu tự đặt). Trả
+// {@code {fileContent, recoveryKeyHex?}} -- fileContent là chuỗi JSON để UI tải xuống thành file.
 function e2eCreateBackup(mode, phrase) {
-    return Promise.all([e2eDbGetAllForUser('msgPlaintext'), e2eDbGetAllForUser('groupInbound')]).then(function (dumps) {
-        var payload = JSON.stringify({msgPlaintext: dumps[0], groupInbound: e2eExportGroupInboundEntries(dumps[1])});
+    return Promise.all([e2eDbGetAllForUser('msgPlaintext'), e2eDbGetAllForUser('groupInbound'), e2eDbGetAllForUser('groupOutbound')]).then(function (dumps) {
+        var groupInbound = e2eExportGroupInboundEntries(dumps[1]).concat(e2eExportOwnOutboundAsInboundEntries(dumps[2]));
+        var payload = JSON.stringify({msgPlaintext: dumps[0], groupInbound: groupInbound});
         var iv = crypto.getRandomValues(new Uint8Array(12));
         var keyPromise, recoveryKeyHex = null, saltBytes = null;
         if (mode === 'key') {
@@ -1084,11 +1044,10 @@ function e2eCreateBackup(mode, phrase) {
     });
 }
 
-// Khôi phục từ nội dung file backup (chuỗi JSON, xem e2eCreateBackup) + khoá/mật khẩu tương ứng đúng
-// {@code file.mode} -- import thẳng vào storage của THIẾT BỊ NÀY, KHÔNG đụng gì tới identity (giống
-// hệt e2eApplyLinkedHistory của tính năng liên kết thiết bị, chỉ khác nguồn dữ liệu là file thay vì
-// kênh Olm sống). Sai khoá/mật khẩu hoặc file hỏng -- AES-GCM tự phát hiện (authenticated encryption,
-// không chỉ đơn thuần ra rác) -- báo lỗi rõ ràng thay vì import nhầm dữ liệu vô nghĩa.
+// Khôi phục từ nội dung file backup + khoá/mật khẩu tương ứng đúng {@code file.mode} -- import thẳng
+// vào storage của thiết bị này, không đụng gì tới identity (giống e2eApplyLinkedHistory, chỉ khác
+// nguồn dữ liệu là file thay vì kênh Olm sống). Sai khoá/mật khẩu hoặc file hỏng -- AES-GCM tự phát
+// hiện (authenticated encryption) -- báo lỗi rõ ràng thay vì import nhầm dữ liệu vô nghĩa.
 function e2eRestoreBackup(fileContent, secret) {
     var file;
     try { file = JSON.parse(fileContent); } catch (e) { return Promise.reject(new Error('File backup không hợp lệ')); }

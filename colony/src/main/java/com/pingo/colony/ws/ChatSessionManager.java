@@ -265,23 +265,63 @@ public class ChatSessionManager {
       session.send(error(frame.getId(), "missing conversationId"));
       return;
     }
-
-    var outgoing =
-        Frame.newBuilder()
-            .setId(frame.getId())
-            .setType(FrameType.MESSAGE)
-            .setFromUserId(fromUserId.toString())
-            .setConversationId(frame.getConversationId())
-            .setBodyJson(frame.getBodyJson())
-            .setTs(now())
-            .build();
-
-    if (!messageDelivery.deliverLocally(outgoing)) {
-      messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+    var conversationId = UUIDUtils.parseOrDefault(frame.getConversationId());
+    if (conversationId == null) {
+      session.send(error(frame.getId(), "invalid conversationId"));
+      return;
     }
-    persistMessage(frame, outgoing);
-    publishNotificationCandidates(outgoing);
-    session.send(Frame.newBuilder().setId(frame.getId()).setType(FrameType.ACK).setTs(now()).build());
+
+    // Chặn PLAINTEXT lọt vào 1 conversation ĐÃ bật E2E -- lớp phòng vệ cuối, KHÔNG tin tưởng
+    // client tự biết đúng trạng thái e2eEnabled (bug thật đã gặp: client B chưa kịp
+    // refreshConversationList() sau khi client A vừa bật E2E -- e2eEnableConversation chỉ tự
+    // refresh phía người bấm, không báo sống cho thành viên khác -- gửi tin trong đúng khoảng hở
+    // đó bị e2eMaybeEncryptForSend coi nhầm là "chưa bật", gửi thẳng chữ thường lên server). Chỉ
+    // server mới biết CHẮC CHẮN trạng thái e2eEnabled tại đúng thời điểm ghi tin, nên đây là chỗ
+    // DUY NHẤT chặn được triệt để, bất kể client nào/lỗi gì gây ra plaintext.
+    membership
+        .isEncrypted(conversationId)
+        .thenAccept(
+            encrypted -> {
+              if (encrypted && !looksEncrypted(frame.getBodyJson())) {
+                session.send(
+                    error(
+                        frame.getId(),
+                        "conversation đã bật mã hoá đầu cuối, không chấp nhận tin chưa mã hoá -- tải lại trang rồi gửi lại"));
+                return;
+              }
+              var outgoing =
+                  Frame.newBuilder()
+                      .setId(frame.getId())
+                      .setType(FrameType.MESSAGE)
+                      .setFromUserId(fromUserId.toString())
+                      .setConversationId(frame.getConversationId())
+                      .setBodyJson(frame.getBodyJson())
+                      .setTs(now())
+                      .build();
+
+              if (!messageDelivery.deliverLocally(outgoing)) {
+                messageDelivery.forwardToOwningNode(outgoing, routingVersionSync.currentVersion());
+              }
+              persistMessage(frame, outgoing);
+              publishNotificationCandidates(outgoing);
+              session.send(
+                  Frame.newBuilder().setId(frame.getId()).setType(FrameType.ACK).setTs(now()).build());
+            })
+        .exceptionally(
+            ex -> {
+              logDbPoolThrottled("failed to check e2e status for conversation {}", conversationId, ex);
+              session.send(error(frame.getId(), "lỗi kiểm tra trạng thái mã hoá, thử lại sau"));
+              return null;
+            });
+  }
+
+  /** {@code body.e2e === true} -- đúng cờ e2eEncryptOutgoing/e2eEncryptGroupOutgoing luôn gắn. */
+  private static boolean looksEncrypted(String bodyJson) {
+    try {
+      return Boolean.TRUE.equals(new JsonObject(bodyJson).getBoolean("e2e"));
+    } catch (Exception ex) {
+      return false;
+    }
   }
 
   /**
