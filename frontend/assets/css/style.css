@@ -792,6 +792,11 @@
            Hồ sơ (thường mở phía sau nó) để chắc chắn nổi lên trên. */
         #e2eRecoveryKeyOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.6); z-index: 330; display: none; align-items: center; justify-content: center; padding: 20px; }
         #e2eRecoveryKeyOverlay.show { display: flex; }
+        /* Modal "Session mã hoá nhóm vừa đổi" (xem e2eWarnOutboundSessionChanged) -- cùng khuôn
+           #e2eRecoveryKeyOverlay, z-index cao hơn 1 bậc để nổi trên cả modal khoá khôi phục nếu chẳng
+           may mở đồng thời. */
+        #e2eSessionChangedOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.6); z-index: 340; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #e2eSessionChangedOverlay.show { display: flex; }
         .e2eLinkWaitHint { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; padding: 4px 0 14px; }
         .e2eLinkCode { font-family: ui-monospace, monospace; font-size: 28px; font-weight: 800; letter-spacing: .12em; text-align: center; color: var(--ink); background: var(--canvas); border-radius: 12px; padding: 14px; }
         .e2eLinkStatus { text-align: center; font-size: 12.5px; color: var(--ink-faint); padding: 12px 0 4px; }

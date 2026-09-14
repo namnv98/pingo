@@ -1117,10 +1117,11 @@ function enterApp() {
     // nạp/tạo Account Olm + đảm bảo server có sẵn identity key/prekey (xem e2e-crypto.js) -- không
     // chặn phần còn lại, tự bật e2eReady khi xong. Drain to-device (khoá Megolm group gửi lúc mình
     // offline) CHỈ sau khi e2eInit() xong -- cần Account sẵn sàng mới giải mã được gói Olm 1-1 bọc
-    // ngoài (xem e2eHandleToDeviceItem). KHÔNG có bước "chủ động xin lại khoá" nào ở đây (đã bỏ --
-    // xem thảo luận: thiết bị vừa đăng nhập chỉ đọc lại được lịch sử mã hoá qua 2 đường CÓ hành động
-    // rõ ràng của người dùng -- nhập mã liên kết thiết bị, hoặc phục hồi từ file backup -- không tự
-    // động xin/nhận bất cứ gì chỉ vì vừa đăng nhập đúng mật khẩu).
+    // ngoài (xem e2eHandleToDeviceItem). LỊCH SỬ cũ KHÔNG tự xin lại ở đây: thiết bị vừa đăng nhập chỉ
+    // đọc lại được qua 2 đường CÓ hành động rõ ràng của người dùng (nhập mã liên kết thiết bị, hoặc
+    // phục hồi từ file backup). Cơ chế key request (megolm_session_request, xem
+    // e2eRequestMissingGroupSession) chỉ dành cho tin THIẾU KEY RÒ RÌ lúc đang đọc (to-device thất lạc)
+    // và chỉ sender còn ở lại nhóm mới trả lời -- không phải đường "đăng nhập là kéo hết lịch sử".
     e2eInit().then(e2eDrainToDevice);
     connect();
 }

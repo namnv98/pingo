@@ -497,7 +497,11 @@ function e2eRetryFailedMessagesIn(conversationId) {
     pendingIds.forEach(function (messageId) {
         var entry = e2eFailedEnvelopesByMessageId[messageId];
         e2eResolveIncomingBody(entry.fromUserId, entry.body, messageId, entry.conversationId).then(function (resolvedBody) {
-            if (!resolvedBody || !resolvedBody.e2eFailed) handleMessageEdited(conversationId, messageId, resolvedBody);
+            // Vẽ lại khi giải thành công, HOẶC khi sender vừa báo withheld -- nhãn "không khôi phục
+            // được" là trạng thái CUỐI, phải hiện lên bubble thay vì giữ chữ "đang chờ nhận khoá" mãi.
+            if (resolvedBody && (!resolvedBody.e2eFailed || resolvedBody.e2eUnrecoverable)) {
+                handleMessageEdited(conversationId, messageId, resolvedBody);
+            }
         });
     });
 }
@@ -555,12 +559,83 @@ function e2eLoadOutboundGroupSession(conversationId) {
 
 // Cảnh báo bất cứ khi nào sessionId outbound của conversation này ĐỔI so với lần lưu trước -- không
 // chỉ riêng 3 trường hợp đã biết (lần đầu gửi, sau restore, rotate do rời/kick nhóm), để phát hiện cả
-// trường hợp đổi session ngoài dự tính (dấu hiệu bug) thay vì im lặng.
+// trường hợp đổi session ngoài dự tính (dấu hiệu bug) thay vì im lặng. Modal, không toast: thông báo
+// này đòi HÀNH ĐỘNG (tải lại file backup) chứ không chỉ để đọc lướt qua, mà toast thì biến mất sau vài
+// giây trong lúc user đang gõ tin nhắn. Nút "Tạo bản sao lưu ngay" đi thẳng vào luồng có sẵn ở
+// sidebar-conversations.js, không bắt user tự mò menu.
+function ensureE2eSessionChangedModal() {
+    var overlay = document.getElementById('e2eSessionChangedOverlay');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'e2eSessionChangedOverlay';
+    overlay.innerHTML =
+        '<div class="bgPickerModal">' +
+        '<div class="bgPickerHead"><span>Session mã hoá nhóm vừa đổi</span></div>' +
+        '<div class="bgPickerBody">' +
+        '<div class="e2eLinkWaitHint" id="e2eSessionChangedText"></div>' +
+        '<button type="button" class="bgUploadBtn" id="e2eSessionChangedBackupBtn" style="margin-top:12px">Tạo bản sao lưu ngay</button>' +
+        '<button type="button" class="bgUploadBtn" id="e2eSessionChangedLaterBtn" style="margin-top:8px">Để sau</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+    return overlay;
+}
+
+// 1 overlay duy nhất, lần lượt từng cái: đổi session của NHIỀU group cùng lúc (vd vừa khôi phục lịch sử
+// rồi mở lại app, hoặc drain hàng loạt khoá mới lúc online lại) mà hiện chồng N modal lên nhau thì
+// không ai đọc nổi cái nào.
+var e2eSessionChangedQueue = [];
+var e2eSessionChangedShowing = false;
+
+// conversationId -> lý do hiển thị trong modal ('own' = outbound của CHÍNH THIẾT BỊ NÀY đổi, 'peer' =
+// vừa nhận khoá inbound MỚI của người khác) -- 2 câu chữ khác nhau vì hành động giống nhau (backup lại)
+// nhưng người dùng cần hiểu vì sao file của mình bỗng cũ.
+var e2eSessionChangedReasons = {};
+
+// Đánh dấu 1 conversation cần backup lại + bật modal (nếu chưa có gì đang hiện cho nó).
+function e2eWarnBackupStale(conversationId, reason) {
+    if (typeof document === 'undefined') return;
+    e2eSessionChangedReasons[conversationId] = reason;
+    var alreadyQueued = e2eSessionChangedQueue.some(function (item) { return item.conversationId === conversationId; });
+    if (!alreadyQueued && !(e2eSessionChangedShowing && e2eSessionChangedCurrent &&
+            e2eSessionChangedCurrent.conversationId === conversationId)) {
+        e2eSessionChangedQueue.push({conversationId: conversationId});
+    }
+    e2eShowNextSessionChangedWarning();
+}
+
 function e2eWarnOutboundSessionChanged(conversationId) {
-    if (typeof showToast !== 'function') return;
+    e2eWarnBackupStale(conversationId, 'own');
+}
+
+function e2eShowNextSessionChangedWarning() {
+    if (e2eSessionChangedShowing) return;
+    var item = e2eSessionChangedQueue.shift();
+    if (!item) return;
+    var conversationId = item.conversationId;
+    var reason = e2eSessionChangedReasons[conversationId] || 'own';
+    var overlay = ensureE2eSessionChangedModal();
     var conv = (typeof lastConvList !== 'undefined' ? lastConvList : []).filter(function (c) { return c.conversationId === conversationId; })[0];
     var label = conv && typeof conversationLabel === 'function' ? conversationLabel(conv) : conversationId.substring(0, 8) + '…';
-    showToast('⚠ Session mã hoá nhóm "' + label + '" vừa đổi -- nên tải lại file backup mới');
+    overlay.querySelector('#e2eSessionChangedText').innerText = reason === 'peer'
+        ? 'Một thành viên trong "' + label + '" vừa đổi session mã hoá nhóm (có người ra/vào nhóm, hoặc họ khôi phục lịch sử). ' +
+          'Thiết bị này vừa nhận khoá mới -- file sao lưu cũ KHÔNG đọc được các tin gửi từ lúc đổi trở đi, nên tạo bản sao lưu mới ngay khi tiện.'
+        : 'Session mã hoá nhóm của "' + label + '" vừa đổi (nhóm có người ra/vào, hoặc vừa khôi phục lịch sử trên thiết bị này). ' +
+          'File sao lưu cũ KHÔNG đọc được các tin nhóm gửi từ lúc đổi trở đi -- nên tạo bản sao lưu mới ngay khi tiện.';
+    e2eSessionChangedCurrent = item;
+    e2eSessionChangedShowing = true;
+    function close() {
+        overlay.classList.remove('show');
+        e2eSessionChangedShowing = false;
+        delete e2eSessionChangedReasons[conversationId];
+        e2eSessionChangedCurrent = null;
+        e2eShowNextSessionChangedWarning();
+    }
+    overlay.querySelector('#e2eSessionChangedBackupBtn').onclick = function () {
+        close();
+        if (typeof e2eStartCreateBackupFlow === 'function') e2eStartCreateBackupFlow();
+    };
+    overlay.querySelector('#e2eSessionChangedLaterBtn').onclick = close;
+    overlay.classList.add('show');
 }
 
 function e2eSaveOutboundGroupSession(conversationId, session, distributedTo, initialSessionKey) {
@@ -792,13 +867,42 @@ function e2eEncryptGroupOutgoing(conversationId, memberUserIds, plainBody) {
 
 // Giải 1 tin group -- tra đúng inbound session theo (conversationId, fromUserId, sessionId) vì mỗi
 // người gửi có session riêng. Chưa có session (to-device chưa kịp tới, mình vào nhóm sau lúc session
-// được tạo, hoặc thiết bị khác của người gửi mà session_key chưa từng đồng bộ tới) thì báo lỗi rõ ràng
-// thay vì throw làm vỡ pipeline render -- KHÔNG cache (xem e2eResolveIncomingBody) để lần mở lại sau
-// còn tự thử lại nếu khoá đã tới.
+// được tạo, hoặc thiết bị khác của người gửi mà session_key chưa từng đồng bộ tới) thì CHỦ ĐỘNG xin
+// lại key từ người gửi (e2eRequestMissingGroupSession, kiểu m.room_key_request của Matrix) rồi báo
+// "đang chờ" -- KHÔNG cache (xem e2eResolveIncomingBody) để lần mở lại sau còn tự thử lại nếu khoá
+// đã tới. Session nào đã bị sender báo withheld (khoá mất vĩnh viễn) thì trả "không khôi phục được"
+// ngay, không xin lại nữa.
+var e2eKeyRequestTimestamps = {}; // "conv|sender|sessionId" -> ms lần request gần nhất (chống spam)
+var e2eUnrecoverableSessions = {}; // "conv|sender|sessionId" -> true nếu sender đã báo không còn key
+var E2E_KEY_REQUEST_COOLDOWN_MS = 5 * 60 * 1000;
+
+function e2eRequestMissingGroupSession(conversationId, senderUserId, sessionId) {
+    var key = conversationId + '|' + senderUserId + '|' + sessionId;
+    if (e2eUnrecoverableSessions[key]) return;
+    var now = Date.now();
+    if (e2eKeyRequestTimestamps[key] && now - e2eKeyRequestTimestamps[key] < E2E_KEY_REQUEST_COOLDOWN_MS) return;
+    e2eKeyRequestTimestamps[key] = now;
+    // Request để PLAINTEXT (không bọc Olm): sessionId vốn đã lộ trong mọi envelope tin nhắn, và bọc
+    // Olm lúc này có thể deadlock (xin key vì chưa có session mà lại cần session để giải request).
+    fetch(HISTORY_API_BASE + '/e2e/to-device', {
+        method: 'POST',
+        headers: {'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json'},
+        body: JSON.stringify({deliveries: [{recipientUserId: senderUserId, type: 'megolm_session_request', conversationId: conversationId,
+            body: {conversationId: conversationId, sessionId: sessionId}}]})
+    }).catch(function (err) { console.warn('không gửi được key request', err); });
+}
+
 function e2eDecryptGroupIncoming(conversationId, fromUserId, envelope) {
+    var staleKey = conversationId + '|' + fromUserId + '|' + envelope.sessionId;
+    if (e2eUnrecoverableSessions[staleKey]) {
+        return Promise.resolve({message: '🔒 Tin nhắn này không khôi phục được (khoá phiên đã mất)', e2eFailed: true, e2eUnrecoverable: true});
+    }
     return e2eLoadInboundGroupSession(conversationId, fromUserId, envelope.sessionId)
         .then(function (session) {
-            if (!session) throw new Error('chưa nhận được khoá phiên (session key) của người này');
+            if (!session) {
+                e2eRequestMissingGroupSession(conversationId, fromUserId, envelope.sessionId);
+                throw new Error('chưa nhận được khoá phiên (session key) của người này');
+            }
             var result = session.decrypt(envelope.ciphertext);
             return e2eSaveInboundGroupSession(conversationId, fromUserId, envelope.sessionId, session)
                 .then(function () { return JSON.parse(result.plaintext); });
@@ -812,24 +916,73 @@ function e2eDecryptGroupIncoming(conversationId, fromUserId, envelope) {
 // Xử lý 1 tin to-device (dùng chung cho relay sống qua WS -- xem history-ws.js case "E2E_TO_DEVICE" --
 // và drain lúc connect lại, xem e2eDrainToDevice). An toàn khi cùng lúc nhiều thiết bị của cùng 1 user
 // đều nhận được relay/drain của 1 item -- e2eDecryptIncoming tự bỏ qua nếu {@code perDevice} không có
-// phần dành cho thiết bị này. 2 loại: phân phối Megolm session key; hoặc gói chuyển giao lịch sử lúc
-// liên kết thiết bị (xem e2eApproveDeviceLink/e2eHandleDeviceLinkPayload bên dưới) -- KHÔNG có đường
-// tự động nào khác: chỉ 2 đường CÓ hành động rõ ràng của người dùng (nhập mã liên kết thiết bị, hoặc
-// phục hồi từ file backup) mới được cấp quyền đọc lại lịch sử.
+// phần dành cho thiết bị này. 4 loại: phân phối Megolm session key; XIN LẠI key bị thiếu
+// (megolm_session_request) + trả lời (megolm_session / megolm_session_withheld); hoặc gói chuyển giao
+// lịch sử lúc liên kết thiết bị (xem e2eApproveDeviceLink/e2eHandleDeviceLinkPayload bên dưới) --
+// KHÔNG có đường tự động nào khác: chỉ 2 đường CÓ hành động rõ ràng của người dùng (nhập mã liên kết
+// thiết bị, hoặc phục hồi từ file backup) mới được cấp quyền đọc lại lịch sử.
 function e2eHandleToDeviceItem(type, senderUserId, conversationId, olmEnvelope) {
     if (type === 'device_link_payload') return e2eHandleDeviceLinkPayload(olmEnvelope);
+    if (type === 'megolm_session_request') return e2eHandleKeyRequest(senderUserId, olmEnvelope);
+    if (type === 'megolm_session_withheld') return e2eHandleKeyWithheld(senderUserId, olmEnvelope);
     if (type !== 'megolm_session' || !olmEnvelope) return Promise.resolve();
     return e2eDecryptIncoming(senderUserId, olmEnvelope).then(function (payload) {
         if (!payload || payload.e2eFailed || !payload.sessionKey || !payload.sessionId) return;
         var session = new Olm.InboundGroupSession();
         session.create(payload.sessionKey);
         var resolvedConversationId = payload.conversationId || conversationId;
-        return e2eSaveInboundGroupSession(resolvedConversationId, senderUserId, payload.sessionId, session).then(function () {
-            // Khoá vừa lưu xong -- màn hình (nếu đang mở đúng conversation này) có thể đang giữ vài
-            // bubble cũ kẹt ở nhãn lỗi từ trước lúc khoá tới, tự thử lại ngay thay vì đợi F5.
-            e2eRetryFailedMessagesIn(resolvedConversationId);
+        // BÁO STALE CHO BÊN NHẬN: inbound của mình vừa có thêm 1 sessionId mới của người này --
+        // backup lạnh cục bộ (msgPlaintext + groupInbound) không còn đủ đọc tương lai nếu lỡ mất máy,
+        // vì entry mới này chưa có trong file nào cả. Check trước khi lưu: entry ĐÃ tồn tại (gửi lại
+        // key cũ do retry mạng) thì không ồn, chỉ báo khi đúng là sessionId mới.
+        return e2eLoadInboundGroupSession(resolvedConversationId, senderUserId, payload.sessionId).then(function (already) {
+            var isNew = !already;
+            return e2eSaveInboundGroupSession(resolvedConversationId, senderUserId, payload.sessionId, session).then(function () {
+                if (isNew) e2eWarnBackupStale(resolvedConversationId, 'peer');
+                // Khoá vừa lưu xong -- màn hình (nếu đang mở đúng conversation này) có thể đang giữ vài
+                // bubble cũ kẹt ở nhãn lỗi từ trước lúc khoá tới, tự thử lại ngay thay vì đợi F5.
+                e2eRetryFailedMessagesIn(resolvedConversationId);
+            });
         });
     });
+}
+
+// Nhận yêu cầu xin lại key (megolm_session_request {conversationId, sessionId}, plaintext -- xem
+// e2eRequestMissingGroupSession) từ 1 thành viên đang kẹt tin. Chỉ trả lời khi requester VẪN CÒN
+// trong nhóm (giữ backward secrecy: đã rời/kick thì không được đọc, kể cả tin cũ) -- check qua
+// lastConvList đã refresh gần nhất. Trả initialSessionKey của đúng session được hỏi nếu còn giữ
+// (đọc lại được toàn bộ lịch sử của session đó); không còn thì trả megolm_session_withheld để bên
+// kia báo "không khôi phục được" thay vì treo "đang chờ" vô hạn.
+function e2eHandleKeyRequest(requesterUserId, body) {
+    if (!body || !body.conversationId || !body.sessionId || !e2eReady) return Promise.resolve();
+    var conversationId = body.conversationId, sessionId = body.sessionId;
+    var conv = (typeof lastConvList !== 'undefined' ? lastConvList : []).filter(function (c) { return c.conversationId === conversationId; })[0];
+    if (!conv || !conv.e2eEnabled || conv.memberUserIds.indexOf(requesterUserId) === -1) return Promise.resolve();
+    return e2eLoadOutboundGroupSession(conversationId).then(function (existing) {
+        var type, payload;
+        if (existing && existing.session.session_id() === sessionId && existing.initialSessionKey) {
+            type = 'megolm_session';
+            payload = {conversationId: conversationId, sessionId: sessionId, sessionKey: existing.initialSessionKey};
+        } else {
+            type = 'megolm_session_withheld';
+            payload = {conversationId: conversationId, sessionId: sessionId};
+        }
+        return fetch(HISTORY_API_BASE + '/e2e/to-device', {
+            method: 'POST',
+            headers: {'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json'},
+            body: JSON.stringify({deliveries: [{recipientUserId: requesterUserId, type: type, conversationId: conversationId, body: payload}]})
+        }).catch(function (err) { console.warn('không trả lời được key request', err); });
+    });
+}
+
+// Nhận megolm_session_withheld: key của session này đã mất vĩnh viễn phía sender -- đánh dấu để
+// e2eDecryptGroupIncoming trả "không khôi phục được" ngay (không xin lại nữa), và vẽ lại các bubble
+// đang kẹt ở nhãn "đang chờ" qua handleMessageEdited (cùng đường e2eRetryFailedMessagesIn dùng).
+function e2eHandleKeyWithheld(senderUserId, body) {
+    if (!body || !body.conversationId || !body.sessionId) return Promise.resolve();
+    e2eUnrecoverableSessions[body.conversationId + '|' + senderUserId + '|' + body.sessionId] = true;
+    e2eRetryFailedMessagesIn(body.conversationId);
+    return Promise.resolve();
 }
 
 // Bù các tin to-device gửi lúc mình offline (relay sống qua WS lúc đó không tới đâu được) -- gọi 1 lần
