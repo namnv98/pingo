@@ -945,10 +945,15 @@ public class HallApiHandlers {
   /**
    * {@code GET /mls/key-packages?userId=<uuid>&limit=N} — claim (dùng 1 lần, xoá luôn) tối đa N
    * KeyPackage của user đích, chia round-robin theo thiết bị (xem {@link MlsRegistry#claimKeyPackages}).
-   * Dùng lúc thêm thành viên vào nhóm MLS: mỗi người được add CẦN ĐÚNG 1 keypackage (thiết bị nào
-   * đại diện không quan trọng — MLS group ciphertext mọi client trong group cùng giải được, khác
-   * hẳn fan-out per-device của Olm cũ). Mảng rỗng = user đó chưa bật MLS ở bất kỳ thiết bị nào
-   * (không phải 404 — cùng tinh thần GET /e2e/keys/bundle cũ).
+   * {@code GET /mls/key-packages?userId=<uuid>&allDevices=true} — claim ĐÚNG 1 KeyPackage của MỖI
+   * thiết bị user đích đang có (xem {@link MlsRegistry#claimKeyPackagesAllDevices}), bỏ qua {@code
+   * limit}. Dùng khi ADD 1 user vào group MLS: MỖI thiết bị của họ phải là 1 leaf riêng trong cây để
+   * TẤT CẢ thiết bị đều đọc được tin nhóm (khác {@code limit=1} cũ, chỉ chọn đại diện 1 thiết bị bất
+   * kỳ — đủ cho Olm nơi mọi thiết bị cùng group giải được chung 1 ciphertext, nhưng SAI với MLS nơi
+   * 1 leaf = đúng 1 thiết bị: thiết bị không được add sẽ kẹt vĩnh viễn ở "chưa tham gia nhóm", kể cả
+   * khi đó mới là thiết bị người dùng đang thật sự ngồi dùng — bug thật đã gặp). Mảng rỗng (cả 2
+   * kiểu) = user đó chưa bật MLS ở bất kỳ thiết bị nào (không phải 404 — cùng tinh thần GET
+   * /e2e/keys/bundle cũ).
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "mls/key-packages", type = Type.HTTP)})
   public CompletionStage<byte[]> claimMlsKeyPackages(IRequest request) {
@@ -958,6 +963,10 @@ public class HallApiHandlers {
       targetUserId = UUID.fromString(request.getParam("userId"));
     } catch (IllegalArgumentException | NullPointerException e) {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
+    }
+    if ("true".equalsIgnoreCase(request.getParam("allDevices"))) {
+      return mls.claimKeyPackagesAllDevices(targetUserId)
+          .thenApply(kps -> bytes(new JsonObject().put("keyPackages", kps)));
     }
     int limit = 1;
     var rawLimit = request.getParam("limit");
@@ -990,6 +999,86 @@ public class HallApiHandlers {
         .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
   }
 
+  /**
+   * {@code PUT /mls/group-info?conversationId=<uuid>} — body {@code {groupInfo: "<base64 wire>",
+   * expectedEpoch: <long>, newEpoch: <long>}}. Ghi đè GroupInfo công khai MỚI NHẤT của group (RFC
+   * 9420 "External Commit", xem {@link MlsRegistry#upsertGroupInfo}) bằng compare-and-swap theo
+   * epoch -- CHỐNG SPLIT-BRAIN thật đã gặp (2 actor cùng tạo commit từ 1 epoch cũ, ai ghi sau thắng
+   * im lặng kiểu last-write-wins cũ -> nhóm rẽ nhánh, giải mã lỗi CryptoError về sau không rõ
+   * nguyên nhân). CHỈ THÀNH VIÊN của đúng conversation này mới publish được. Trả {@code {ok: true}}
+   * nếu thắng; {@code {ok: false, groupInfo, epoch}} (GroupInfo/epoch HIỆN TẠI trên server) nếu
+   * THUA -- caller (frontend) phải bỏ hẳn commit vừa tạo, không lưu/deliver, rồi thử lại từ
+   * GroupInfo trả kèm ở đây (khỏi phải GET riêng 1 lần nữa).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "mls/group-info", type = Type.HTTP)})
+  public CompletionStage<byte[]> putMlsGroupInfo(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var body = parseJsonBody(request);
+    var groupInfo = body.getString("groupInfo");
+    if (groupInfo == null || groupInfo.isBlank()) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing groupInfo");
+    }
+    Long expectedEpoch = body.getLong("expectedEpoch");
+    Long newEpoch = body.getLong("newEpoch");
+    if (expectedEpoch == null || newEpoch == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing expectedEpoch/newEpoch");
+    }
+    var finalConversationId = conversationId;
+    return membership.isMember(finalConversationId, userId)
+        .thenCompose(isMember -> {
+          if (!Boolean.TRUE.equals(isMember)) {
+            throw new LegoBusinessException(HallErrorKeys.VALIDATION, "not a member of this conversation");
+          }
+          return mls.upsertGroupInfo(finalConversationId, groupInfo, expectedEpoch, newEpoch);
+        })
+        .thenCompose(won -> {
+          if (Boolean.TRUE.equals(won)) {
+            return CompletableFuture.completedFuture(bytes(new JsonObject().put("ok", true)));
+          }
+          return mls.getGroupInfo(finalConversationId)
+              .thenApply(current -> bytes(new JsonObject().put("ok", false)
+                  .put("groupInfo", current == null ? null : current.getString("groupInfo"))
+                  .put("epoch", current == null ? null : current.getLong("epoch"))));
+        });
+  }
+
+  /**
+   * {@code GET /mls/group-info?conversationId=<uuid>} — GroupInfo công khai hiện có của group + epoch
+   * của nó, để 1 THÀNH VIÊN (đã có trong {@code conversation_members}) nhưng CHƯA TỪNG join được
+   * group MLS (chưa ai online add hộ qua Welcome) TỰ MÌNH join ngay bằng External Commit -- xem
+   * frontend's e2eTryExternalJoin. {@code {groupInfo: null, epoch: null}} nếu chưa từng có ai
+   * publish (group thật sự chưa tồn tại) -- KHÔNG phải lỗi, caller hiểu là "vẫn phải chờ". CHỈ
+   * thành viên của đúng conversation này mới đọc được (tránh lộ danh sách thành viên + public key
+   * của họ cho người ngoài).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "mls/group-info", type = Type.HTTP)})
+  public CompletionStage<byte[]> getMlsGroupInfo(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    UUID conversationId;
+    try {
+      conversationId = UUID.fromString(request.getParam("conversationId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid conversationId");
+    }
+    var finalConversationId = conversationId;
+    return membership.isMember(finalConversationId, userId)
+        .thenCompose(isMember -> {
+          if (!Boolean.TRUE.equals(isMember)) {
+            throw new LegoBusinessException(HallErrorKeys.VALIDATION, "not a member of this conversation");
+          }
+          return mls.getGroupInfo(finalConversationId);
+        })
+        .thenApply(current -> bytes(current == null
+            ? new JsonObject().put("groupInfo", (String) null).put("epoch", (Long) null)
+            : new JsonObject().put("groupInfo", current.getString("groupInfo")).put("epoch", current.getLong("epoch"))));
+  }
+
 
   /**
    * {@code PUT /conversations/e2e?conversationId=<uuid>} — bật mã hoá đầu cuối cho 1 conversation.
@@ -997,7 +1086,8 @@ public class HallApiHandlers {
    * CHỈ MỘT CHIỀU bật, gọi lại nhiều lần vô hại (idempotent), KHÔNG có endpoint tắt lại (xem
    * {@code ConversationMembershipRegistry#setEncrypted}). Không broadcast EventBus riêng gì --
    * client tự phát hiện qua {@code e2eEnabled} ở lần {@code GET /conversations} kế tiếp (đủ nhanh,
-   * bật mã hoá không phải hành động cần phản ứng tức thời như tin nhắn/kick).
+   * bật mã hoá không phải hành động cần phản ứng tức thời như tin nhắn/kick). {@code userId} (chính
+   * người gọi endpoint này) được lưu làm {@code e2e_enabled_by} -- xem javadoc setEncrypted.
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "conversations/e2e", type = Type.HTTP)})
   public CompletionStage<byte[]> setConversationEncrypted(IRequest request) {
@@ -1010,7 +1100,7 @@ public class HallApiHandlers {
     }
     var finalConversationId = conversationId;
     return requireGroupOwner(finalConversationId, userId)
-        .thenCompose(unused -> membership.setEncrypted(finalConversationId))
+        .thenCompose(unused -> membership.setEncrypted(finalConversationId, userId))
         .thenApply(unused -> bytes(new JsonObject().put("conversationId", finalConversationId.toString()).put("e2eEnabled", true)));
   }
 

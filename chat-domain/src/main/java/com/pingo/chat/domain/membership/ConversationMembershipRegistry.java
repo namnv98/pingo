@@ -251,11 +251,26 @@ public class ConversationMembershipRegistry {
      * Bật mã hoá đầu cuối cho 1 conversation -- CHỈ MỘT CHIỀU bật, không có {@code disable} (tránh
      * lịch sử "nửa mã hoá nửa không" gây hiểu lầm, xem {@code HallApiHandlers#setConversationEncrypted}).
      * Idempotent ({@code SET e2e_enabled = true}, gọi lại nhiều lần vô hại).
+     *
+     * <p>{@code actorUserId} = người GỌI endpoint này (chắc chắn đang online lúc đó) -- lưu vào
+     * {@code e2e_enabled_by}, dùng làm "creator" của group MLS phía client (xem
+     * {@code e2eCheckGroupRotations} trong mls-crypto.js). CHỈ ghi ở LẦN CHUYỂN false->true ĐẦU TIÊN
+     * (mệnh đề {@code WHERE e2e_enabled = false} trên nhánh UPDATE, cộng {@code COALESCE} phòng race 2
+     * request UPSERT đụng nhau đúng lúc conversation vừa được tạo) -- các lần gọi lại sau (idempotent,
+     * do UI vẫn có thể bấm lại hoặc client khác đồng thời bấm) KHÔNG được đổi actor đã ghi, tránh
+     * "creator" nhảy lung tung theo request nào tới sau cùng. Trước đây KHÔNG lưu actor, client tự
+     * suy creator = member có userId nhỏ nhất -- bug thật đã gặp: nếu đúng người đó chưa từng mở app
+     * (không có phiên nào chạy proactive-create), KHÔNG AI tạo được group, cả conversation kẹt vĩnh
+     * viễn ở "đang chờ thiết lập nhóm mã hoá". Người BẤM NÚT luôn có 1 phiên đang mở ngay lúc đó nên
+     * không rơi vào tình huống này.
      */
-    public CompletionStage<Void> setEncrypted(UUID conversationId) {
+    public CompletionStage<Void> setEncrypted(UUID conversationId, UUID actorUserId) {
         return supplier.execute(conn -> conn.preparedQuery(
-                "INSERT INTO conversations (id, e2e_enabled) VALUES (?, true) ON CONFLICT (id) DO UPDATE SET e2e_enabled = true")
-            .execute(Tuple.of(conversationId))
+                "INSERT INTO conversations (id, e2e_enabled, e2e_enabled_by) VALUES (?, true, ?) "
+                    + "ON CONFLICT (id) DO UPDATE SET "
+                    + "  e2e_enabled = true, "
+                    + "  e2e_enabled_by = COALESCE(conversations.e2e_enabled_by, EXCLUDED.e2e_enabled_by)")
+            .execute(Tuple.of(conversationId, actorUserId))
             .toCompletionStage()
             .thenApply(unused -> null));
     }
@@ -316,6 +331,8 @@ public class ConversationMembershipRegistry {
                     + "    (SELECT c.name FROM conversations c WHERE c.id = cm.conversation_id) AS conv_name, "
                     + "    (SELECT c.avatar_file_id FROM conversations c WHERE c.id = cm.conversation_id) AS conv_avatar_file_id, "
                     + "    (SELECT c.e2e_enabled FROM conversations c WHERE c.id = cm.conversation_id) AS conv_e2e_enabled, "
+                    // Xem javadoc setEncrypted -- client dùng để xác định AI được chủ động tạo group MLS.
+                    + "    (SELECT c.e2e_enabled_by FROM conversations c WHERE c.id = cm.conversation_id) AS conv_e2e_enabled_by, "
                     // Trạng thái mute CỦA RIÊNG userId đang gọi -- không phải cột chung của cm
                     // (mỗi member có thể mute độc lập), nên phải tra lại theo đúng userId qua
                     // scalar subquery, giống hệt cách unread_count đã đọc conversation_reads ở trên.
@@ -351,6 +368,7 @@ public class ConversationMembershipRegistry {
                     var lastMessageBodyText = row.getString("last_message_body");
                     var lastMessageFromUserId = row.getUUID("last_message_from_user_id");
                     var avatarFileId = row.getUUID("conv_avatar_file_id");
+                    var e2eEnabledBy = row.getUUID("conv_e2e_enabled_by");
                     // Tin cuối là ciphertext (body có {"e2e":true,...}, xem MessageHistoryRegistry) thì
                     // KHÔNG trả nội dung thô ra sidebar -- client không có khoá để đọc, hiện placeholder
                     // "🔒 Tin nhắn đã mã hoá" thay vì cố parse .message ra rác/undefined.
@@ -372,6 +390,7 @@ public class ConversationMembershipRegistry {
                             .put("name", row.getString("conv_name"))
                             .put("avatarFileId", avatarFileId == null ? null : avatarFileId.toString())
                             .put("e2eEnabled", Boolean.TRUE.equals(row.getBoolean("conv_e2e_enabled")))
+                            .put("e2eEnabledBy", e2eEnabledBy == null ? null : e2eEnabledBy.toString())
                             .put("lastMessageAt", lastMessageAt == null ? null : lastMessageAt.toInstant().toEpochMilli())
                             .put("lastMessageFromUserId", lastMessageFromUserId == null ? null : lastMessageFromUserId.toString())
                             .put("lastMessageDeleted", lastMessageDeleted)

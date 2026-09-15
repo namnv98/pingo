@@ -121,19 +121,46 @@ function e2eGuessDeviceLabel() {
 }
 
 // ===== credential / groupId helpers =====
-function e2eCredential() { return { credentialType: 'basic', identity: new TextEncoder().encode(MLS_CRED_PREFIX + myUserId) }; }
+// Credential mang CẢ deviceId (không chỉ userId) -- 1 group member MLS = ĐÚNG 1 leaf = ĐÚNG 1 thiết
+// bị (khác Olm cũ: mọi thiết bị cùng group giải chung được 1 ciphertext, nên "user" là đơn vị add
+// đủ dùng). Với MLS, add 1 user KHÔNG tự động khiến MỌI thiết bị của họ đọc được -- phải add riêng
+// từng thiết bị thành từng leaf (xem e2eDrainAddCommits/e2eCommitAddMany) -- bug thật đã gặp: add
+// đại diện 1 thiết bị bất kỳ khiến các thiết bị khác của CHÍNH người đó (kể cả thiết bị họ đang thật
+// sự dùng) kẹt vĩnh viễn ở "chưa tham gia nhóm", không có cách nào tự phục hồi.
+var MLS_CRED_DEVICE_SEP = '@';
+function e2eCredential() { return { credentialType: 'basic', identity: new TextEncoder().encode(MLS_CRED_PREFIX + myUserId + MLS_CRED_DEVICE_SEP + e2eDeviceId) }; }
 function e2eGroupId(conversationId) { return new TextEncoder().encode(MLS_PSEUDO_GROUPID_PREFIX + conversationId); }
 function e2eLeafIdentity(node) { try { return new TextDecoder().decode(node.leaf.credential.identity); } catch (e) { return ''; } }
-function e2eLeafUserId(node) { var id = e2eLeafIdentity(node); return id.indexOf(MLS_CRED_PREFIX) === 0 ? id.slice(MLS_CRED_PREFIX.length) : null; }
+// Tách userId khỏi phần "@<deviceId>" -- tương thích ngược với credential CŨ (trước khi thêm
+// deviceId) không có dấu '@', coi nguyên phần còn lại là userId.
+function e2eLeafUserId(node) {
+    var id = e2eLeafIdentity(node);
+    if (id.indexOf(MLS_CRED_PREFIX) !== 0) return null;
+    var rest = id.slice(MLS_CRED_PREFIX.length);
+    var sep = rest.indexOf(MLS_CRED_DEVICE_SEP);
+    return sep === -1 ? rest : rest.slice(0, sep);
+}
+function e2eLeafDeviceId(node) {
+    var id = e2eLeafIdentity(node);
+    var sep = id.indexOf(MLS_CRED_DEVICE_SEP);
+    return sep === -1 ? null : id.slice(sep + 1);
+}
 // LeafIndex thật của node leaf ở vị trí k = 2k ( RFC tree: leaves ở node index chẵn). ts-mls dùng LeafIndex
 // = vị trí lá ĐẾM THEO THỨ TỰ (0,1,2...), xem spike: remove dùng leafIdx đếm trên leaves-filtered đúng.
 function e2eLeafNodes(state) { return (state.ratchetTree || []).map(function (n, idx) { return { n: n, idx: idx }; }).filter(function (x) { return x.n && x.n.nodeType === 'leaf'; }); }
-function e2eLeafIndexOf(state, targetUserId) {
+// TẤT CẢ leafIndex thuộc về targetUserId -- 1 user có thể có NHIỀU leaf (nhiều thiết bị), khác bản
+// trước (e2eLeafIndexOf số ít) chỉ trả 1 -- dùng khi remove: phải loại HẾT thiết bị của người bị kick,
+// không chỉ đúng 1 thiết bị đại diện.
+function e2eLeafIndexesOf(state, targetUserId) {
     var leaves = e2eLeafNodes(state);
-    for (var i = 0; i < leaves.length; i++) { if (e2eLeafUserId(leaves[i].n) === targetUserId) return i; }
-    return -1;
+    var out = [];
+    for (var i = 0; i < leaves.length; i++) { if (e2eLeafUserId(leaves[i].n) === targetUserId) out.push(i); }
+    return out;
 }
 function e2eMemberUserIds(state) { return e2eLeafNodes(state).map(function (x) { return e2eLeafUserId(x.n); }).filter(function (id) { return id; }); }
+// e2eMemberUserIds nhưng KHỬ TRÙNG -- dùng ở chỗ chỉ cần biết "những USER nào" đang trong group
+// (không quan tâm 1 user có mấy leaf/thiết bị), ví dụ tính danh sách nhận 1 Commit chung.
+function e2eMemberUserIdSet(state) { return Array.from(new Set(e2eMemberUserIds(state))); }
 
 // ===== KeyPackage: local queue + publish + consume =====
 function e2eKpKey() { return myUserId + '|' + e2eDeviceId; }
@@ -178,22 +205,51 @@ function e2ePublishKeyPackages(pubB64List) {
     }).then(function (res) { if (!res.ok) throw new Error('upload keypackages HTTP ' + res.status); });
 }
 
+// Số KeyPackage server ĐANG THỰC SỰ giữ cho thiết bị này -- dùng để phát hiện lệch (server mất dữ
+// liệu do restore/migrate DB, hoặc 1 lần publish trước đó lỗi giữa chừng mà không ai để ý).
+function e2eFetchServerKeyPackageCount() {
+    return fetch(HISTORY_API_BASE + '/mls/key-package-count?deviceId=' + encodeURIComponent(e2eDeviceId), {
+        headers: { 'Authorization': 'Bearer ' + authToken }
+    }).then(function (res) { if (!res.ok) throw new Error('key-package-count HTTP ' + res.status); return res.json(); })
+        .then(function (data) { return data.count || 0; });
+}
+
 // Top-up: nếu queue local (chưa dùng) còn ít hơn ngưỡng, sinh thêm + publish. Queue local giữ CẢ private,
 // server chỉ giữ public để người khác claim. 1 keypackage chỉ dùng 1 lần (claim = xoá server-side).
+// LUÔN đối chiếu với server count trước (bug thật đã gặp: queue local vẫn còn nhiều nhưng server đã
+// mất hết bản public tương ứng -- vd restore/migrate DB -- client cứ đinh ninh "đủ rồi" và không bao
+// giờ publish lại, khiến KHÔNG AI add được mình vào group MLS mới, kẹt vĩnh viễn ở "đang chờ thiết lập
+// nhóm mã hoá" mà không có lỗi rõ ràng nào). Server thiếu so với queue cục bộ -> publish lại NGUYÊN
+// các key đang có (không sinh mới, PUT là idempotent) để đồng bộ lại, trước khi xét có cần top-up thêm
+// key mới hay không.
 function e2eMaybeTopUpKeyPackages() {
     return e2eLoadKpQueue().then(function (queue) {
-        if (queue.length >= MLS_KEYPACKAGE_LOW_WATERMARK) return null;
-        return e2eGenerateKeyPackages(MLS_KEYPACKAGE_TOP_UP).then(function (fresh) {
-            e2eSaveKpQueue(queue.concat(fresh));
-            return e2ePublishKeyPackages(fresh.map(function (f) { return f.pubB64; }));
+        return e2eFetchServerKeyPackageCount().catch(function (err) {
+            // Không lấy được count (mạng lỗi...) -- coi như "chưa rõ", KHÔNG chặn hẳn init vì 1 lần gọi lỗi,
+            // giả định server vẫn khớp local để giữ hành vi cũ (chỉ theo watermark local) làm fallback.
+            console.warn('[e2e-mls] không lấy được server key-package count, fallback theo local', err);
+            return queue.length;
+        }).then(function (serverCount) {
+            var resync = queue.length > 0 && serverCount < queue.length
+                ? e2ePublishKeyPackages(queue.map(function (q) { return q.pubB64; }))
+                : Promise.resolve();
+            if (queue.length >= MLS_KEYPACKAGE_LOW_WATERMARK) return resync;
+            return resync.then(function () {
+                return e2eGenerateKeyPackages(MLS_KEYPACKAGE_TOP_UP).then(function (fresh) {
+                    return e2eSaveKpQueue(queue.concat(fresh)).then(function () {
+                        return e2ePublishKeyPackages(fresh.map(function (f) { return f.pubB64; }));
+                    });
+                });
+            });
         });
     });
 }
 
-// Lấy KeyPackage CÔNG KHAI của user đích để add vào group (server claim + xoá dùng 1 lần). Không cần
-// private của họ (đương nhiên) — chỉ cần pub để nhét vào Add proposal.
-function e2eClaimKeyPackagesFor(userId, limit) {
-    return fetch(HISTORY_API_BASE + '/mls/key-packages?userId=' + encodeURIComponent(userId) + '&limit=' + encodeURIComponent(limit), {
+// Claim ĐÚNG 1 KeyPackage của MỖI thiết bị userId đang có (không phải 1 cái đại diện) -- dùng khi
+// ADD 1 user vào group MLS, xem javadoc e2eCredential. Trả mảng {keyPackage, deviceId}, 1 phần tử/
+// thiết bị -- caller tự add từng cái thành 1 leaf riêng.
+function e2eClaimAllDeviceKeyPackagesFor(userId) {
+    return fetch(HISTORY_API_BASE + '/mls/key-packages?userId=' + encodeURIComponent(userId) + '&allDevices=true', {
         headers: { 'Authorization': 'Bearer ' + authToken }
     }).then(function (res) { if (!res.ok) throw new Error('claim keypackages HTTP ' + res.status); return res.json(); })
         .then(function (data) { return data.keyPackages || []; });
@@ -218,6 +274,137 @@ function e2eLoadGroup(conversationId) {
 }
 function e2eSaveGroup(conversationId, state) {
     return e2eDbPut('groups', e2eGroupKey(conversationId), { stateB64: e2eB64(M.encodeGroupState(state)) });
+}
+
+// ===== GroupInfo công khai (RFC 9420 "External Commit") =====
+// Cho phép 1 THÀNH VIÊN đã có trong conversation (DB) nhưng CHƯA TỪNG join được group MLS (chưa ai
+// online add hộ qua Welcome -- ví dụ họ chỉ vừa đăng nhập lần đầu) TỰ MÌNH join ngay, KHÔNG PHỤ
+// THUỘC có ai khác đang online hay không -- bug thật đã gặp: trước đây member mới CHỈ có 1 con
+// đường DUY NHẤT vào nhóm là được người khác (đã có group cục bộ) chủ động add hộ; nếu không ai
+// online/chủ động làm gì, người mới kẹt vĩnh viễn dù đã là thành viên hợp lệ. GroupInfo là opaque
+// blob (server không đọc được nội dung, giống KeyPackage) chứa ratchet_tree + "external_pub" --
+// BẤT KỲ AI publish lại lên server mỗi lần epoch đổi (tạo nhóm/add/remove/nhận commit VÀ khi TỰ
+// external-join), best-effort (publish lỗi không chặn luồng chính, chỉ khiến external-join tạm
+// dùng epoch cũ hơn 1 chút -- ts-mls tự xử lý epoch qua Commit bình thường).
+// Publish "best-effort" (KHÔNG cần biết ai thắng/thua) -- dùng cho e2eHandleCommit (đang ÁP DỤNG lại
+// 1 commit ĐÃ ĐÚNG/đã được server chấp nhận từ nơi khác, không phải mình tự tạo commit) -- server có
+// từ chối (đã có epoch mới hơn publish trước) cũng không sao, state cục bộ của mình vẫn đúng.
+function e2ePublishGroupInfoBestEffort(conversationId, expectedEpoch, state) {
+    return e2ePublishGroupInfo(conversationId, expectedEpoch, state).catch(function (err) {
+        console.warn('[e2e-mls] publish group info lỗi (không chặn)', err);
+    });
+}
+// CAS (compare-and-swap) theo epoch -- xem javadoc bảng mls_group_info/HallApiHandlers#putMlsGroupInfo.
+// {@code expectedEpoch} = epoch TRƯỚC commit vừa tạo (state cũ mình dựa vào). Trả
+// {won:true} nếu server chấp nhận, {won:false, groupInfoB64, epoch} (GroupInfo/epoch HIỆN TẠI trên
+// server) nếu THUA -- caller PHẢI bỏ hẳn commit/state vừa tạo khi thua, không lưu/deliver.
+function e2ePublishGroupInfo(conversationId, expectedEpoch, state) {
+    return M.createGroupInfoWithExternalPubAndRatchetTree(state, [], e2eImpl).then(function (gi) {
+        var b64 = e2eB64(M.encodeMlsMessage({ groupInfo: gi, wireformat: 'mls_group_info', version: 'mls10' }));
+        var newEpoch = Number(state.groupContext.epoch);
+        return fetch(HISTORY_API_BASE + '/mls/group-info?conversationId=' + encodeURIComponent(conversationId), {
+            method: 'PUT', headers: { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ groupInfo: b64, expectedEpoch: expectedEpoch, newEpoch: newEpoch })
+        }).then(function (res) {
+            if (!res.ok) throw new Error('publish group info HTTP ' + res.status);
+            return res.json();
+        }).then(function (data) {
+            if (data.ok) return { won: true };
+            return { won: false, groupInfoB64: data.groupInfo || null, epoch: data.epoch };
+        });
+    });
+}
+function e2eFetchGroupInfo(conversationId) {
+    return fetch(HISTORY_API_BASE + '/mls/group-info?conversationId=' + encodeURIComponent(conversationId), {
+        headers: { 'Authorization': 'Bearer ' + authToken }
+    }).then(function (res) { if (!res.ok) throw new Error('fetch group info HTTP ' + res.status); return res.json(); })
+        .then(function (data) { return { groupInfoB64: data.groupInfo || null, epoch: data.epoch }; });
+}
+
+// TỰ join group bằng GroupInfo công khai (External Commit) -- KHÔNG cần ai add hộ. Dùng khi mình LÀ
+// thành viên conversation (server xác nhận qua GET /mls/group-info) nhưng chưa có group cục bộ nào
+// (chưa từng nhận Welcome). Trả state MỚI nếu thành công, null nếu group thật sự chưa từng tồn tại
+// (chưa ai publish GroupInfo -- lúc đó vẫn đúng là phải chờ creator tạo nhóm lần đầu).
+//
+// KHOÁ 1-LẦN-1-LÚC theo conversationId -- bug thật đã gặp: gửi (hoặc retry) nhiều tin liên tiếp
+// NGAY SAU lúc login lần đầu, trước khi lần external-join ĐẦU TIÊN kịp lưu xong group cục bộ
+// (bất đồng bộ), mỗi lần gửi đều thấy "chưa có group" và TỰ TẠO THÊM 1 EXTERNAL COMMIT RIÊNG --
+// nhiều external commit cùng dựa trên 1 epoch GroupInfo CŨ (chưa ai kịp thấy epoch mới) tạo ra
+// NHIỀU LEAF XUNG ĐỘT cho CÙNG 1 người, phía nhận giải mã sai ("Không giải mã được tin nhắn MLS").
+// Lần gọi sau khi ĐÃ có 1 lần đang chạy dùng LẠI đúng promise đó thay vì tự join thêm lần nữa.
+var e2eExternalJoinInFlight = {};
+function e2eTryExternalJoin(conversationId) {
+    if (e2eExternalJoinInFlight[conversationId]) return e2eExternalJoinInFlight[conversationId];
+    var clear = function () { delete e2eExternalJoinInFlight[conversationId]; };
+    var p = e2eDoTryExternalJoin(conversationId);
+    p.then(clear, clear);
+    e2eExternalJoinInFlight[conversationId] = p;
+    return p;
+}
+function e2eDoTryExternalJoin(conversationId) {
+    return e2eLoadGroup(conversationId).then(function (state) {
+        if (state) return state; // race: vừa nhận Welcome/join xong ở nơi khác trong lúc đang xử lý
+        return e2eFetchGroupInfo(conversationId).then(function (gi) {
+            if (!gi.groupInfoB64) return null; // group thật sự chưa từng tồn tại -- không có gì để tự join vào
+            return e2eExternalJoinAttempt(conversationId, gi, 1);
+        });
+    });
+}
+
+// Thử tự join bằng ĐÚNG 1 GroupInfo/epoch cụ thể -- CAS lúc publish (xem javadoc bảng
+// mls_group_info) có thể THUA nếu ai đó (vd creator đang add member khác) thắng epoch này trước
+// đúng lúc mình đang xử lý. KHÁC e2eCreateCommitAndDistribute/e2eCommitRemove (người thua ở đó vẫn
+// là member CŨ, tự bắt kịp qua to-device khi commit của người thắng tới) -- ở đây mình CHƯA là
+// member nào cả nên KHÔNG ai deliver commit của người thắng cho mình, phải TỰ thử lại bằng
+// GroupInfo/epoch MỚI mà CAS trả kèm lúc thua, giới hạn số lần (E2E_EXTERNAL_JOIN_MAX_ATTEMPTS) để
+// không lặp vô hạn nếu 2 bên cứ liên tục đụng epoch nhau.
+var E2E_EXTERNAL_JOIN_MAX_ATTEMPTS = 4;
+function e2eExternalJoinAttempt(conversationId, gi, attempt) {
+    return e2eLoadKpQueue().then(function (queue) {
+        if (queue.length) return queue;
+        return e2eMaybeTopUpKeyPackages().then(function () { return e2eLoadKpQueue(); }).then(function (q) {
+            if (!q.length) throw new Error('không sinh được keypackage để tự tham gia nhóm');
+            return q;
+        });
+    }).then(function (queue) {
+        var head = queue[0];
+        var myPub = e2ePubToKeyPackage(head.pubB64);
+        var myPriv = e2ePrivFromJson(head.privJson);
+        var giMsg = M.decodeMlsMessage(e2eUnb64(gi.groupInfoB64), 0)[0];
+        return M.joinGroupExternal(giMsg.groupInfo, myPub, myPriv, false, e2eImpl).then(function (res) {
+            return e2ePublishGroupInfo(conversationId, gi.epoch, res.newState).then(function (cas) {
+                if (!cas.won) {
+                    if (attempt >= E2E_EXTERNAL_JOIN_MAX_ATTEMPTS || !cas.groupInfoB64) {
+                        throw new Error('tự tham gia nhóm thất bại (đụng độ liên tục với người khác đang đổi nhóm)');
+                    }
+                    console.warn('[e2e-mls] thua CAS lúc external-join (epoch ' + gi.epoch + '), thử lại với epoch ' + cas.epoch);
+                    return e2eExternalJoinAttempt(conversationId, { groupInfoB64: cas.groupInfoB64, epoch: cas.epoch }, attempt + 1);
+                }
+                // Thắng CAS -- giờ mới thật sự tiêu KeyPackage (bỏ khỏi queue) + lưu state + báo cho
+                // mọi thành viên hiện có biết mình vừa tự join, họ cần Commit này để cập nhật ratchet
+                // tree đúng dù không ai "mời" mình cả.
+                return e2eSaveKpQueue(queue.slice(1)).then(function () {
+                    return e2eSaveGroup(conversationId, res.newState).then(function () {
+                        // BUG thật đã gặp: res.publicMessage (từ joinGroupExternal) là PHẦN THÂN
+                        // {content,auth,wireformat} CHƯA bọc lớp {version, wireformat, publicMessage}
+                        // mà encodeMlsMessage cần ở NGOÀI CÙNG (khác res.commit của createCommit -- đã
+                        // tự bọc sẵn) -- gọi thẳng encodeMlsMessage(res.publicMessage) LUÔN ném "undefined
+                        // is not iterable" bên trong mls.js, khiến bước báo các thành viên khác biết
+                        // mình vừa tự join KHÔNG BAO GIỜ chạy tới (external-join coi như "thành công" cục
+                        // bộ nhưng không ai khác biết) -- các thành viên cũ sau đó tự phát hiện thiếu
+                        // mình qua đồng bộ định kỳ rồi ADD LẠI bằng 1 leaf HOÀN TOÀN KHÁC (dùng keypackage
+                        // dự phòng khác), tạo ra 2 leaf xung đột cho CÙNG 1 người -> gốc rễ của cả loạt
+                        // lỗi "Commit cannot contain multiple ... proposals ... same leaf" / giải mã sai
+                        // đã gặp suốt phiên debug này. Phải bọc đúng khuôn trước khi encode.
+                        var commitB64 = e2eB64(M.encodeMlsMessage({ version: 'mls10', wireformat: 'mls_public_message', publicMessage: res.publicMessage }));
+                        var present = e2eMemberUserIdSet(res.newState).filter(function (id) { return id !== myUserId; });
+                        var deliveries = present.map(function (id) { return { recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: commitB64 } }; });
+                        return e2eDeliverBatch(deliveries).then(function () { return res.newState; });
+                    });
+                });
+            });
+        });
+    });
 }
 
 // ===== plaintext cache (vì MLS private message chỉ giải được 1 lần theo ratchet position) =====
@@ -275,44 +462,74 @@ function e2eCreateGroupWithMembers(conversationId, memberUserIds) {
 
 // Vòng Add tuần tự: add người 1 -> tạo commit (ratchetTreeExtension=true) -> gửi Welcome cho người đó
 // -> gửi Commit (PublicMessage) cho MỌI thành viên ĐÃ có trong group (trừ người vừa add) -> save state.
+// ADD HẾT các thiết bị hiện có của người này (1 leaf/thiết bị, xem e2eClaimAllDeviceKeyPackagesFor) --
+// không chỉ 1 thiết bị đại diện, để MỌI thiết bị của họ đều đọc được tin nhóm (xem javadoc e2eCredential).
 function e2eDrainAddCommits(conversationId, st) {
     if (!st.pendingAdds.length) return Promise.resolve(st.state);
     var next = st.pendingAdds[0];
     var rest = st.pendingAdds.slice(1);
     // Bỏ qua người không còn là member? (chấp nhận add hết memberUserIds tại thời điểm gọi).
-    return e2eClaimKeyPackagesFor(next, 1).then(function (bundles) {
-        if (!bundles.length) { console.warn('[e2e-mls] người này chưa bật MLS, không add được:', next); return e2eDrainAddCommits(conversationId, { state: st.state, pendingAdds: rest }); }
-        var theirPub = e2ePubToKeyPackage(bundles[0].keyPackage);
-        return e2eCreateCommitAndDistribute(conversationId, st.state, [{ userId: next, keyPackage: theirPub }], rest).then(function (newState) {
+    return e2eClaimAllDeviceKeyPackagesFor(next).then(function (bundles) {
+        if (!bundles.length) {
+            console.warn('[e2e-mls] người này chưa bật MLS, không add được:', next);
+            // Báo NGAY cho người đang tạo group biết -- trước đây chỉ console.warn (im lặng), người kia
+            // kẹt vĩnh viễn ở "đang chờ thiết lập nhóm mã hoá" mà không ai biết lý do thật (xem
+            // e2eMaybeTopUpKeyPackages ở trên cho 1 nguyên nhân cụ thể đã gặp).
+            if (typeof showToast === 'function') showToast((typeof displayName === 'function' ? displayName(next) : next) + ' chưa sẵn sàng mã hoá -- tin nhắn sẽ KHÔNG đến được cho người này cho tới khi họ mở lại app');
+            return e2eDrainAddCommits(conversationId, { state: st.state, pendingAdds: rest });
+        }
+        var adds = bundles.map(function (b) { return { userId: next, keyPackage: e2ePubToKeyPackage(b.keyPackage) }; });
+        return e2eCreateCommitAndDistribute(conversationId, st.state, adds, rest).then(function (newState) {
             return e2eDrainAddCommits(conversationId, { state: newState, pendingAdds: rest });
         });
     });
 }
 
-// 1 Add-commit chứa 1 hay nhiều Add proposal, broadcast Welcome/Commit tới đúng đối tượng.
-// Trả về newState ĐÃ LƯU. consumed keys được zero-out.
+// 1 Add-commit chứa 1 hay nhiều Add proposal (có thể NHIỀU proposal cùng userId -- add nhiều thiết
+// bị của CÙNG 1 người trong 1 lần, xem e2eDrainAddCommits/e2eCommitAddMany), broadcast Welcome/Commit
+// tới đúng đối tượng. Trả về newState ĐÃ LƯU. consumed keys được zero-out.
 function e2eCreateCommitAndDistribute(conversationId, state, adds, pendingAddsForWelcome) {
     var addProposals = adds.map(function (a) { return { proposalType: 'add', add: { keyPackage: a.keyPackage } }; });
+    // userId nào ĐÃ là member TRƯỚC commit này (dù đang add THÊM 1 thiết bị mới cho chính họ) --
+    // dùng để tính đúng "present" bên dưới, phân biệt với userId HOÀN TOÀN MỚI (chỉ nhận Welcome).
+    var wasAlreadyMember = new Set(e2eMemberUserIds(state));
+    var expectedEpoch = Number(state.groupContext.epoch);
     return M.createCommit({ state: state, cipherSuite: e2eImpl }, { extraProposals: addProposals, ratchetTreeExtension: true }).then(function (res) {
         var newState = res.newState;
         (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
-        var commitWire = M.encodeMlsMessage(res.commit); // commit dạng PublicMessage (wireAsPublicMessage mặc định? tạo ra commit = MLSMessage) — relay cho member hiện tại
-        var welcomeWire = res.welcome ? M.encodeMlsMessage({ welcome: res.welcome, wireformat: 'mls_welcome', version: 'mls10' }) : null;
-        var deliveries = [];
-        // Welcome riêng cho từng người được add
-        if (welcomeWire) {
-            adds.forEach(function (a) {
-                deliveries.push({ recipientUserId: a.userId, type: 'mls_welcome', conversationId: conversationId, body: { welcome: e2eB64(welcomeWire) } });
+        // CAS (khử split-brain, xem javadoc mls_group_info) TRƯỚC KHI lưu/deliver bất cứ gì -- THUA
+        // (ai đó đã thắng epoch này trước mình, vd 1 member khác đang tự External-Join CÙNG LÚC) thì
+        // bỏ HẲN commit vừa tạo, không lưu state cục bộ, không báo ai. Người thắng tự khắc deliver
+        // Commit của HỌ cho mình (mình vẫn "present" ở state CŨ trước khi thua) -- mình tự bắt kịp
+        // qua đường bình thường (e2eHandleCommit) khi commit đó tới, không cần tự retry ở đây.
+        return e2ePublishGroupInfo(conversationId, expectedEpoch, newState).then(function (cas) {
+            if (!cas.won) {
+                console.warn('[e2e-mls] thua CAS lúc add-commit (epoch ' + expectedEpoch + ') -- bỏ commit, chờ commit của người thắng tới qua to-device');
+                throw Object.assign(new Error('CAS lost khi add-commit'), { e2eCasLost: true });
+            }
+            var commitWire = M.encodeMlsMessage(res.commit); // commit dạng PublicMessage (wireAsPublicMessage mặc định? tạo ra commit = MLSMessage) — relay cho member hiện tại
+            var welcomeWire = res.welcome ? M.encodeMlsMessage({ welcome: res.welcome, wireformat: 'mls_welcome', version: 'mls10' }) : null;
+            var deliveries = [];
+            // Welcome cho từng NGƯỜI được add (KHỬ TRÙNG theo userId, không phải theo leaf) -- 1 Welcome
+            // MLS có thể mang bí mật cho NHIỀU leaf mới cùng lúc (kể cả nhiều leaf của CÙNG 1 người, mỗi
+            // leaf ứng 1 thiết bị), và hạ tầng to-device vốn PER-USER (mọi thiết bị của họ đều nhận được
+            // relay), nên chỉ cần gửi ĐÚNG 1 lần/người -- mỗi thiết bị tự thử khớp ĐÚNG leaf của mình qua
+            // e2eJoinWelcomeTry (thử từng private key cục bộ cho tới khi khớp, bỏ qua nếu không phải phần
+            // dành cho mình). Gửi trùng nhiều lần không sai nhưng lãng phí.
+            if (welcomeWire) {
+                Array.from(new Set(adds.map(function (a) { return a.userId; }))).forEach(function (uid) {
+                    deliveries.push({ recipientUserId: uid, type: 'mls_welcome', conversationId: conversationId, body: { welcome: e2eB64(welcomeWire) } });
+                });
+            }
+            // Commit cho các thành viên ĐÃ CÓ MẶT TỪ TRƯỚC commit này (kể cả người đang được add THÊM 1
+            // thiết bị mới -- thiết bị CŨ của họ vẫn cần Commit để biết cây vừa đổi, chỉ thiết bị MỚI mới
+            // chỉ cần Welcome). Người HOÀN TOÀN MỚI (chưa từng có leaf nào) bị loại -- họ chỉ cần Welcome.
+            var present = e2eMemberUserIdSet(newState).filter(function (id) { return id !== myUserId && wasAlreadyMember.has(id); });
+            present.forEach(function (id) {
+                deliveries.push({ recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: e2eB64(commitWire) } });
             });
-        }
-        // Commit cho các thành viên HIỆN CÓ (trừ người vừa được add — họ không có group state trước commit này).
-        var present = e2eMemberUserIds(newState).filter(function (id) { return id !== myUserId; }).filter(function (id) {
-            return !adds.some(function (a) { return a.userId === id; });
+            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
         });
-        present.forEach(function (id) {
-            deliveries.push({ recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: e2eB64(commitWire) } });
-        });
-        return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
     });
 }
 
@@ -338,9 +555,15 @@ function e2eSyncGroupMembers(conversationId, memberUserIds) {
             return null;
         }
         var want = memberUserIds.slice();
-        var have = e2eMemberUserIds(state);
-        var toAdd = want.filter(function (id) { return id !== myUserId && have.indexOf(id) === -1; });
-        var toRemove = have.filter(function (id) { return id !== myUserId && want.indexOf(id) === -1; });
+        var have = e2eMemberUserIds(state); // 1 phần tử/LEAF -- 1 người nhiều thiết bị lặp lại nhiều lần, phải khử trùng trước khi so sánh member-list (không phải leaf-list)
+        var haveUnique = Array.from(new Set(have));
+        var toAdd = want.filter(function (id) { return id !== myUserId && haveUnique.indexOf(id) === -1; });
+        // BUG thật đã gặp: dùng thẳng `have` (còn trùng lặp theo số leaf) làm removeUserIds khiến
+        // e2eCommitRemove lặp lại e2eLeafIndexesOf cho CÙNG 1 người nhiều lần -> nhiều proposal remove
+        // trỏ ĐÚNG 1 leaf -> M.createCommit ném ValidationError "multiple ... proposals ... same leaf",
+        // sync không bao giờ thành công, mọi tin sau đó (kể cả tin mới) đứng yên "chưa tham gia nhóm"
+        // /"không giải mã được" vì epoch không bao giờ khớp lại được. Phải khử trùng trước.
+        var toRemove = haveUnique.filter(function (id) { return id !== myUserId && want.indexOf(id) === -1; });
         var chain = Promise.resolve(state);
         if (toRemove.length) chain = chain.then(function (s) { return e2eCommitRemove(conversationId, s, toRemove); });
         if (toAdd.length) chain = chain.then(function (s) { return e2eCommitAddMany(conversationId, s, toAdd); });
@@ -350,26 +573,49 @@ function e2eSyncGroupMembers(conversationId, memberUserIds) {
 
 function e2eCommitRemove(conversationId, state, removeUserIds) {
     var proposals = [];
+    // Khử trùng phòng thủ -- gọi 2 lần e2eLeafIndexesOf cho CÙNG 1 người sẽ tạo 2 proposal remove
+    // trỏ ĐÚNG 1 leaf, M.createCommit ném ValidationError (xem e2eSyncGroupMembers, nơi đã tự khử
+    // trùng trước khi gọi vào đây -- giữ luôn ở đây cho chắc nếu sau này có chỗ gọi khác quên khử).
+    removeUserIds = Array.from(new Set(removeUserIds));
+    // Loại HẾT thiết bị (leaf) của người bị remove -- 1 người có thể có nhiều leaf (nhiều thiết bị,
+    // xem javadoc e2eCredential), remove nửa vời (chỉ 1 leaf) sẽ để sót thiết bị khác của họ vẫn còn
+    // đọc được tin nhóm sau khi "đã kick".
     removeUserIds.forEach(function (id) {
-        var li = e2eLeafIndexOf(state, id);
-        if (li >= 0) proposals.push({ proposalType: 'remove', remove: { removed: li } });
+        e2eLeafIndexesOf(state, id).forEach(function (li) { proposals.push({ proposalType: 'remove', remove: { removed: li } }); });
     });
     if (!proposals.length) return Promise.resolve(state);
+    var expectedEpoch = Number(state.groupContext.epoch);
     // Sau remove, "present" để gửi commit = member mới trừ mình trừ người bị remove.
     return M.createCommit({ state: state, cipherSuite: e2eImpl }, { extraProposals: proposals, ratchetTreeExtension: false }).then(function (res) {
         var newState = res.newState;
         (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
-        var commitWire = e2eB64(M.encodeMlsMessage(res.commit));
-        var present = e2eMemberUserIds(newState).filter(function (id) { return id !== myUserId && removeUserIds.indexOf(id) === -1; });
-        var deliveries = present.map(function (id) { return { recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: commitWire } }; });
-        return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
+        // CAS -- xem javadoc chỗ tương tự ở e2eCreateCommitAndDistribute. THUA thì bỏ hẳn commit này,
+        // không lưu/deliver, chờ commit của người thắng tới qua to-device để tự bắt kịp.
+        return e2ePublishGroupInfo(conversationId, expectedEpoch, newState).then(function (cas) {
+            if (!cas.won) {
+                console.warn('[e2e-mls] thua CAS lúc remove-commit (epoch ' + expectedEpoch + ') -- bỏ commit, chờ commit của người thắng tới qua to-device');
+                throw Object.assign(new Error('CAS lost khi remove-commit'), { e2eCasLost: true });
+            }
+            var commitWire = e2eB64(M.encodeMlsMessage(res.commit));
+            var present = e2eMemberUserIdSet(newState).filter(function (id) { return id !== myUserId && removeUserIds.indexOf(id) === -1; });
+            var deliveries = present.map(function (id) { return { recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: commitWire } }; });
+            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
+        });
     });
 }
 
+// ADD HẾT thiết bị hiện có của mỗi người trong addUserIds (không chỉ 1 thiết bị đại diện) -- cùng lý
+// do với e2eDrainAddCommits, dùng khi member list đổi lúc đồng bộ (không phải lúc tạo group lần đầu).
 function e2eCommitAddMany(conversationId, state, addUserIds) {
-    return Promise.all(addUserIds.map(function (id) { return e2eClaimKeyPackagesFor(id, 1).then(function (b) { return b.length ? { userId: id, keyPackage: e2ePubToKeyPackage(b[0].keyPackage) } : null; }); }))
-        .then(function (adds) {
-            adds = adds.filter(Boolean);
+    return Promise.all(addUserIds.map(function (id) { return e2eClaimAllDeviceKeyPackagesFor(id).then(function (bundles) { return { userId: id, bundles: bundles }; }); }))
+        .then(function (results) {
+            // Cùng lý do với e2eDrainAddCommits -- báo NGAY thay vì im lặng bỏ qua, xem javadoc ở đó.
+            results.filter(function (r) { return !r.bundles.length; }).forEach(function (r) {
+                console.warn('[e2e-mls] người này chưa bật MLS, không add được:', r.userId);
+                if (typeof showToast === 'function') showToast((typeof displayName === 'function' ? displayName(r.userId) : r.userId) + ' chưa sẵn sàng mã hoá -- tin nhắn sẽ KHÔNG đến được cho người này cho tới khi họ mở lại app');
+            });
+            var adds = [];
+            results.forEach(function (r) { r.bundles.forEach(function (b) { adds.push({ userId: r.userId, keyPackage: e2ePubToKeyPackage(b.keyPackage) }); }); });
             if (!adds.length) return state;
             return e2eCreateCommitAndDistribute(conversationId, state, adds, []);
         });
@@ -381,9 +627,14 @@ function e2eMaybeEncryptForSend(conversationId, plainBody) {
     if (!conv || !conv.e2eEnabled) return Promise.resolve(plainBody);
     if (!e2eReady) return Promise.reject(new Error('Mã hoá MLS chưa sẵn sàng, thử lại sau'));
     return e2eSyncGroupMembers(conversationId, conv.memberUserIds).then(function (synced) {
-        // synced === null nghĩa là ta KHÔNG phải creator và chưa nhận welcome -> chưa có group.
-        // KHÔNG tự tạo (tránh split-brain). Báo lỗi mềm để caller hiện "đang chờ thiết lập".
-        if (synced === null) return e2eLoadGroup(conversationId);
+        // synced === null nghĩa là ta chưa có group cục bộ (chưa từng nhận Welcome từ ai). TRƯỚC ĐÂY
+        // chỉ THỤ ĐỘNG chờ (không tự tạo, tránh split-brain) -- bug thật đã gặp: nếu không có AI
+        // KHÁC đang online để chủ động add mình, mình kẹt vĩnh viễn dù đã là thành viên hợp lệ
+        // (conversation_members). Giờ TỰ THỬ External Commit (e2eTryExternalJoin, RFC 9420) trước --
+        // không cần ai add hộ, không phụ thuộc ai online. CHỈ khi GroupInfo cũng chưa từng tồn tại
+        // (group thật sự chưa được TẠO LẦN ĐẦU bởi creator -- xem e2eCheckGroupRotations) mới thật
+        // sự phải chờ (không có gì để tự join vào).
+        if (synced === null) return e2eTryExternalJoin(conversationId);
         return synced;
     }).then(function (state) {
         if (!state) throw new Error('đang chờ thiết lập nhóm mã hoá (chờ người khởi tạo nhóm)');
@@ -406,7 +657,17 @@ function e2eMaybeEncryptForSend(conversationId, plainBody) {
 // ===== Decrypt incoming =====
 function e2eDecryptIncomingBody(fromUserId, body, messageId, conversationId) {
     var env = { mls: true };
+    // Chưa có group cục bộ -- TRƯỚC KHI báo "chưa tham gia nhóm", thử TỰ join bằng External Commit
+    // (xem e2eTryExternalJoin/e2eCheckGroupRotations): mình có thể đã LÀ thành viên hợp lệ của
+    // conversation từ trước (chỉ chưa từng có Welcome tới do lúc add mình chưa online/chưa có
+    // KeyPackage) nhưng CHỈ ĐỌC, không tự gõ gửi gì -- nếu không thử ở đây, tin MỚI tới ngay cả lúc
+    // đang mở app cũng kẹt "chưa tham gia nhóm" mãi mãi (bug thật đã gặp, xem e2eCheckGroupRotations).
+    // Tin CŨ (trước epoch mình join) vẫn không giải mã được -- forward secrecy cố ý, rơi vào nhánh
+    // lỗi decrypt bình thường bên dưới, không phải lỗi mới.
     return e2eLoadGroup(conversationId).then(function (state) {
+        if (state) return state;
+        return e2eTryExternalJoin(conversationId);
+    }).then(function (state) {
         if (!state) return { message: '🔒 Tin nhắn MLS (thiết bị này chưa tham gia nhóm)', e2eFailed: true };
         var msg = M.decodeMlsMessage(e2eUnb64(body.ct), 0)[0];
         if (!msg || msg.wireformat !== 'mls_private_message') return { message: '🔒 Tin MLS không hợp lệ', e2eFailed: true };
@@ -528,12 +789,18 @@ function e2eHandleCommit(conversationId, body) {
     var msg = M.decodeMlsMessage(e2eUnb64(body.commit), 0)[0];
     return e2eLoadGroup(conversationId).then(function (state) {
         if (!state) return null; // chưa có group local -> welcome sẽ tới riêng (hoặc ta bị remove -> im lặng)
+        var expectedEpoch = Number(state.groupContext.epoch);
         return M.processMessage(msg, state, M.emptyPskIndex, M.acceptAll, e2eImpl).then(function (res) {
             (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
             if (!res.newState) return null;
             // Nếu commit remove CHÍNH MÌnh (selfRemoved) -> xoá group local (không đọc được tin mới).
             if (res.newState.activeState && res.newState.activeState.kind === 'externalCommit') {} // noop
-            return e2eSaveGroup(conversationId, res.newState).then(function () { e2eRetryFailedMessagesIn(conversationId); });
+            return e2eSaveGroup(conversationId, res.newState)
+                // Epoch vừa đổi (commit từ người khác, ĐÃ được server chấp nhận -- CAS ở đây chỉ để
+                // đồng bộ GroupInfo public cho người cần External-Join, KHÔNG cần thắng/thua: state cục
+                // bộ của mình đã đúng dù publish này có thua ai khác public trước). Best-effort.
+                .then(function () { return e2ePublishGroupInfoBestEffort(conversationId, expectedEpoch, res.newState); })
+                .then(function () { e2eRetryFailedMessagesIn(conversationId); });
         });
     }).catch(function (err) { console.warn('[e2e-mls] commit apply lỗi (epoch lệch? đã remove?)', err && err.message); });
 }
@@ -685,24 +952,58 @@ function e2eImportTransfer(transfer) {
     })()]).then(function () {});
 }
 
-// ===== Check rotation: member list ĐỔI (kick/rời) -> remove/commit khi gửi kế tiếp (e2eSyncGroupMembers
-// đã làm, không cần code riêng). Nếu MÌNH bị remove ở đâu đó, group local không xoá tự động ở đây vì
-// ta không còn nhận commit — chấp nhận: lần gửi tin sẽ fail epoch -> xoá local + tạo lại ở bước 2. =====
-// Proactive tạo group cho conv đã bật E2E nhưng chưa có group local (vd conv bật trước fix này,
-// hoặc creator vừa reload). CHỈ creator (min userId) mới tạo -- tránh split-brain (2 người cùng tạo
-// 2 group riêng -> decrypt chéo -> CryptoError OperationError, bug thật đã gặp). Người không phải
-// creator thì chờ welcome (e2eHandleWelcome -> e2eJoinWelcomeTry).
+// Ai được phép chủ động tạo group MLS cho conv này -- ƯU TIÊN e2eEnabledBy (chính người đã BẤM NÚT
+// bật mã hoá, do server ghi lại ở setEncrypted -- chắc chắn có ít nhất 1 phiên online đúng lúc đó).
+// Fallback về min(userId) CHỈ cho conversation đã bật E2E TRƯỚC KHI server có cột e2e_enabled_by
+// (e2eEnabledBy null) -- giữ tương thích ngược, không phá các conversation cũ. Trước đây LUÔN dùng
+// min(userId) bất kể ai bật -- bug thật đã gặp: nếu đúng người có userId nhỏ nhất trong nhóm CHƯA
+// TỪNG mở app (không có phiên nào từng chạy qua đây để proactive-create), KHÔNG AI tạo được group,
+// mọi member khác kẹt vĩnh viễn ở "đang chờ thiết lập nhóm mã hoá (chờ người khởi tạo nhóm)" dù đã
+// bật E2E và đang online đầy đủ.
+function e2eGroupCreatorUserId(conv) {
+    if (conv.e2eEnabledBy) return conv.e2eEnabledBy;
+    var sorted = (conv.memberUserIds || []).slice().sort();
+    return sorted.length ? sorted[0] : null;
+}
+
+// ===== Check rotation: member list ĐỔI (kick/rời/vừa login lần đầu) =====
+// 2 việc, cho MỌI conv đã bật E2E:
+//   1) Chưa có group local -> CHỈ creator (xem e2eGroupCreatorUserId) mới được TẠO MỚI, tránh
+//      split-brain (2 người cùng tạo 2 group riêng -> decrypt chéo -> CryptoError OperationError,
+//      bug thật đã gặp). Người không phải creator thì chờ welcome (e2eHandleWelcome -> e2eJoinWelcomeTry).
+//   2) ĐÃ có group local -> CHỦ ĐỘNG đồng bộ lại member NGAY (add người mới/remove người rời), không
+//      chỉ creator mà BẤT KỲ ai đang giữ group đều làm được -- e2eSyncGroupMembers vốn đã được gọi
+//      mỗi lúc GỬI TIN (xem e2eMaybeEncryptForSend), đây chỉ thêm 1 điểm kích hoạt SỚM HƠN (mỗi lần
+//      refresh, không cần đợi ai gửi tin), không đổi logic add/remove nên KHÔNG tăng thêm rủi ro
+//      split-brain nào mới. Bug thật đã gặp: A được thêm vào conversation (DB) từ trước, nhưng lúc
+//      đó A CHƯA TỪNG mở app (chưa có KeyPackage) nên bị add-group bỏ qua; A login xong (giờ có key)
+//      vẫn không đọc/gửi được gì cho tới khi TÌNH CỜ có ai gửi 1 tin mới -- không ai chủ động add lại
+//      A cả, dù A đã publish key sẵn sàng từ lâu. (KHÔNG áp dụng cho lịch sử tin nhắn TRƯỚC lúc A
+//      join -- đó là forward secrecy cố ý của E2E, không phải bug, không đọc lại được.)
 function e2eCheckGroupRotations(oldList, newList) {
     if (!e2eReady) return;
     newList.forEach(function (conv) {
         if (!conv.e2eEnabled) return;
-        var sorted = (conv.memberUserIds || []).slice().sort();
-        if (sorted.length === 0 || sorted[0] !== myUserId) return; // không phải creator -> chờ welcome
         e2eLoadGroup(conv.conversationId).then(function (state) {
-            if (state) return; // đã có group, không tạo lại
-            // Creator thấy e2eEnabled nhưng chưa có group -> tạo ngay + welcome mọi member
-            return e2eCreateGroupWithMembers(conv.conversationId, conv.memberUserIds);
-        }).catch(function (err) { console.warn('[e2e-mls] proactive create group lỗi', err); });
+            if (state) return e2eSyncGroupMembers(conv.conversationId, conv.memberUserIds);
+            if (e2eGroupCreatorUserId(conv) === myUserId) {
+                // Creator thấy e2eEnabled nhưng chưa có group -> tạo ngay + welcome mọi member
+                return e2eCreateGroupWithMembers(conv.conversationId, conv.memberUserIds);
+            }
+            // Không phải creator, chưa có group cục bộ -- TRƯỚC ĐÂY chỉ thụ động "chờ welcome" (đúng
+            // cho lúc group vừa tạo, welcome đang trên đường tới), nhưng nếu mình được add vào
+            // conversation SAU KHI group MLS đã tồn tại một thời gian (chưa từng online lúc đó nên bị
+            // add-group bỏ qua, xem e2eDrainAddCommits) thì sẽ KHÔNG BAO GIỜ có Welcome nào gửi tới nữa
+            // -- kẹt vĩnh viễn ở "chưa tham gia nhóm" cho TẤT CẢ tin, kể cả tin MỚI tới trong lúc đang
+            // online (bug thật đã gặp: chỉ lúc TỰ GỬI tin mới kích hoạt External Commit trước đây, xem
+            // e2eMaybeEncryptForSend -- ai chỉ ĐỌC, không gửi, không bao giờ tự join). Tự thử External
+            // Commit ngay ở đây (RFC 9420, xem e2eTryExternalJoin) -- vô hại nếu gọi thừa: trả null êm
+            // nếu GroupInfo chưa từng tồn tại (group thật sự chưa tạo lần đầu, đành chờ welcome thật),
+            // và khoá in-flight theo conversationId đã chặn tự đụng độ nhiều lần join song song.
+            return e2eTryExternalJoin(conv.conversationId).then(function (state2) {
+                if (state2) e2eRetryFailedMessagesIn(conv.conversationId);
+            });
+        }).catch(function (err) { console.warn('[e2e-mls] proactive create/sync group lỗi', err); });
     });
 }
 

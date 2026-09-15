@@ -337,6 +337,16 @@ data:
     -- (xem HallApiHandlers#setConversationEncrypted) -- tránh vòng lặp lịch sử vừa mã hoá vừa không.
     ALTER TABLE conversations ADD COLUMN IF NOT EXISTS e2e_enabled BOOLEAN NOT NULL DEFAULT false;
 
+    -- Ai là người BẤM NÚT bật mã hoá đầu cuối (chỉ ghi lần đầu, xem ConversationMembershipRegistry#
+    -- setEncrypted dùng COALESCE để KHÔNG bị ghi đè bởi các lần gọi lại sau -- setEncrypted idempotent
+    -- nên có thể bị gọi nhiều lần). Client dùng cột này để quyết định AI được phép chủ động tạo group
+    -- MLS (xem e2eCheckGroupRotations phía frontend) -- PHẢI là chính người vừa bật (chắc chắn đang
+    -- online lúc đó), KHÔNG phải suy ra tĩnh theo min(userId) như bản đầu tiên (bug thật đã gặp: nếu
+    -- người có userId nhỏ nhất trong nhóm chưa từng mở app lần nào, không ai tạo được group MLS, cả
+    -- nhóm kẹt vĩnh viễn ở "đang chờ thiết lập nhóm mã hoá"). NULL cho conversation bật E2E TRƯỚC KHI
+    -- có cột này -- frontend tự fallback về cách tính cũ (min userId) khi gặp NULL, xem mls-crypto.js.
+    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS e2e_enabled_by UUID;
+
     -- Hàng đợi "to-device": tin BÁO HIỆU mã hoá (thiết lập Olm session, phân phối Megolm session key
     -- lúc bật mã hoá/rotate) gửi THẲNG cho 1 user cụ thể -- KHÁC hẳn message thường (không gắn với 1
     -- conversationId để fan-out theo Maglev, xem MessageDelivery) vì đích đến là 1 NGƯỜI, có thể đang
@@ -389,3 +399,30 @@ data:
     );
     CREATE INDEX IF NOT EXISTS idx_mls_key_packages_user ON mls_key_packages (user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_mls_key_packages_device ON mls_key_packages (device_id, created_at);
+
+    -- GroupInfo công khai MỚI NHẤT của 1 group MLS (RFC 9420 "External Commit") -- opaque với server
+    -- (chuỗi base64 MLSMessage do client tự ký/mã hoá, server không đọc/parse được nội dung, giống
+    -- KeyPackage). Cho phép 1 THÀNH VIÊN ĐÃ CÓ TRONG conversation_members nhưng CHƯA TỪNG join group
+    -- MLS (chưa nhận được Welcome từ ai -- ví dụ họ chỉ mới đăng nhập lần đầu, chưa ai online để add
+    -- hộ) TỰ MÌNH join ngay, không cần chờ member khác chủ động add -- bug thật đã gặp: nếu không ai
+    -- khác đang online, người mới không có CÁCH NÀO join được nhóm mã hoá dù đã là thành viên hợp lệ,
+    -- kẹt vĩnh viễn. Bất kỳ ai ĐÃ join group đều publish lại (ghi đè) sau mỗi lần epoch đổi (tạo
+    -- nhóm/add/remove/nhận commit) -- xem frontend's e2ePublishGroupInfo. CHỈ member của đúng
+    -- conversation đó (kiểm tra qua conversation_members) mới đọc/ghi được -- xem
+    -- HallApiHandlers#getMlsGroupInfo/putMlsGroupInfo.
+    -- epoch: dùng làm optimistic-concurrency token (compare-and-swap) chống SPLIT-BRAIN thật đã gặp
+    -- -- 2 actor khác nhau (vd creator đang add member bình thường VÀ 1 member khác đang tự
+    -- External-Join) cùng lúc tạo commit dựa trên CÙNG group state cũ, không ai biết ai, mỗi bên
+    -- publish GroupInfo của epoch mới theo hướng RIÊNG -- ai ghi sau (last-write-wins, kiểu cũ)
+    -- THẮNG một cách im lặng, còn bên thua vẫn deliver Welcome/Commit của MÌNH cho các member khác
+    -- -> nhóm rẽ nhánh vĩnh viễn, giải mã lỗi "CryptoError: OperationError" không rõ nguyên nhân từ
+    -- đó về sau. Client giờ PHẢI gửi kèm epoch cũ (expected) + epoch mới khi publish -- server chỉ
+    -- ghi đè nếu epoch hiện tại ĐÚNG BẰNG epoch cũ client kỳ vọng (xem
+    -- MlsRegistry#upsertGroupInfo/HallApiHandlers#putMlsGroupInfo); bên thua nhận về false, PHẢI bỏ
+    -- state/commit vừa tạo (không lưu, không deliver) rồi thử lại từ GroupInfo mới nhất.
+    CREATE TABLE IF NOT EXISTS mls_group_info (
+        conversation_id UUID NOT NULL PRIMARY KEY,
+        group_info TEXT NOT NULL,
+        epoch BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );

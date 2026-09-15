@@ -120,6 +120,52 @@ public class MlsRegistry {
         });
   }
 
+  /**
+   * Claim (lấy + XOÁ, dùng 1 lần) ĐÚNG 1 KeyPackage của MỖI thiết bị {@code targetUserId} đang có
+   * -- khác {@link #claimKeyPackages} (chỉ chọn 1 thiết bị ĐẠI DIỆN cho cả user, đủ dùng cho Olm cũ
+   * nơi MỌI thiết bị trong group đều giải được ciphertext của nhau). Với MLS, 1 group member =
+   * ĐÚNG 1 leaf trong cây, credential mang cả deviceId (xem frontend's e2eCredential) -- muốn CẢ N
+   * thiết bị của user này đều đọc được tin nhóm thì phải add N leaf riêng (mỗi thiết bị 1 KeyPackage
+   * khác nhau), không thể "đại diện" bằng 1 cái như Olm. Dùng lúc thêm 1 user hoàn toàn mới vào group
+   * MLS (xem frontend's e2eDrainAddCommits/e2eCommitAddMany) -- bug thật đã gặp: claim đại diện 1
+   * thiết bị bất kỳ (có thể là thiết bị "ma" không còn ai dùng) khiến người đó kẹt vĩnh viễn ở "chưa
+   * tham gia nhóm" trên đúng thiết bị họ đang thật sự ngồi dùng.
+   */
+  public CompletionStage<JsonArray> claimKeyPackagesAllDevices(UUID targetUserId) {
+    return supplier.executeReadOnly(conn -> conn.preparedQuery(
+                    "SELECT DISTINCT device_id FROM mls_key_packages WHERE user_id = ?")
+                    .execute(Tuple.of(targetUserId))
+                    .toCompletionStage())
+            .thenApply(rows -> {
+              List<UUID> devices = new ArrayList<>();
+              for (var row : rows) {
+                devices.add(row.getUUID("device_id"));
+              }
+              return devices;
+            })
+            .thenCompose(devices -> {
+              var futures = devices.stream()
+                  .map(d -> claimOneKeyPackage(d).thenApply(kp -> {
+                    if (kp != null) {
+                      kp.put("deviceId", d.toString());
+                    }
+                    return kp;
+                  }))
+                  .toList();
+              return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+                  .thenApply(unused -> {
+                    var arr = new JsonArray();
+                    futures.forEach(f -> {
+                      var kp = f.join();
+                      if (kp != null) {
+                        arr.add(kp);
+                      }
+                    });
+                    return arr;
+                  });
+            });
+  }
+
   private CompletableFuture<JsonObject> claimOneKeyPackage(UUID deviceId) {
     return supplier.execute(conn -> conn.preparedQuery(
                     "DELETE FROM mls_key_packages WHERE id = ("
@@ -143,5 +189,45 @@ public class MlsRegistry {
             .execute(Tuple.of(deviceId, ownerUserId))
             .toCompletionStage())
             .thenApply(unused -> null);
+  }
+
+  /**
+   * Ghi đè GroupInfo công khai MỚI NHẤT của 1 group MLS bằng compare-and-swap theo epoch -- xem
+   * javadoc bảng {@code mls_group_info} cho lý do (chống split-brain giữa 2 actor cùng tạo commit
+   * từ 1 epoch cũ). {@code expectedEpoch} = epoch của state MÀ CLIENT DỰA VÀO để tạo commit này
+   * (trước commit); {@code newEpoch} = epoch SAU commit. Ghi đè CHỈ khi:
+   * <ul>
+   *   <li>chưa từng có row nào (lần publish đầu tiên của conversation này -- luôn thành công bất kể
+   *       {@code expectedEpoch} client gửi là gì, vì {@code ON CONFLICT} không kích hoạt), HOẶC</li>
+   *   <li>epoch đang lưu ĐÚNG BẰNG {@code expectedEpoch} (không ai khác ghi đè epoch đó trước mình).</li>
+   * </ul>
+   * Trả {@code true} nếu ghi thành công, {@code false} nếu THUA (đã có actor khác thắng epoch này
+   * trước) -- caller (frontend) PHẢI bỏ hẳn state/commit vừa tạo lúc thua, không lưu cục bộ, không
+   * deliver Welcome/Commit cho ai, rồi tự fetch lại GroupInfo mới nhất để thử lại từ đầu.
+   */
+  public CompletionStage<Boolean> upsertGroupInfo(UUID conversationId, String groupInfoB64, long expectedEpoch, long newEpoch) {
+    return supplier.execute(conn -> conn.preparedQuery(
+                "INSERT INTO mls_group_info (conversation_id, group_info, epoch, updated_at) VALUES (?, ?, ?, now()) "
+                    + "ON CONFLICT (conversation_id) DO UPDATE SET group_info = EXCLUDED.group_info, epoch = EXCLUDED.epoch, updated_at = now() "
+                    + "WHERE mls_group_info.epoch = ? "
+                    + "RETURNING conversation_id")
+            .execute(Tuple.of(conversationId, groupInfoB64, newEpoch, expectedEpoch))
+            .toCompletionStage())
+        .thenApply(rows -> rows.iterator().hasNext());
+  }
+
+  /** GroupInfo công khai hiện có của group + epoch của nó -- null nếu CHƯA từng có ai join/publish (group thật sự chưa tồn tại). */
+  public CompletionStage<JsonObject> getGroupInfo(UUID conversationId) {
+    return supplier.executeReadOnly(conn -> conn.preparedQuery("SELECT group_info, epoch FROM mls_group_info WHERE conversation_id = ?")
+            .execute(Tuple.of(conversationId))
+            .toCompletionStage())
+        .thenApply(rows -> {
+          var it = rows.iterator();
+          if (!it.hasNext()) {
+            return null;
+          }
+          var row = it.next();
+          return new JsonObject().put("groupInfo", row.getString("group_info")).put("epoch", row.getLong("epoch"));
+        });
   }
 }
