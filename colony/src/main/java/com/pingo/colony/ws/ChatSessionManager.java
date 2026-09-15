@@ -315,10 +315,15 @@ public class ChatSessionManager {
             });
   }
 
-  /** {@code body.e2e === true} -- đúng cờ e2eEncryptOutgoing/e2eEncryptGroupOutgoing luôn gắn. */
+  /**
+   * {@code body.mls === true} (envelope MLS mới, xem frontend/assets/js/mls-crypto.js) HOẶC
+   * {@code body.e2e === true} (envelope Olm cũ, còn đi qua đây lúc migrate đan xen) -- server không
+   * cần phân biệt 2 loại, chỉ cần biết "client đã mã hoá".
+   */
   private static boolean looksEncrypted(String bodyJson) {
     try {
-      return Boolean.TRUE.equals(new JsonObject(bodyJson).getBoolean("e2e"));
+      var body = new JsonObject(bodyJson);
+      return Boolean.TRUE.equals(body.getBoolean("mls")) || Boolean.TRUE.equals(body.getBoolean("e2e"));
     } catch (Exception ex) {
       return false;
     }
@@ -777,7 +782,7 @@ public class ChatSessionManager {
    * chuông/push/sidebar đều hiện nhất quán "🔒 Tin nhắn đã mã hoá" thay vì trống trơn.
    */
   private static String extractTextPreview(JsonObject body) {
-    if (Boolean.TRUE.equals(body.getBoolean("e2e"))) {
+    if (Boolean.TRUE.equals(body.getBoolean("mls")) || Boolean.TRUE.equals(body.getBoolean("e2e"))) {
       return "🔒 Tin nhắn đã mã hoá";
     }
     var messageText = body.getString("message");

@@ -77,9 +77,18 @@ function markMessageFailed(messageId, reason) {
         seenEl.title = (reason || 'Gửi lỗi') + ' -- bấm để gửi lại';
         seenEl.onclick = function (e) { e.stopPropagation(); retrySendMessage(messageId); };
     }
+    // Colony chặn plaintext vì server đã bật e2e nhưng lastConvList ở client còn STALE (chưa kịp
+    // refresh sau khi e2eEnabled đổi) -- tự refresh để cập nhật, lần retry sau (re-encrypt) sẽ đúng.
+    if (reason && reason.indexOf('không chấp nhận tin chưa mã hoá') !== -1 && typeof refreshConversationList === 'function') {
+        refreshConversationList();
+    }
 }
 
 // Gửi lại NGUYÊN payload cũ dưới đúng id cũ -- vẫn đúng 1 bubble đó chuyển lại trạng thái "đang gửi", không tạo bubble mới.
+// QUAN TRỌNG: phải RE-ENCRYPT thay vì gửi lại frame plaintext cũ -- pendingSentMessages[id].body là
+// PLAINTEXT (lưu trước lúc encrypt ở sendChatMessage). Nếu conv đã bật e2e mà gửi plaintext, colony sẽ
+// chặn ("không chấp nhận tin chưa mã hoá") -> fail loop. Re-encrypt đảm bảo frame gửi đi luôn đúng
+// trạng thái e2e hiện tại (kể cả khi user reload giữa chừng, e2eReady/creator state đã đổi).
 function retrySendMessage(messageId) {
     var frame = pendingSentMessages[messageId];
     if (!frame) return;
@@ -90,8 +99,14 @@ function retrySendMessage(messageId) {
         var seenEl = row.querySelector('.seen-status');
         if (seenEl) { seenEl.classList.remove('failed'); seenEl.innerText = '○'; seenEl.title = ''; seenEl.onclick = null; }
     }
-    if (send(frame)) scheduleSendTimeout(messageId);
-    else markMessageFailed(messageId, 'Mất kết nối');
+    e2eMaybeEncryptForSend(frame.conversationId, frame.body)
+        .then(function (wireBody) {
+            var newFrame = {type: 'MESSAGE', id: frame.id, conversationId: frame.conversationId, body: wireBody};
+            pendingSentMessages[messageId] = newFrame; // cập nhật frame đã encrypt để lần retry sau (nếu có) dùng
+            if (send(newFrame)) scheduleSendTimeout(messageId);
+            else markMessageFailed(messageId, 'Mất kết nối');
+        })
+        .catch(function (err) { markMessageFailed(messageId, 'Mã hoá lỗi: ' + err.message); });
 }
 
 // Điểm vào DUY NHẤT để gửi 1 tin MESSAGE (chữ/file/GIF-sticker đều gọi qua đây) -- xem sendMsg,

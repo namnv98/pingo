@@ -6,6 +6,7 @@ import com.google.inject.Injector;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
 import com.pingo.chat.domain.e2e.E2eKeyRegistry;
+import com.pingo.chat.domain.e2e.MlsRegistry;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -122,6 +123,13 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private E2eKeyRegistry e2eKeyRegistry(JdbcConnectionSupplier supplier) {
     return new E2eKeyRegistry(supplier);
+  }
+
+  /** Directory KeyPackage cho client MLS (RFC 9420) -- xem javadoc {@link MlsRegistry}. */
+  @Provides
+  @Singleton
+  private MlsRegistry mlsRegistry(JdbcConnectionSupplier supplier) {
+    return new MlsRegistry(supplier);
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */

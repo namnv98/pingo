@@ -2,6 +2,7 @@ package com.pingo.hall.api;
 
 import com.google.inject.Inject;
 import com.pingo.chat.domain.e2e.E2eKeyRegistry;
+import com.pingo.chat.domain.e2e.MlsRegistry;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -92,6 +93,7 @@ public class HallApiHandlers {
   private final MessagePinRegistry pins;
   private final MessageLinkRegistry links;
   private final E2eKeyRegistry e2eKeys;
+  private final MlsRegistry mls;
   private final AtomicBoolean ready;
   private final Vertx vertx;
 
@@ -891,122 +893,103 @@ public class HallApiHandlers {
 
   // ================= Mã hoá đầu cuối (E2E) — xem chat-domain E2eKeyRegistry, frontend/vendor/olm.js =================
 
+  // ================= MLS (RFC 9420) — thay Olm/Megolm, engine ts-mls phía client (vendor/mls.js) =================
+  // Server chỉ là Delivery Service tối giản (RFC 9750): directory KeyPackage (4 endpoint dưới) +
+  // trung chuyển Welcome/Commit báo hiệu qua hàng đợi to-device SẴN CÓ (type "mls_welcome"/
+  // "mls_commit", vẫn dùng POST/GET /e2e/to-device — bảng + EventBus + relay harbor giữ nguyên,
+  // chỉ payload đổi). Ciphertext tin nhắn MLS ({mls:true}) đi như MESSAGE thường qua colony, không
+  // đụng hệ thống này.
+
   /**
-   * {@code PUT /e2e/keys} — body JSON {@code {deviceId: "...", identityKey: "...", oneTimePrekeys: {keyId: pubkey, ...}}}.
-   * Đăng ký/cập nhật identity key của 1 THIẾT BỊ (client tự sinh {@code deviceId} 1 lần/trình duyệt,
-   * KHÔNG BAO GIỜ đổi -- đúng thuật toán Sesame của Signal: mỗi thiết bị 1 identity riêng, không còn
-   * dùng chung 1 identity/tài khoản như bản trước) + THÊM 1 lô one-time prekey mới (không thay thế
-   * lô cũ, xem {@link E2eKeyRegistry#addOneTimePrekeys}) -- gọi lúc bật E2E lần đầu trên thiết bị
-   * này, và định kỳ khi client thấy {@code GET /e2e/prekey-count} còn ít để top-up. Cả 3 field đều
-   * optional (chỉ gửi cái cần đổi) -- KHÔNG còn khái niệm xung đột/409 nữa, mỗi {@code deviceId} có
-   * hàng riêng trong {@code e2e_devices}, upsert vô hại dù gọi lại bao nhiêu lần.
+   * {@code PUT /mls/key-packages} — body {@code {deviceId, keyPackages: ["<base64 wire>", ...]}}.
+   * Đăng ký thêm 1 lô KeyPackage (public, opaque với server — credential "user:&lt;userId&gt;" nằm
+   * TRONG keypackage do client MLS tự ký) cho THIẾT BỊ này (deviceId UUID do client sinh 1 lần,
+   * lưu localStorage). Client gọi lúc init + định kỳ khi GET /mls/key-package-count còn ít (xem
+   * {@link MlsRegistry#publishKeyPackages}).
    */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "e2e/keys", type = Type.HTTP)})
-  public CompletionStage<byte[]> uploadE2eKeys(IRequest request) {
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.PUT, endpoint = "mls/key-packages", type = Type.HTTP)})
+  public CompletionStage<byte[]> publishMlsKeyPackages(IRequest request) {
     var userId = requireAuthenticatedUserId(request);
     var body = parseJsonBody(request);
     var deviceId = UUIDUtils.parseOrDefault(body.getString("deviceId"));
-    var identityKey = body.getString("identityKey");
-    var rawPrekeys = body.getJsonObject("oneTimePrekeys");
-    var prekeys = new java.util.LinkedHashMap<String, String>();
-    if (rawPrekeys != null) {
-      for (var keyId : rawPrekeys.fieldNames()) {
-        var publicKey = rawPrekeys.getString(keyId);
-        if (publicKey != null && !publicKey.isBlank()) {
-          prekeys.put(keyId, publicKey);
+    if (deviceId == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    }
+    var raw = body.getJsonArray("keyPackages");
+    var keyPackages = new ArrayList<String>();
+    if (raw != null) {
+      for (var item : raw) {
+        if (item instanceof String kp && !kp.isBlank()) {
+          keyPackages.add(kp);
         }
       }
     }
-    if (deviceId == null) {
-      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    if (keyPackages.size() > 50) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "too many key packages in one batch (max 50)");
     }
-    var finalDeviceId = deviceId;
-    var label = body.getString("label");
-    CompletionStage<Void> afterIdentity = identityKey == null || identityKey.isBlank()
-        ? CompletableFuture.completedFuture(null)
-        : e2eKeys.upsertDevice(finalDeviceId, userId, identityKey.strip(), label == null ? null : label.strip());
-    return afterIdentity
-        .thenCompose(unused -> e2eKeys.addOneTimePrekeys(finalDeviceId, prekeys))
-        .thenApply(unused -> bytes(new JsonObject().put("deviceId", finalDeviceId.toString()).put("addedPrekeys", prekeys.size())));
+    return mls.publishKeyPackages(userId, deviceId, keyPackages)
+        .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString()).put("published", keyPackages.size())));
   }
 
-  /** {@code GET /e2e/devices} — toàn bộ thiết bị mã hoá hiện có của CHÍNH MÌNH, dùng cho màn "Thiết bị của tôi" (xem {@link E2eKeyRegistry#listDevices}). */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/devices", type = Type.HTTP)})
-  public CompletionStage<byte[]> listE2eDevices(IRequest request) {
-    var userId = requireAuthenticatedUserId(request);
-    return e2eKeys.listDevices(userId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
-  }
-
-  /**
-   * {@code DELETE /e2e/devices?deviceId=<uuid>} — gỡ 1 thiết bị mã hoá của CHÍNH MÌNH (vd máy cũ đã
-   * mất/không dùng nữa) -- 404 nếu deviceId không tồn tại hoặc không thuộc về mình (xem
-   * {@link E2eKeyRegistry#deleteDevice}).
-   */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "e2e/devices", type = Type.HTTP)})
-  public CompletionStage<byte[]> deleteE2eDevice(IRequest request) {
-    var userId = requireAuthenticatedUserId(request);
+  /** {@code GET /mls/key-package-count?deviceId=<uuid>} — số KeyPackage còn lại của thiết bị này, client tự top-up (giống /e2e/prekey-count cũ). */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "mls/key-package-count", type = Type.HTTP)})
+  public CompletionStage<byte[]> countMlsKeyPackages(IRequest request) {
+    requireAuthenticatedUserId(request);
     var deviceId = UUIDUtils.parseOrDefault(request.getParam("deviceId"));
     if (deviceId == null) {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
     }
-    return e2eKeys.deleteDevice(deviceId, userId).thenApply(ok -> {
-      if (!ok) {
-        throw new LegoBusinessException(HallErrorKeys.NOT_FOUND, "device not found");
+    return mls.countKeyPackages(deviceId).thenApply(count -> bytes(new JsonObject().put("count", count)));
+  }
+
+  /**
+   * {@code GET /mls/key-packages?userId=<uuid>&limit=N} — claim (dùng 1 lần, xoá luôn) tối đa N
+   * KeyPackage của user đích, chia round-robin theo thiết bị (xem {@link MlsRegistry#claimKeyPackages}).
+   * Dùng lúc thêm thành viên vào nhóm MLS: mỗi người được add CẦN ĐÚNG 1 keypackage (thiết bị nào
+   * đại diện không quan trọng — MLS group ciphertext mọi client trong group cùng giải được, khác
+   * hẳn fan-out per-device của Olm cũ). Mảng rỗng = user đó chưa bật MLS ở bất kỳ thiết bị nào
+   * (không phải 404 — cùng tinh thần GET /e2e/keys/bundle cũ).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "mls/key-packages", type = Type.HTTP)})
+  public CompletionStage<byte[]> claimMlsKeyPackages(IRequest request) {
+    requireAuthenticatedUserId(request);
+    UUID targetUserId;
+    try {
+      targetUserId = UUID.fromString(request.getParam("userId"));
+    } catch (IllegalArgumentException | NullPointerException e) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
+    }
+    int limit = 1;
+    var rawLimit = request.getParam("limit");
+    if (rawLimit != null && !rawLimit.isBlank()) {
+      try {
+        limit = Math.max(1, Math.min(100, Integer.parseInt(rawLimit.trim())));
+      } catch (NumberFormatException e) {
+        throw new LegoBusinessException(HallErrorKeys.VALIDATION, "invalid limit");
       }
-      return bytes(new JsonObject().put("deviceId", deviceId.toString()));
-    });
+    }
+    var finalLimit = limit;
+    return mls.claimKeyPackages(targetUserId, finalLimit)
+        .thenApply(kps -> bytes(new JsonObject().put("keyPackages", kps)));
   }
 
-  /** {@code GET /e2e/prekey-count?deviceId=<uuid>} — số one-time prekey CÒN LẠI của THIẾT BỊ này, client tự quyết định lúc nào cần top-up thêm (xem {@link #uploadE2eKeys}). */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/prekey-count", type = Type.HTTP)})
-  public CompletionStage<byte[]> countE2ePrekeys(IRequest request) {
-    requireAuthenticatedUserId(request);
+  /**
+   * {@code DELETE /mls/key-packages?deviceId=<uuid>} — gỡ mọi KeyPackage CHƯA DÙNG của 1 thiết bị
+   * thuộc CHÍNH mình ("xoá thiết bị" bản MLS — device chưa join group nào thì keypackage là tất cả
+   * những gì còn trên server; membership trong group nào là chuyện client, server không biết gì về
+   * ratchet tree MLS).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "mls/key-packages", type = Type.HTTP)})
+  public CompletionStage<byte[]> deleteMlsKeyPackages(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
     var deviceId = UUIDUtils.parseOrDefault(request.getParam("deviceId"));
     if (deviceId == null) {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
     }
-    return e2eKeys.countOneTimePrekeys(deviceId).thenApply(count -> bytes(new JsonObject().put("count", count)));
+    return mls.deleteKeyPackagesOfDevice(deviceId, userId)
+        .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
   }
 
-  /**
-   * {@code GET /e2e/keys/bundle?userId=<uuid>} — trả {@code {devices: [{deviceId, identityKey,
-   * oneTimePrekey}, ...]}} -- MỌI thiết bị hiện có của {@code userId}, mỗi thiết bị đã tự CHIẾM
-   * (xoá) riêng 1 one-time prekey của chính nó (xem {@link E2eKeyRegistry#claimKeyBundlesForUser}).
-   * Người gọi PHẢI mã hoá RIÊNG cho TỪNG phần tử (fan-out per-device, đúng chuẩn Signal/Sesame --
-   * xem {@code e2e-crypto.js}'s {@code e2eEncryptOutgoing}). {@code devices} rỗng (KHÔNG phải 404
-   * như bản trước) nếu {@code userId} chưa từng bật E2E ở bất kỳ thiết bị nào -- không còn "1 identity
-   * hoặc không có gì" nhị phân như trước, "không có thiết bị nào" là 1 trạng thái hợp lệ bình thường.
-   */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/keys/bundle", type = Type.HTTP)})
-  public CompletionStage<byte[]> getE2eKeyBundle(IRequest request) {
-    requireAuthenticatedUserId(request);
-    UUID targetUserId;
-    try {
-      targetUserId = UUID.fromString(request.getParam("userId"));
-    } catch (IllegalArgumentException | NullPointerException e) {
-      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
-    }
-    return e2eKeys.claimKeyBundlesForUser(targetUserId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
-  }
-
-  /**
-   * {@code GET /e2e/keys/devices?userId=<uuid>} — trả {@code {devices: [{deviceId, identityKey}, ...]}}
-   * -- MỌI thiết bị hiện có của {@code userId}, KHÔNG claim/xoá prekey nào (khác hẳn
-   * {@code GET /e2e/keys/bundle} ở trên) -- dùng để KIỂM TRA có thiết bị nào chưa nhận 1 khoá phiên
-   * Megolm cụ thể hay không mà không tốn prekey chỉ để kiểm tra (xem
-   * {@link E2eKeyRegistry#listDevicesForUser}, frontend's {@code e2eGetOrCreateOutboundGroupSession}).
-   */
-  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "e2e/keys/devices", type = Type.HTTP)})
-  public CompletionStage<byte[]> listE2eKeyDevices(IRequest request) {
-    requireAuthenticatedUserId(request);
-    UUID targetUserId;
-    try {
-      targetUserId = UUID.fromString(request.getParam("userId"));
-    } catch (IllegalArgumentException | NullPointerException e) {
-      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid userId");
-    }
-    return e2eKeys.listDevicesForUser(targetUserId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
-  }
 
   /**
    * {@code PUT /conversations/e2e?conversationId=<uuid>} — bật mã hoá đầu cuối cho 1 conversation.

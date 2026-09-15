@@ -370,3 +370,22 @@ data:
         one_time_key TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- ================= MLS (RFC 9420, engine ts-mls phía client -- vendor/mls.js) =================
+    -- Server CHỈ làm Delivery Service tối giản (RFC 9750): directory KeyPackage + trung
+    -- chuyển Welcome/Commit qua hàng đợi to-device SẴN CÓ (e2e_to_device_messages, type
+    -- mls_*). PRIVATE KEY KHÔNG BAO GIỜ rời máy client, server không giải được gì cả.
+    -- KeyPackage (public, wire MLS encodeMlsMessage -> base64) của TỪNG THIẾT BỊ MLS
+    -- (device_id = UUID do client sinh 1 lần/trình duyệt). Claim = XOÁ LUÔN, dùng 1 lần
+    -- (mỗi lần add member tiêu 1 KeyPackage -- cùng tinh thần one-time prekey bên Olm cũ);
+    -- client tự top-up khi hết (xem GET /mls/key-package-count). Identity user BỌC TRONG
+    -- credential basic của KeyPackage ("user:<userId>"), backend KHÔNG cần bảng credential riêng.
+    CREATE TABLE IF NOT EXISTS mls_key_packages (
+        id UUID NOT NULL PRIMARY KEY,
+        device_id UUID NOT NULL,
+        user_id UUID NOT NULL,
+        key_package TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_key_packages_user ON mls_key_packages (user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_mls_key_packages_device ON mls_key_packages (device_id, created_at);
