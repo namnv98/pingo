@@ -30,6 +30,9 @@
             --scrollbar-thumb: #dcdaee;
             --scrollbar-thumb-hover: #c7c3e8;
             --reaction-hover-bg: #f0f2f5;
+            --warn-bg: #fff7e6;
+            --warn-border: #f0dca3;
+            --warn-ink: #8a6100;
         }
         /* ===== Theme sáng/tối cho TOÀN BỘ app (khác nền/màu bong bóng RIÊNG TỪNG cuộc trò chuyện ở
            trên, xem BG_STORAGE_KEY) -- áp dụng data-theme="dark"/"light" lên <html> (xem
@@ -61,6 +64,9 @@
                 --scrollbar-thumb: #37374a;
                 --scrollbar-thumb-hover: #48485f;
                 --reaction-hover-bg: #2a2a38;
+                --warn-bg: #3a2f10;
+                --warn-border: #5c4a15;
+                --warn-ink: #f0c96a;
             }
         }
         :root[data-theme="dark"] {
@@ -86,6 +92,9 @@
             --scrollbar-thumb: #37374a;
             --scrollbar-thumb-hover: #48485f;
             --reaction-hover-bg: #2a2a38;
+            --warn-bg: #3a2f10;
+            --warn-border: #5c4a15;
+            --warn-ink: #f0c96a;
         }
         * { box-sizing: border-box; }
         html, body { height: 100%; margin: 0; }
@@ -462,6 +471,19 @@
         .convSearchInput:focus { outline: none !important; border: none !important; box-shadow: none !important; }
         .convSearchCount { flex: none; font-size: 11.5px; color: var(--ink-faint); font-family: ui-monospace, monospace; min-width: 32px; text-align: center; }
         .convSearchPrevBtn svg { transform: rotate(180deg); } /* tái dùng ICON.down, xoay ngược thành mũi tên lên */
+
+        /* Banner cảnh báo E2E (VD "X chưa bật mã hoá -- tin sẽ không đến được") -- xem
+           showConvE2eWarning/renderConvE2eWarnings ở messaging-core.js. TRƯỚC ĐÂY chỉ có showToast
+           (tự biến mất sau 2.2s) -- cảnh báo dài, người dùng không kịp đọc nếu không đang nhìn đúng lúc
+           nó hiện lên. Banner này NẰM LẠI trong header đoạn chat liên quan cho tới khi tự bấm đóng, và
+           tự hiện lại mỗi lần mở lại conversation đó (xem renderConvE2eWarnings) -- không mất thông tin
+           nếu người dùng không có mặt đúng lúc sự kiện xảy ra. */
+        .convE2eWarningBar { display: none; align-items: flex-start; gap: 8px; flex: none; padding: 9px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn-ink); font-size: 12.5px; line-height: 1.45; }
+        .convE2eWarningBar.show { display: flex; }
+        .convE2eWarningIcon { flex: none; margin-top: 1px; }
+        .convE2eWarningText { flex: 1; min-width: 0; white-space: pre-line; }
+        .convE2eWarningClose { flex: none; border: none; background: none; color: inherit; opacity: .65; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
+        .convE2eWarningClose:hover { opacity: 1; }
 
         /* ---------- panel thông tin/thành viên bên phải -- kiểu Telegram "Bot Info" ---------- */
         /* Nền panel XÁM (canvas), các khối nội dung là THẺ TRẮNG (surface) bo góc nổi lên -- đúng bố cục

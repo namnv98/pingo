@@ -1123,7 +1123,18 @@ function enterApp() {
     // phục hồi từ file backup). Cơ chế key request (megolm_session_request, xem
     // e2eRequestMissingGroupSession) chỉ dành cho tin THIẾU KEY RÒ RÌ lúc đang đọc (to-device thất lạc)
     // và chỉ sender còn ở lại nhóm mới trả lời -- không phải đường "đăng nhập là kéo hết lịch sử".
-    e2eInit().then(e2eDrainToDevice);
+    //
+    // refreshConversationList() ở dòng trên chạy TRƯỚC khi e2eInit() xong (e2eReady vẫn false lúc đó)
+    // nên e2eCheckGroupRotations() bên trong nó no-op ngay -- proactive self-heal (external-join cho
+    // conversation mình LÀ member nhưng chưa có group cục bộ) không có cơ hội chạy SỚM. Nếu tin nhắn
+    // LIVE đầu tiên (qua WS "MESSAGE", connect() bên dưới không đợi gì cả) tới ĐÚNG trong khoảng hở đó
+    // (trước khi người dùng tự mở conversation để kích hoạt self-heal qua đường decrypt), tin đó
+    // KHÔNG BAO GIỜ đọc lại được -- self-heal qua external-join tự +1 epoch, vượt qua đúng epoch của
+    // tin vừa kích hoạt nó (giới hạn mật mã cố hữu, không sửa được, nhưng THU HẸP được khoảng hở này).
+    // Chủ động refreshConversationList() LẦN NỮA ngay khi e2eInit()+drain xong (thay vì bị động chờ
+    // user tự mở đúng conversation, hoặc chờ WS event khác tình cờ gọi lại) để self-heal chạy CÀNG SỚM
+    // CÀNG TỐT, thu hẹp tối đa khoảng hở đua với tin live đầu tiên.
+    e2eInit().then(e2eDrainToDevice).then(refreshConversationList);
     connect();
 }
 

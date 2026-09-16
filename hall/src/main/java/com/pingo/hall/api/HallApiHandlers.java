@@ -1093,6 +1093,38 @@ public class HallApiHandlers {
         .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
   }
 
+  private static final int MLS_REVOKED_CHECK_MAX_IDS = 500;
+
+  /**
+   * {@code POST /mls/devices/revoked-check} — body {@code {deviceIds: ["<uuid>", ...]}}. Trả về
+   * ĐÚNG những deviceId trong danh sách đã bị THU HỒI (xem javadoc {@link RevokedDeviceRegistry}) --
+   * dùng để client tự dọn "leaf chết" khỏi cây MLS cục bộ (thiết bị đã logout/bị gỡ nhưng leaf của
+   * nó vẫn còn nằm nguyên trong cây vì MLS không tự phát hiện việc này, xem {@code
+   * mls-crypto.js#e2ePruneDeadLeaves}). CỐ Ý khác {@code GET /mls/devices} (chỉ xem thiết bị của
+   * CHÍNH mình) — endpoint này cho tra deviceId của BẤT KỲ ai, vì bất kỳ member nào trong 1 group
+   * cũng cần biết leaf của member KHÁC còn sống hay không để tự dọn — không lộ gì nhạy cảm hơn
+   * ngoài đúng 1 bit "deviceId này còn sống hay không" (không trả userId/label/thời điểm tạo), và
+   * tra thẳng cache Hazelcast đồng bộ (không chạm Postgres) nên rẻ, gọi thoải mái.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "mls/devices/revoked-check", type = Type.HTTP)})
+  public CompletionStage<byte[]> checkRevokedMlsDevices(IRequest request) {
+    requireAuthenticatedUserId(request); // chỉ cần đã đăng nhập -- không giới hạn theo userId nào
+    var body = parseJsonBody(request);
+    var rawIds = body.getJsonArray("deviceIds");
+    if (rawIds == null || rawIds.isEmpty()) {
+      return CompletableFuture.completedFuture(bytes(new JsonObject().put("revokedDeviceIds", new JsonArray())));
+    }
+    if (rawIds.size() > MLS_REVOKED_CHECK_MAX_IDS) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "quá nhiều deviceId trong 1 lượt kiểm tra");
+    }
+    var revokedIds = new JsonArray();
+    for (var raw : rawIds) {
+      var deviceId = UUIDUtils.parseOrDefault(String.valueOf(raw));
+      if (deviceId != null && revokedDevices.isRevoked(deviceId)) revokedIds.add(deviceId.toString());
+    }
+    return CompletableFuture.completedFuture(bytes(new JsonObject().put("revokedDeviceIds", revokedIds)));
+  }
+
   /**
    * {@code PUT /mls/group-info?conversationId=<uuid>} — body {@code {groupInfo: "<base64 wire>",
    * expectedEpoch: <long>, newEpoch: <long>}}. Ghi đè GroupInfo công khai MỚI NHẤT của group (RFC

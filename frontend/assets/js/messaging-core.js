@@ -445,6 +445,70 @@ function computeMentionedUserIds(text, conversationId) {
     });
 }
 
+// ===== Banner cảnh báo E2E "nằm lại" trong header đoạn chat (VD "X chưa bật mã hoá -- tin sẽ không
+// đến được cho họ") -- xem e2eDrainAddCommits/e2eCommitAddMany ở mls-crypto.js. TRƯỚC ĐÂY chỉ dùng
+// showToast() (tự biến mất sau 2.2s) -- câu cảnh báo dài, người dùng không có mặt đúng lúc nó hiện lên
+// (VD đang proactive-sync nền, không phải lúc user tự thao tác) thì mất luôn, không có cách nào biết
+// lại được. Lưu theo conversationId (không phải theo card, vì card có thể CHƯA tồn tại lúc cảnh báo
+// xảy ra -- ensureConversationCard tự áp lại khi card được dựng, xem renderConvE2eWarnings ở trên).
+//
+// Lưu CẢ xuống localStorage (không chỉ biến JS trong bộ nhớ) -- bug thật đã gặp lúc test: F5 lại trang
+// là mất sạch cảnh báo dù tình huống (người kia vẫn chưa bật mã hoá) chưa hề thay đổi -- vì mọi biến
+// JS bị xoá sạch lúc reload, y hệt showToast() cũ chỉ là "chậm hơn" chứ chưa thật sự "nằm lại". Namespace
+// theo myUserId (giống MLS_DEVICE_ID_STORAGE) -- tránh lộ cảnh báo của tài khoản A sang tài khoản B nếu
+// dùng chung 1 trình duyệt.
+var E2E_CONV_WARNINGS_STORAGE_KEY = 'pingoE2eConvWarnings_v1';
+var e2eConvWarnings = null; // lazy-load (myUserId chưa có giá trị thật lúc file này mới load, xem getE2eConvWarnings)
+function getE2eConvWarnings() {
+    if (e2eConvWarnings === null) {
+        try { e2eConvWarnings = JSON.parse(localStorage.getItem(E2E_CONV_WARNINGS_STORAGE_KEY + ':' + myUserId)) || {}; }
+        catch (e) { e2eConvWarnings = {}; }
+    }
+    return e2eConvWarnings;
+}
+function saveE2eConvWarnings() {
+    try { localStorage.setItem(E2E_CONV_WARNINGS_STORAGE_KEY + ':' + myUserId, JSON.stringify(e2eConvWarnings)); }
+    catch (e) { /* cảnh báo chỉ là tiện ích phụ -- localStorage đầy thì bỏ qua lặng lẽ, không chặn luồng chính */ }
+}
+// Lưu theo {userId: text} (không phải mảng chuỗi thô) -- CẦN biết đúng userId của TỪNG dòng cảnh báo để
+// tự xoá đúng dòng đó khi người này SAU ĐÓ được add thành công (xem clearConvE2eWarningForUser, gọi từ
+// mls-crypto.js ngay lúc add-commit cho đúng người đó thắng CAS) -- không thì banner cứ đứng yên MÃI
+// MÃI dù vấn đề đã hết từ lâu, gây hiểu lầm "vẫn còn lỗi" (bug thật đã tự nhận ra khi làm phần "nằm lại
+// tới khi tự đóng" -- lúc đó chưa có gì tự dọn khi hết vấn đề).
+function showConvE2eWarning(conversationId, userId, text) {
+    var all = getE2eConvWarnings();
+    var byUser = all[conversationId] || (all[conversationId] = {});
+    byUser[userId] = text; // ghi đè nếu đã có dòng cũ của ĐÚNG người này -- không nhân đôi
+    saveE2eConvWarnings();
+    renderConvE2eWarnings(conversationId);
+}
+// Gọi khi 1 người TRƯỚC ĐÓ từng bị báo "chưa sẵn sàng" nay đã add-commit thành công -- tự xoá đúng
+// dòng cảnh báo của riêng họ, giữ nguyên cảnh báo của người KHÁC (nếu group add nhiều người 1 lượt,
+// có người được có người chưa).
+function clearConvE2eWarningForUser(conversationId, userId) {
+    var all = getE2eConvWarnings();
+    var byUser = all[conversationId];
+    if (!byUser || !(userId in byUser)) return;
+    delete byUser[userId];
+    if (!Object.keys(byUser).length) delete all[conversationId];
+    saveE2eConvWarnings();
+    renderConvE2eWarnings(conversationId);
+}
+function dismissConvE2eWarnings(conversationId) {
+    delete getE2eConvWarnings()[conversationId];
+    saveE2eConvWarnings();
+    renderConvE2eWarnings(conversationId);
+}
+function renderConvE2eWarnings(conversationId) {
+    var entry = conversations[conversationId];
+    if (!entry) return; // card chưa dựng -- state đã lưu trong localStorage, ensureConversationCard tự gọi lại hàm này lúc dựng xong
+    var bar = entry.el.querySelector('.convE2eWarningBar');
+    var byUser = getE2eConvWarnings()[conversationId] || {};
+    var list = Object.keys(byUser).map(function (uid) { return byUser[uid]; });
+    bar.querySelector('.convE2eWarningText').innerText = list.join('\n');
+    bar.classList.toggle('show', list.length > 0);
+}
+
 function ensureConversationCard(conversationId, label, subtitle) {
     if (conversations[conversationId]) return conversations[conversationId];
 
@@ -468,6 +532,9 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
         '<button class="icon infoBtn" title="Ẩn/hiện panel thông tin" onclick="toggleInfoPanel()">' + ICON.info + '</button>' +
         '</div></div>' +
+        '<div class="convE2eWarningBar"><span class="convE2eWarningIcon">⚠️</span>' +
+        '<span class="convE2eWarningText"></span>' +
+        '<button type="button" class="convE2eWarningClose" title="Đóng">✕</button></div>' +
         '<div class="convSearchBar"><span class="convSearchIcon">' + ICON.search + '</span>' +
         '<input type="text" class="convSearchInput" placeholder="Tìm trong đoạn chat...">' +
         '<span class="convSearchCount"></span>' +
@@ -497,6 +564,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     card.querySelector('.renameBtn').onclick = function () { renameConversation(conversationId); };
     card.querySelector('.deleteBtn').onclick = function () { deleteConversation(conversationId); };
     card.querySelector('.leaveBtn').onclick = function () { leaveConversation(conversationId); };
+    card.querySelector('.convE2eWarningClose').onclick = function () { dismissConvE2eWarnings(conversationId); };
     var starBtnEl = card.querySelector('.starBtn');
     starBtnEl.classList.toggle('active', isConversationStarred(conversationId));
     starBtnEl.title = isConversationStarred(conversationId) ? 'Bỏ gắn sao' : 'Gắn sao';
@@ -1104,6 +1172,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     // Đo lại mốc .conv-send NGAY lúc card hiện ra (gọi từ selectConversation) -- offsetHeight đồng bộ ở đây tránh phụ thuộc lần ResizeObserver báo đầu tiên có thể đã gộp mất thay đổi thật (xem composeResizeObserver phía trên).
     entry.resetComposeSendBaseline = function () { lastConvSendHeight = convSendEl.offsetHeight; };
     conversations[conversationId] = entry;
+    renderConvE2eWarnings(conversationId); // card vừa dựng xong (conversations[conversationId] đã gán) -- áp ngay cảnh báo đang treo sẵn (nếu có, xem showConvE2eWarning)
 
     // ===== Tìm trong đoạn chat đang mở (xem GET /messages/search, hall) =====
     card.querySelector('.searchToggleBtn').onclick = function (e) { e.stopPropagation(); toggleConvSearch(conversationId); };
