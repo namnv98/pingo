@@ -11,6 +11,8 @@ import com.pingo.core.common.comp.LifeCycle;
 import com.pingo.core.common.token.JwtHelper;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.e2e.MlsDeviceRegistry;
+import com.pingo.chat.domain.e2e.RevokedDeviceRegistry;
 import com.pingo.chat.domain.presence.PresenceRegistry;
 import com.pingo.core.common.jdbcpool.supplier.JdbcConnectionSupplier;
 import com.pingo.harbor.ws.HarborSessionManager;
@@ -57,8 +59,33 @@ public class HarborAppModule extends AbstractModule {
   @Provides
   @Singleton
   private HarborSessionManager harborSessionManager(
-      PingoConnector connector, JwtHelper jwtHelper, ConversationMembershipRegistry membership, PresenceRegistry presence) {
-    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper, membership, presence);
+      PingoConnector connector, JwtHelper jwtHelper, ConversationMembershipRegistry membership, PresenceRegistry presence,
+      RevokedDeviceRegistry revokedDevices) {
+    return new HarborSessionManager(resolveServerId(), vertx, connector, config, jwtHelper, membership, presence, revokedDevices);
+  }
+
+  /** Registry thiết bị MLS (Postgres, nguồn thật) -- xem javadoc {@link MlsDeviceRegistry}. Harbor CHỈ ĐỌC (hydrate cache lúc boot, xem {@link #revokedDeviceRegistry}). */
+  @Provides
+  @Singleton
+  private MlsDeviceRegistry mlsDeviceRegistry(JdbcConnectionSupplier supplier) {
+    return new MlsDeviceRegistry(supplier);
+  }
+
+  /**
+   * Cache đồng bộ "deviceId đã revoke chưa" -- xem javadoc {@link RevokedDeviceRegistry}. Hazelcast
+   * IMap dùng CHUNG cluster với hall (nơi ghi lúc user bấm "gỡ thiết bị"/logout, xem
+   * HallAppModule#revokedDeviceRegistry) nên harbor thấy thay đổi gần như ngay lập tức, không cần tự
+   * ghi -- chỉ hydrate 1 lần lúc boot phòng harbor khởi động SAU khi hall đã có dữ liệu cũ trong
+   * Postgres nhưng cụm Hazelcast vừa mới dựng lại (map rỗng). BẤT ĐỒNG BỘ, KHÔNG {@code .join()} --
+   * xem javadoc y hệt ở {@code HallAppModule#revokedDeviceRegistry} (block ở đây từng làm treo cứng
+   * hall lúc boot, không phản hồi được request nào).
+   */
+  @Provides
+  @Singleton
+  private RevokedDeviceRegistry revokedDeviceRegistry(HazelcastInstance hazelcastInstance, MlsDeviceRegistry mlsDevices) {
+    var registry = new RevokedDeviceRegistry(hazelcastInstance);
+    mlsDevices.listAllRevokedDeviceIds().thenAccept(ids -> ids.forEach(registry::markRevoked));
+    return registry;
   }
 
   /**

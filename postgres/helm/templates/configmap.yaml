@@ -426,3 +426,23 @@ data:
         epoch BIGINT NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Registry thiết bị MLS (device_id do client tự sinh 1 lần/trình duyệt, gửi kèm ngay lúc
+    -- /register hoặc /login -- xem HallApiHandlers#issueToken) -- 2 việc: (1) cho user TỰ xem được
+    -- danh sách thiết bị của chính mình (label đoán từ User-Agent, xem frontend's
+    -- e2eGuessDeviceLabel) ở màn hình hồ sơ, (2) THU HỒI (revoke) 1 thiết bị -- "xoá thiết bị" trên
+    -- UI đồng nghĩa buộc đăng xuất NGAY LẬP TỨC thiết bị đó, không đợi token JWT hết hạn tự nhiên:
+    -- revoked_at khác NULL -> MỌI request (kể cả AUTH qua WebSocket ở harbor) mang JWT có deviceId
+    -- này đều bị từ chối ngay từ MlsDeviceRegistry#isRevoked, dù chữ ký JWT vẫn hợp lệ và chưa hết
+    -- hạn (JWT tự nó không mang trạng thái, không thể "thu hồi" theo nghĩa thông thường -- bảng này
+    -- chính là danh sách thu hồi bù cho thiếu sót đó). 1 device_id đã revoke thì KHÔNG được tái sử
+    -- dụng lại (registerDevice từ chối ghi đè khi đã revoked) -- client phải tự sinh device_id MỚI
+    -- nếu muốn đăng nhập lại trên đúng trình duyệt đó.
+    CREATE TABLE IF NOT EXISTS mls_devices (
+        device_id UUID NOT NULL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        label TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        revoked_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_devices_user ON mls_devices (user_id, revoked_at);

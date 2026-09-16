@@ -2,7 +2,9 @@ package com.pingo.hall.api;
 
 import com.google.inject.Inject;
 import com.pingo.chat.domain.e2e.E2eKeyRegistry;
+import com.pingo.chat.domain.e2e.MlsDeviceRegistry;
 import com.pingo.chat.domain.e2e.MlsRegistry;
+import com.pingo.chat.domain.e2e.RevokedDeviceRegistry;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -94,6 +96,8 @@ public class HallApiHandlers {
   private final MessageLinkRegistry links;
   private final E2eKeyRegistry e2eKeys;
   private final MlsRegistry mls;
+  private final MlsDeviceRegistry mlsDevices;
+  private final RevokedDeviceRegistry revokedDevices;
   private final AtomicBoolean ready;
   private final Vertx vertx;
 
@@ -237,7 +241,11 @@ public class HallApiHandlers {
     return users.listUsers().thenApply(HallApiHandlers::bytes);
   }
 
-  /** {@code POST /register} — body JSON {@code {username, password}}. id do server tự sinh, password được hash trước khi lưu. */
+  /**
+   * {@code POST /register} — body JSON {@code {username, password, deviceId, label}}. id do server
+   * tự sinh, password được hash trước khi lưu. {@code deviceId}/{@code label} — xem javadoc {@link
+   * #withToken}.
+   */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "register", type = Type.HTTP)})
   public CompletionStage<byte[]> register(IRequest request) {
     var body = parseJsonBody(request);
@@ -247,9 +255,12 @@ public class HallApiHandlers {
     }
     var username = body.getString("username").strip();
     var password = body.getString("password");
+    var deviceId = UUIDUtils.parseOrDefault(body.getString("deviceId"));
+    var label = body.getString("label");
     return users
         .registerUser(username, password)
-        .thenApply(created -> bytes(withToken(created)))
+        .thenCompose(created -> withToken(created, deviceId, label))
+        .thenApply(HallApiHandlers::bytes)
         .exceptionally(ex -> {
           if (unwrap(ex) instanceof UserRegistry.UsernameTakenException) {
             throw new LegoBusinessException(HallErrorKeys.CONFLICT, "username taken");
@@ -258,7 +269,11 @@ public class HallApiHandlers {
         });
   }
 
-  /** {@code POST /login} — body JSON {@code {username, password}}. Trả 401 chung chung cho cả "không tồn tại" lẫn "sai mật khẩu". */
+  /**
+   * {@code POST /login} — body JSON {@code {username, password, deviceId, label}}. Trả 401 chung
+   * chung cho cả "không tồn tại" lẫn "sai mật khẩu". {@code deviceId}/{@code label} — xem javadoc
+   * {@link #withToken}.
+   */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "login", type = Type.HTTP)})
   public CompletionStage<byte[]> login(IRequest request) {
     var body = parseJsonBody(request);
@@ -267,14 +282,17 @@ public class HallApiHandlers {
     if (isBlank(username) || isBlank(password)) {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing username/password");
     }
+    var deviceId = UUIDUtils.parseOrDefault(body.getString("deviceId"));
+    var label = body.getString("label");
     return users
         .verifyLogin(username.strip(), password)
-        .thenApply(found -> {
+        .thenCompose(found -> {
           if (found.isEmpty()) {
             throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "invalid credentials");
           }
-          return bytes(withToken(found.get()));
-        });
+          return withToken(found.get(), deviceId, label);
+        })
+        .thenApply(HallApiHandlers::bytes);
   }
 
   /**
@@ -782,7 +800,12 @@ public class HallApiHandlers {
     return resolveUserId(header.substring(BEARER_PREFIX.length()).strip());
   }
 
-  /** Verify 1 chuỗi token JWT thô (đã tách khỏi header/query) -- dùng chung cho cả 2 đường lấy token (header Bearer, hoặc query param -- xem {@link #createFile}). */
+  /**
+   * Verify 1 chuỗi token JWT thô (đã tách khỏi header/query) -- dùng chung cho cả 2 đường lấy token
+   * (header Bearer, hoặc query param -- xem {@link #createFile}). THÊM check thu hồi thiết bị (xem
+   * javadoc {@link RevokedDeviceRegistry}) -- claim {@code deviceId} có thể vắng mặt (token cũ, issue
+   * trước khi có tính năng này) thì bỏ qua check, KHÔNG coi thiếu claim là đã revoke.
+   */
   private UUID resolveUserId(String rawToken) {
     if (rawToken == null || rawToken.isBlank()) {
       throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");
@@ -793,18 +816,54 @@ public class HallApiHandlers {
       if (userId == null) {
         throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");
       }
+      var deviceId = decoded.contains("deviceId") ? decoded.getUUID("deviceId") : null;
+      if (revokedDevices.isRevoked(deviceId)) {
+        throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "device revoked");
+      }
       return userId;
     } catch (NdlTokenException e) {
       throw new LegoBusinessException(HallErrorKeys.UNAUTHORIZED, "missing/invalid/expired token");
     }
   }
 
-  private String issueToken(UUID userId, String username) {
-    return jwtHelper.tokenBuilder().withClaim("userId", userId).withClaim("username", username).withClaim("exp", Instant.now().plus(TOKEN_TTL)).build();
+  private String issueToken(UUID userId, String username, UUID deviceId) {
+    var builder = jwtHelper.tokenBuilder().withClaim("userId", userId).withClaim("username", username).withClaim("exp", Instant.now().plus(TOKEN_TTL));
+    if (deviceId != null) {
+      builder = builder.withClaim("deviceId", deviceId);
+    }
+    return builder.build();
   }
 
-  private JsonObject withToken(JsonObject user) {
-    return user.copy().put("token", issueToken(UUID.fromString(user.getString("id")), user.getString("username")));
+  /**
+   * Gắn token JWT vào response của {@link #register}/{@link #login}. {@code deviceId} -- UUID do
+   * CLIENT tự sinh 1 lần/trình duyệt, gửi kèm NGAY LÚC đăng nhập (không đợi tới lúc {@code PUT
+   * /mls/key-packages} -- xem frontend's {@code auth.js#doAuth}) -- được NHÚNG vào claim JWT để
+   * {@link #resolveUserId}/harbor's {@code handleAuth} tra được "thiết bị này đã bị revoke chưa"
+   * ngay từ request đầu tiên, và đăng ký (upsert) vào {@link MlsDeviceRegistry} để hiện trong danh
+   * sách "Thiết bị của tôi". {@code deviceId} có thể null (client cũ chưa gửi) -- vẫn issue token
+   * bình thường, chỉ là không nhúng được claim đó (không revoke được thiết bị này qua UI).
+   *
+   * <p><b>Bug thật đã gặp (self-lockout vĩnh viễn)</b>: nếu {@code deviceId} client gửi lên ĐÃ bị
+   * revoke TỪ TRƯỚC (vd bị gỡ từ 1 thiết bị KHÁC qua "Thiết bị của tôi" -- không phải tự thiết bị
+   * này logout, nên KHÔNG có cơ hội tự xoá cache deviceId cục bộ của chính nó), issue token mang
+   * claim {@code deviceId} đó sẽ khiến NGAY request kế tiếp (thậm chí GET /conversations đầu tiên
+   * sau login) bị {@link #resolveUserId} chặn 401 -- và vì client cứ tái dùng ĐÚNG deviceId cũ mỗi
+   * lần login (cache localStorage), user KẸT VĨNH VIỄN không đăng nhập lại được nữa dù gõ đúng mật
+   * khẩu. Xử lý: coi như client KHÔNG gửi deviceId (issue token không claim đó, hành vi giống nhánh
+   * null ở trên) + đánh dấu {@code deviceRevoked: true} trong response để client TỰ xoá cache +
+   * sinh deviceId MỚI cho lần sau (xem frontend's {@code auth.js#doAuth}, tự retry 1 lần).
+   */
+  private CompletionStage<JsonObject> withToken(JsonObject user, UUID deviceId, String label) {
+    var userId = UUID.fromString(user.getString("id"));
+    var username = user.getString("username");
+    if (deviceId == null) {
+      return CompletableFuture.completedFuture(user.copy().put("token", issueToken(userId, username, null)));
+    }
+    if (revokedDevices.isRevoked(deviceId)) {
+      return CompletableFuture.completedFuture(user.copy().put("token", issueToken(userId, username, null)).put("deviceRevoked", true));
+    }
+    return mlsDevices.registerDevice(userId, deviceId, label)
+        .thenApply(unused -> user.copy().put("token", issueToken(userId, username, deviceId)));
   }
 
   private static JsonObject parseJsonBody(IRequest request) {
@@ -996,6 +1055,41 @@ public class HallApiHandlers {
       throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
     }
     return mls.deleteKeyPackagesOfDevice(deviceId, userId)
+        .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
+  }
+
+  /**
+   * {@code GET /mls/devices} — mọi thiết bị CÒN SỐNG (chưa gỡ) của CHÍNH mình, cho màn hình "Thiết
+   * bị của tôi" (xem {@code sidebar-conversations.js#refreshProfileDeviceList}). Xem javadoc {@link
+   * MlsDeviceRegistry#listDevices}.
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.GET, endpoint = "mls/devices", type = Type.HTTP)})
+  public CompletionStage<byte[]> listMlsDevices(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    return mlsDevices.listDevices(userId).thenApply(devices -> bytes(new JsonObject().put("devices", devices)));
+  }
+
+  /**
+   * {@code DELETE /mls/devices?deviceId=<uuid>} — "gỡ" 1 thiết bị của CHÍNH mình: THU HỒI ngay lập
+   * tức (mọi request sau đó, kể cả AUTH qua WebSocket ở harbor, bị từ chối dù JWT chưa hết hạn — xem
+   * javadoc {@link RevokedDeviceRegistry}), đồng thời dọn nốt KeyPackage chưa dùng của nó (giống
+   * {@link #deleteMlsKeyPackages}, gộp lại đây cho gọn — client (xem {@code
+   * mls-crypto.js#e2eDeleteDevice}) chỉ cần gọi 1 endpoint). Dùng cho cả 2 luồng: tự gỡ thiết bị
+   * KHÁC qua màn hình "Thiết bị của tôi", lẫn thiết bị TỰ thu hồi chính mình lúc logout (xem
+   * frontend's {@code auth.js#logout}).
+   */
+  @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.DELETE, endpoint = "mls/devices", type = Type.HTTP)})
+  public CompletionStage<byte[]> deleteMlsDevice(IRequest request) {
+    var userId = requireAuthenticatedUserId(request);
+    var deviceId = UUIDUtils.parseOrDefault(request.getParam("deviceId"));
+    if (deviceId == null) {
+      throw new LegoBusinessException(HallErrorKeys.VALIDATION, "missing/invalid deviceId");
+    }
+    return mlsDevices.revokeDevice(userId, deviceId)
+        .thenCompose(revokedNow -> {
+          if (revokedNow) revokedDevices.markRevoked(deviceId);
+          return mls.deleteKeyPackagesOfDevice(deviceId, userId);
+        })
         .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
   }
 

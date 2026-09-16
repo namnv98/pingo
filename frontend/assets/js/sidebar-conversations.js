@@ -115,23 +115,24 @@ function refreshProfileModalContent() {
     var myImageUrl = userAvatarUrl(myUserId);
     applyAvatar(overlay.querySelector('#profileAvatarPreview'), myImageUrl ? {imageUrl: myImageUrl} : {color: avatarColor(myUserId), initial: avatarInitial(myUsername)});
     overlay.querySelector('#profileUsernameValue').innerText = myUsername;
-    // Cả 2 dòng LUÔN cùng hiện (khác bản trước loại trừ theo e2eReady -- giờ mỗi thiết bị tự có
-    // identity riêng ngay từ đầu, không còn "thiết bị chưa sẵn sàng", chỉ khác nhau ở CÓ hay CHƯA có
-    // lịch sử -- xem thảo luận Sesame/Signal thật ở đầu e2e-crypto.js) -- chỉ ẩn nếu vendor/olm.js
-    // chưa load được (E2E tắt hẳn phiên này).
-    var olmAvailable = typeof Olm !== 'undefined';
-    overlay.querySelector('#profileE2eLinkOldRow').style.display = olmAvailable ? '' : 'none';
-    overlay.querySelector('#profileE2eLinkNewRow').style.display = olmAvailable ? '' : 'none';
+    // Cả 2 dòng LUÔN cùng hiện -- chỉ ẩn nếu vendor/mls.js chưa load được (E2E tắt hẳn phiên này,
+    // xem `M` ở đầu mls-crypto.js). BUG THẬT ĐÃ GẶP: check cũ dựa vào `typeof Olm` (thư viện Olm cũ,
+    // KHÔNG còn được load từ khi chuyển sang MLS, xem index.html) -- luôn false, khiến 2 dòng này (và
+    // cả refreshProfileDeviceList bên dưới) im lặng ẩn/trắng vĩnh viễn dù MLS hoạt động bình thường.
+    var mlsAvailable = typeof M !== 'undefined' && M !== null;
+    overlay.querySelector('#profileE2eLinkOldRow').style.display = mlsAvailable ? '' : 'none';
+    overlay.querySelector('#profileE2eLinkNewRow').style.display = mlsAvailable ? '' : 'none';
     refreshProfileDeviceList();
 }
 
-// Danh sách thiết bị mã hoá của CHÍNH MÌNH (xem e2eListDevices) -- gọi lại mỗi lần mở modal (không
-// cache, danh sách hiếm khi đổi nhưng rẻ để load mới mỗi lần), cho gỡ (xoá) từng thiết bị KHÁC --
-// không cho gỡ ĐÚNG thiết bị đang dùng (muốn "đăng xuất" thiết bị hiện tại thì dùng nút Đăng xuất
-// thường, gỡ theo kiểu này chỉ dành cho máy CŨ/đã mất, xem javadoc E2eKeyRegistry#deleteDevice).
+// Danh sách thiết bị mã hoá của CHÍNH MÌNH (xem e2eListDevices, mls-crypto.js) -- gọi lại mỗi lần mở
+// modal (không cache, danh sách hiếm khi đổi nhưng rẻ để load mới mỗi lần), cho gỡ (xoá = THU HỒI
+// ngay lập tức, xem MlsDeviceRegistry#revokeDevice) từng thiết bị KHÁC -- không cho gỡ ĐÚNG thiết bị
+// đang dùng (muốn "đăng xuất" thiết bị hiện tại thì dùng nút Đăng xuất thường, tự thu hồi chính nó
+// -- xem logout()).
 function refreshProfileDeviceList() {
     var listEl = document.getElementById('profileE2eDeviceList');
-    if (!listEl || typeof Olm === 'undefined') return;
+    if (!listEl || typeof M === 'undefined' || M === null) return;
     listEl.innerText = 'Đang tải...';
     e2eListDevices().then(function (devices) {
         if (!devices.length) { listEl.innerText = 'Chưa có thiết bị nào.'; return; }
@@ -151,7 +152,7 @@ function refreshProfileDeviceList() {
                 delBtn.className = 'icon fa-solid fa-trash';
                 delBtn.title = 'Gỡ thiết bị này';
                 delBtn.onclick = function () {
-                    appConfirm('Gỡ "' + (d.label || 'thiết bị này') + '"? Thiết bị đó sẽ không đọc/gửi được tin mã hoá mới nữa (tin đã lỡ gửi trước đó thì thôi, không thu hồi lại được).', {
+                    appConfirm('Gỡ "' + (d.label || 'thiết bị này') + '"? Thiết bị đó sẽ bị đăng xuất NGAY LẬP TỨC và không đọc/gửi được tin mã hoá mới nữa (tin đã lỡ gửi trước đó thì thôi, không thu hồi lại được).', {
                         title: 'Gỡ thiết bị', confirmText: 'Gỡ', cancelText: 'Huỷ', danger: true
                     }).then(function (ok) {
                         if (!ok) return;

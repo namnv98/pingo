@@ -39,6 +39,23 @@ var e2eCs = null;              // Ciphersuite (object name->id) cache khỏi ph�
 var e2eImpl = null;            // CiphersuiteImpl (đã getCiphersuiteImpl) — engine crypto thật
 var e2eDeviceId = null;        // id THIẾT BỊ NÀY (UUID, localStorage), public (gửi server để định vị keypackage)
 var e2eDb = null;
+// Chờ lượt e2eDrainToDevice() ĐẦU TIÊN của phiên (welcome/commit thật đang chờ sẵn trên server) xong
+// TRƯỚC KHI cho self external-join (e2eTryExternalJoin) chạy -- bug thật đã gặp: enterApp() gọi
+// refreshConversationList()/connect() (dẫn tới decrypt lịch sử) KHÔNG đợi e2eInit().then(e2eDrainToDevice)
+// xong, nên lúc vừa login, 1 tin cũ cần decrypt có thể trúng nhánh "chưa có group cục bộ" và tự
+// external-join TRƯỚC KHI Welcome thật (đúng epoch, đọc được lịch sử) kịp xử lý -- self external-join
+// tạo 1 epoch MỚI, welcome thật xử lý sau đó lưu đè state nhưng epoch canonical trên server đã nhảy qua
+// rồi, mọi tin TRƯỚC epoch đó (kể cả tin gửi ngay sau lúc tạo nhóm, trước khi mình từng login) vĩnh viễn
+// "epoch too old" -- trong khi đáng lẽ Welcome thật (mình đã có KeyPackage từ trước, nằm trong Welcome
+// ngay lúc tạo nhóm) phải cho đọc được từ epoch tạo nhóm. Có timeout (E2E_INITIAL_DRAIN_TIMEOUT_MS) để
+// self-heal (member thật sự chưa từng có Welcome nào) không bị treo vĩnh viễn nếu drain lỗi/mạng treo.
+var e2eInitialDrainPromise = null;
+var e2eInitialDrainResolve = null;
+var E2E_INITIAL_DRAIN_TIMEOUT_MS = 8000;
+function e2eWaitInitialDrain() {
+    if (!e2eInitialDrainPromise) return Promise.resolve();
+    return Promise.race([e2eInitialDrainPromise, new Promise(function (resolve) { setTimeout(resolve, E2E_INITIAL_DRAIN_TIMEOUT_MS); })]);
+}
 
 // ===== IndexedDB (private key + group state + plaintext cache) =====
 function e2eOpenDb() {
@@ -96,6 +113,36 @@ function e2eDbPutAll(store, entries) {
         tx.oncomplete = function () { resolve(); };
         tx.onerror = function () { reject(tx.error); };
     }); });
+}
+// Xoá MỌI entry của userId trong 1 store (key luôn có dạng "<userId>|...", xem e2eDbGetAllForUser)
+// -- KHÔNG đụng dữ liệu của tài khoản khác từng đăng nhập chung trình duyệt này (IndexedDB dùng
+// chung 1 origin cho MỌI account, không tách theo account như localStorage key). Nhận userId qua
+// THAM SỐ (không đọc global myUserId) -- bug thật đã gặp: callback openCursor chạy BẤT ĐỒNG BỘ, nếu
+// đọc global thì tới lúc chạy myUserId có thể ĐÃ bị logout() reset về '' (clearAuth() thường chạy
+// trước khi promise IndexedDB kịp resolve), khiến prefix thành '|' và xoá nhầm/xoá hụt.
+function e2eDbDeleteAllForUser(store, userId) {
+    return e2eOpenDb().then(function (db) { return new Promise(function (resolve, reject) {
+        var prefix = userId + '|';
+        var tx = db.transaction(store, 'readwrite');
+        var s = tx.objectStore(store);
+        var req = s.openCursor();
+        req.onsuccess = function () {
+            var c = req.result;
+            if (!c) return;
+            if (String(c.key).indexOf(prefix) === 0) c.delete();
+            c.continue();
+        };
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+    }); });
+}
+// Xoá SẠCH state MLS cục bộ của {@code userId} (private KeyPackage queue, group state đã join, cache
+// tin đã giải mã) -- gọi lúc logout (xem auth.js) SAU KHI đã thu hồi thiết bị trên server, để login
+// lại (kể cả trên đúng trình duyệt/tài khoản này) bắt buộc sinh deviceId + KeyPackage MỚI, không vô
+// tình tái dùng deviceId ĐÃ BỊ THU HỒI (sẽ bị auth từ chối ngay từ request đầu tiên). Nhận userId qua
+// tham số (không phải global) -- xem lý do ở e2eDbDeleteAllForUser.
+function e2eClearLocalStateForCurrentUser(userId) {
+    return Promise.all(['keyPackages', 'groups', 'msgPlaintext'].map(function (store) { return e2eDbDeleteAllForUser(store, userId); }));
 }
 
 // ===== base64 <-> bytes =====
@@ -255,6 +302,23 @@ function e2eClaimAllDeviceKeyPackagesFor(userId) {
         .then(function (data) { return data.keyPackages || []; });
 }
 
+// ===== Quản lý thiết bị (màn hình "Hồ sơ của bạn" -> "Thiết bị của tôi", xem sidebar-conversations.js) =====
+// Danh sách thiết bị CÒN SỐNG (chưa bị gỡ) của chính mình -- xem MlsDeviceRegistry#listDevices.
+function e2eListDevices() {
+    return fetch(HISTORY_API_BASE + '/mls/devices', {
+        headers: { 'Authorization': 'Bearer ' + authToken }
+    }).then(function (res) { if (!res.ok) throw new Error('list devices HTTP ' + res.status); return res.json(); })
+        .then(function (data) { return data.devices || []; });
+}
+// Gỡ (= THU HỒI ngay lập tức, xem MlsDeviceRegistry#revokeDevice) 1 thiết bị -- thiết bị đó bị từ
+// chối MỌI request (kể cả AUTH qua WebSocket) từ giây phút này, dù JWT chưa hết hạn. Dùng cho cả
+// "gỡ thiết bị khác" (refreshProfileDeviceList) lẫn tự thu hồi chính mình lúc logout (xem auth.js).
+function e2eDeleteDevice(deviceId) {
+    return fetch(HISTORY_API_BASE + '/mls/devices?deviceId=' + encodeURIComponent(deviceId), {
+        method: 'DELETE', headers: { 'Authorization': 'Bearer ' + authToken }
+    }).then(function (res) { if (!res.ok) return res.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || ('HTTP ' + res.status)); }); });
+}
+
 // ===== Group state =====
 function e2eGroupKey(conversationId) { return myUserId + '|' + conversationId; }
 function e2eLoadGroup(conversationId) {
@@ -336,7 +400,12 @@ var e2eExternalJoinInFlight = {};
 function e2eTryExternalJoin(conversationId) {
     if (e2eExternalJoinInFlight[conversationId]) return e2eExternalJoinInFlight[conversationId];
     var clear = function () { delete e2eExternalJoinInFlight[conversationId]; };
-    var p = e2eDoTryExternalJoin(conversationId);
+    // Đợi lượt drain-to-device ĐẦU TIÊN của phiên xong trước (xem javadoc e2eInitialDrainPromise) --
+    // nếu Welcome thật đang nằm sẵn trong hàng đợi, nó cần được xử lý TRƯỚC, không phải đua song song
+    // với external-join (thua thì mất trắng lịch sử epoch cũ, dù mình có Welcome đúng epoch đó chờ sẵn).
+    // e2eDoTryExternalJoin tự re-check e2eLoadGroup ngay khi bắt đầu, nên nếu Welcome đã tới trong lúc
+    // đợi thì external-join tự thành no-op (trả về state Welcome vừa lưu), không tốn thêm 1 epoch nào.
+    var p = e2eWaitInitialDrain().then(function () { return e2eDoTryExternalJoin(conversationId); });
     p.then(clear, clear);
     e2eExternalJoinInFlight[conversationId] = p;
     return p;
@@ -414,12 +483,19 @@ function e2eGetCachedPlaintext(messageId) { return e2eDbGet('msgPlaintext', myUs
 // ===== Init =====
 // Điểm vào DUY NHẤT từ enterApp(). Sinh keypackage lô đầu nếu chưa có, publish, bật cờ ready.
 function e2eInit() {
-    if (e2eInitializedForUserId !== myUserId) { e2eReady = false; e2eReadyPromise = null; e2eImpl = null; e2eCs = null; e2eDeviceId = null; }
+    if (e2eInitializedForUserId !== myUserId) {
+        e2eReady = false; e2eReadyPromise = null; e2eImpl = null; e2eCs = null; e2eDeviceId = null;
+        e2eInitialDrainPromise = null; e2eInitialDrainResolve = null;
+    }
     if (e2eReadyPromise) return e2eReadyPromise;
     if (e2eReady) return Promise.resolve();
     if (!M) return Promise.resolve(); // vendor/mls.js chưa load được -> E2E tự tắt, app vẫn chạy
     e2eInitializedForUserId = myUserId;
     e2eDeviceId = e2eGetOrCreateDeviceId();
+    // Tạo SẴN promise chờ drain ở đây (trước cả khi e2eReady=true) -- đóng hẳn race window: bất kỳ
+    // decrypt/rotation nào gọi e2eTryExternalJoin (chỉ có thể xảy ra sau khi e2eReady=true, tức sau
+    // dòng này) đều thấy e2eInitialDrainPromise đã tồn tại và đợi đúng lượt drain của phiên này.
+    e2eInitialDrainPromise = new Promise(function (resolve) { e2eInitialDrainResolve = resolve; });
     e2eReadyPromise = Promise.resolve()
         .then(function () { e2eCs = M.getCiphersuiteFromName(MLS_CIPHERSUITE); return M.getCiphersuiteImpl(e2eCs); })
         .then(function (impl) { e2eImpl = impl; })
@@ -806,7 +882,10 @@ function e2eHandleCommit(conversationId, body) {
 }
 
 function e2eDrainToDevice() {
-    if (!e2eReady) return Promise.resolve();
+    // Dù nhánh nào cũng phải "mở khoá" e2eWaitInitialDrain() -- không thì self external-join
+    // (e2eTryExternalJoin) treo tới hết E2E_INITIAL_DRAIN_TIMEOUT_MS oan uổng.
+    var unlockInitialDrain = function () { if (e2eInitialDrainResolve) { var r = e2eInitialDrainResolve; e2eInitialDrainResolve = null; r(); } };
+    if (!e2eReady) { unlockInitialDrain(); return Promise.resolve(); }
     return fetch(HISTORY_API_BASE + '/e2e/to-device', { headers: { 'Authorization': 'Bearer ' + authToken } })
         .then(function (res) { return res.ok ? res.json() : []; })
         .then(function (items) {
@@ -817,7 +896,8 @@ function e2eDrainToDevice() {
                 return chain.then(function () { return e2eHandleToDeviceItem(item.type, item.senderUserId, item.conversationId, item.body); });
             }, Promise.resolve());
         })
-        .catch(function (err) { console.warn('không drain được e2e to-device', err); });
+        .catch(function (err) { console.warn('không drain được e2e to-device', err); })
+        .then(unlockInitialDrain);
 }
 
 // ===== Liên kết thiết bị (mã 6 ký tự) — chuyển LỊCH SỬ ĐÃ GIẢI MÃ qua 1 NHÓM MLS TẠM =====
@@ -940,7 +1020,14 @@ function e2eImportTransfer(transfer) {
     // local (không đè group hiện có — group local có thể đã advance epoch cao hơn file export).
     var mp = (transfer.msgPlaintext || []).filter(function (e) { return String(e.key).indexOf(myUserId + '|') === 0; });
     var gs = (transfer.groups || []).filter(function (e) { return String(e.key).indexOf(myUserId + '|') === 0; });
-    var gEntries = gs.map(function (e) { return { key: e.key, value: { stateB64: e.value.stateB64 || e.stateB64 } }; });
+    // Bug thật đã gặp: `e.value.stateB64 || e.stateB64` TỰ THROW ngay (TypeError: Cannot read
+    // properties of undefined) nếu `e.value` là undefined -- KHÔNG "rơi" được xuống `e.stateB64` như
+    // tưởng, vì phải ĐỌC ĐƯỢC `.stateB64` trên `e.value` trước thì `||` mới có gì để so sánh. Cả 2
+    // nơi gửi (e2eApproveDeviceLink dòng ~974, e2eCreateBackup dòng ~1105) đều gửi dạng PHẲNG `{key,
+    // stateB64}` (không có `.value`) -- nên `e.value` LUÔN undefined trên đường nhận này, crash ngay
+    // khi transfer có ÍT NHẤT 1 group (test trước đó dùng tài khoản rỗng, không group nào nên không
+    // lộ ra). Phải kiểm tra `e.value` tồn tại trước khi đọc `.stateB64` trên nó.
+    var gEntries = gs.map(function (e) { return { key: e.key, value: { stateB64: (e.value && e.value.stateB64) || e.stateB64 } }; });
     return Promise.all([e2eDbPutAll('msgPlaintext', mp), (function () {
         if (!gEntries.length) return Promise.resolve();
         // merge: giữ cái đã có, chỉ thêm cái thiếu

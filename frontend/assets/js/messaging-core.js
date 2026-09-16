@@ -101,10 +101,20 @@ function retrySendMessage(messageId) {
     }
     e2eMaybeEncryptForSend(frame.conversationId, frame.body)
         .then(function (wireBody) {
-            var newFrame = {type: 'MESSAGE', id: frame.id, conversationId: frame.conversationId, body: wireBody};
-            pendingSentMessages[messageId] = newFrame; // cập nhật frame đã encrypt để lần retry sau (nếu có) dùng
-            if (send(newFrame)) scheduleSendTimeout(messageId);
-            else markMessageFailed(messageId, 'Mất kết nối');
+            // Bug thật đã gặp: thiếu đúng dòng cache này (có ở sendChatMessage, KHÔNG có ở đây) --
+            // Double Ratchet/MLS XOÁ khoá ngay sau khi mã hoá xong (forward secrecy, xem
+            // e2eMaybeEncryptForSend), nên nếu tin phải qua RETRY (lần đầu lỗi mạng/CAS tạm thời...)
+            // mới gửi được, chính người gửi KHÔNG BAO GIỜ tự giải mã lại được bản mình vừa gửi khi nó
+            // echo về (processPrivateMessage ném CryptoError OperationError -- khoá generation đó đã
+            // bị zero-out) -- phải cache y hệt sendChatMessage để tự nhận lại đúng bản plaintext cục
+            // bộ, không đi qua đường giải mã thật lần 2.
+            var cacheDone = wireBody && wireBody.e2e ? e2eCachePlaintext(messageId, frame.body) : Promise.resolve();
+            return cacheDone.then(function () {
+                var newFrame = {type: 'MESSAGE', id: frame.id, conversationId: frame.conversationId, body: wireBody};
+                pendingSentMessages[messageId] = newFrame; // cập nhật frame đã encrypt để lần retry sau (nếu có) dùng
+                if (send(newFrame)) scheduleSendTimeout(messageId);
+                else markMessageFailed(messageId, 'Mất kết nối');
+            });
         })
         .catch(function (err) { markMessageFailed(messageId, 'Mã hoá lỗi: ' + err.message); });
 }

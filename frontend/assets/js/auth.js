@@ -19,6 +19,23 @@ function saveAuth(id, username, token) {
     localStorage.setItem(STORAGE_TOKEN_KEY, token);
 }
 
+// deviceId phải được BIẾT TRƯỚC lúc gọi /login|/register (gửi kèm để server nhúng vào claim JWT,
+// xem HallApiHandlers#issueToken -- cần cho tính năng thu hồi thiết bị tức thời, MlsDeviceRegistry),
+// nhưng lúc đó CHƯA có myUserId (chỉ có username người dùng vừa gõ) -- khoá tạm theo username. Sau
+// khi login/register xong (biết userId thật), migrate sang đúng khoá mls-crypto.js đọc
+// (MLS_DEVICE_ID_STORAGE + ':' + userId, xem e2eGetOrCreateDeviceId) để e2eInit() TÁI DÙNG đúng
+// deviceId này thay vì tự sinh cái khác -- 1 thiết bị chỉ có ĐÚNG 1 deviceId xuyên suốt từ lúc
+// login tới lúc e2eInit() publish KeyPackage.
+var AUTH_DEVICE_ID_PREFIX = 'pingo_device_id:';
+function getOrCreateAuthDeviceId(username) {
+    var k = AUTH_DEVICE_ID_PREFIX + username;
+    var existing = localStorage.getItem(k);
+    if (existing) return existing;
+    var id = crypto.randomUUID();
+    localStorage.setItem(k, id);
+    return id;
+}
+
 function clearAuth() {
     myUserId = '';
     myUsername = '';
@@ -28,7 +45,10 @@ function clearAuth() {
     localStorage.removeItem(STORAGE_TOKEN_KEY);
 }
 
-function doAuth(path) {
+// _isRetry: nội bộ, không truyền tay -- xem nhánh deviceRevoked bên dưới (bug thật đã gặp: gỡ 1
+// thiết bị TỪ THIẾT BỊ KHÁC khiến chính thiết bị đó kẹt vĩnh viễn "sai mật khẩu"/401 mọi thứ, vì nó
+// cứ tái dùng ĐÚNG deviceId cũ đã bị revoke mỗi lần login -- xem javadoc HallApiHandlers#withToken).
+function doAuth(path, _isRetry) {
     clearAuthError();
     var username = document.getElementById('authUsername').value.trim();
     var password = document.getElementById('authPassword').value;
@@ -36,10 +56,12 @@ function doAuth(path) {
         showAuthError('nhập đủ username và password');
         return;
     }
+    var deviceId = getOrCreateAuthDeviceId(username);
+    var label = (typeof e2eGuessDeviceLabel === 'function') ? e2eGuessDeviceLabel() : undefined;
     fetch(HISTORY_API_BASE + path, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({username: username, password: password})
+        body: JSON.stringify({username: username, password: password, deviceId: deviceId, label: label})
     })
         .then(function (res) {
             return res.json().then(function (data) { return {ok: res.ok, data: data}; });
@@ -49,7 +71,19 @@ function doAuth(path) {
                 showAuthError(result.data.error || ('HTTP ' + result.status));
                 return;
             }
+            if (result.data.deviceRevoked && !_isRetry) {
+                // deviceId cục bộ đã bị revoke (từ 1 thiết bị khác) -- server đã issue token KHÔNG
+                // mang claim đó (dùng tạm được), nhưng phải xoá cache + sinh deviceId MỚI rồi login
+                // lại 1 lần nữa NGAY để có token mang deviceId hợp lệ (không thì "Thiết bị của tôi"/
+                // thu hồi tương lai không hoạt động đúng cho phiên này). Giới hạn ĐÚNG 1 lần retry
+                // (_isRetry=true) -- deviceId mới không bao giờ bị revoke sẵn, không lặp vô hạn.
+                localStorage.removeItem(AUTH_DEVICE_ID_PREFIX + username);
+                doAuth(path, true);
+                return;
+            }
             saveAuth(result.data.id, result.data.username, result.data.token);
+            // Migrate deviceId sang khoá mls-crypto.js sẽ đọc (xem getOrCreateAuthDeviceId ở trên).
+            localStorage.setItem(MLS_DEVICE_ID_STORAGE + ':' + result.data.id, deviceId);
             enterApp();
         })
         .catch(function (err) {
@@ -63,6 +97,25 @@ function logout() {
     identityConfirmed = false; // truoc khi close() de ws.onclose khong tu retry
     if (ws) { ws.close(); ws = null; }
     unregisterPushToken(); // TRƯỚC clearAuth() -- cần authToken còn hợp lệ để gọi DELETE /push-tokens (xem push-notifications.js)
+    // Đăng xuất PHẢI thu hồi luôn chính thiết bị này (không chỉ xoá token cục bộ) -- nếu không, ai
+    // lấy được token cũ (chưa hết hạn, TOKEN_TTL 7 ngày) vẫn dùng được bình thường sau khi "đã đăng
+    // xuất". Thu hồi TRƯỚC khi clearAuth() xoá authToken khỏi bộ nhớ (cần token hợp lệ để gọi DELETE).
+    // Chạy nền, không chặn phần dọn UI bên dưới (mất mạng vẫn phải đăng xuất được cục bộ) -- xoá luôn
+    // deviceId khỏi localStorage NGAY CẢ KHI revoke lỗi (mất mạng...): giữ deviceId cũ lại thì lần
+    // login sau (nếu revoke đã trót thành công phía server) sẽ tự khoá chính mình ngay từ request đầu
+    // (xem MlsDeviceRegistry#registerDevice's ON CONFLICT ... WHERE revoked_at IS NULL) -- thà sinh
+    // deviceId mới oan 1 lần còn hơn tự lock mình ra khỏi tài khoản.
+    var loggedOutUserId = myUserId;
+    var loggedOutUsername = myUsername;
+    var deviceIdToRevoke = e2eDeviceId || (loggedOutUserId ? localStorage.getItem(MLS_DEVICE_ID_STORAGE + ':' + loggedOutUserId) : null);
+    if (authToken && deviceIdToRevoke) {
+        e2eDeleteDevice(deviceIdToRevoke).catch(function (err) { console.warn('[e2e-mls] thu hồi thiết bị lúc logout lỗi (bỏ qua)', err); });
+    }
+    if (loggedOutUserId) {
+        localStorage.removeItem(MLS_DEVICE_ID_STORAGE + ':' + loggedOutUserId);
+        e2eClearLocalStateForCurrentUser(loggedOutUserId).catch(function (err) { console.warn('[e2e-mls] xoá state cục bộ lúc logout lỗi (bỏ qua)', err); });
+    }
+    if (loggedOutUsername) localStorage.removeItem(AUTH_DEVICE_ID_PREFIX + loggedOutUsername);
     clearAuth();
     conversations = {};
     activeConversationId = null;

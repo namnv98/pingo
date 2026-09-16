@@ -1,6 +1,7 @@
 package com.pingo.harbor.ws;
 
 import com.pingo.chat.domain.membership.ConversationMembershipRegistry;
+import com.pingo.chat.domain.e2e.RevokedDeviceRegistry;
 import com.pingo.chat.domain.presence.PresenceRegistry;
 import com.pingo.connector.PingoConnector;
 import com.pingo.core.boot.start.LegoConfig1;
@@ -65,6 +66,12 @@ public class HarborSessionManager {
      */
     private PresenceRegistry presence;
     /**
+     * Chặn AUTH của thiết bị đã bị "gỡ"/tự thu hồi lúc logout NGAY LẬP TỨC (xem
+     * {@link #handleAuth}) — không đợi JWT hết hạn tự nhiên (TOKEN_TTL 7 ngày bên hall). Xem javadoc
+     * {@link RevokedDeviceRegistry}.
+     */
+    private RevokedDeviceRegistry revokedDevices;
+    /**
      * false kể từ khi {@link #drain()} bắt đầu — dùng cho readinessProbe.
      */
     @Getter
@@ -72,7 +79,7 @@ public class HarborSessionManager {
 
     public HarborSessionManager(
             String serverId, Vertx vertx, PingoConnector connector, LegoConfig1 config, JwtHelper jwtHelper,
-            ConversationMembershipRegistry membership, PresenceRegistry presence) {
+            ConversationMembershipRegistry membership, PresenceRegistry presence, RevokedDeviceRegistry revokedDevices) {
         this.serverId = serverId;
         this.vertx = vertx;
         this.backendStreamGateway = new BackendStreamGateway(vertx, connector, config, this::sendToClient, new GrpcClientPool(vertx));
@@ -80,6 +87,7 @@ public class HarborSessionManager {
         this.jwtHelper = jwtHelper;
         this.membership = membership;
         this.presence = presence;
+        this.revokedDevices = revokedDevices;
         vertx.setPeriodic(HEARTBEAT_SWEEP_INTERVAL_MS, tid -> heartbeatSweep());
     }
 
@@ -204,15 +212,25 @@ public class HarborSessionManager {
             return;
         }
         UUID userId;
+        UUID deviceId;
         try {
             var decoded = jwtHelper.decode(frame.getToken());
             userId = decoded.getUUID("userId");
+            // Token cũ (issue trước khi có tính năng thu hồi thiết bị) không mang claim này -- coi
+            // như "không có thiết bị để tra", KHÔNG được coi thiếu claim là đã revoke (contains()
+            // trước khi getUUID() -- getClaim() trả 1 Claim rỗng chứ không null cho claim thiếu, gọi
+            // .asString() trên đó vẫn an toàn trả null, nhưng contains() rõ ý hơn).
+            deviceId = decoded.contains("deviceId") ? decoded.getUUID("deviceId") : null;
         } catch (NdlTokenException e) {
             sendToClient(session, SocketFrames.authError(frame.getId(), "invalid or expired token"));
             return;
         }
         if (userId == null) {
             sendToClient(session, SocketFrames.authError(frame.getId(), "invalid token"));
+            return;
+        }
+        if (revokedDevices.isRevoked(deviceId)) {
+            sendToClient(session, SocketFrames.authError(frame.getId(), "device revoked"));
             return;
         }
         session.setUserId(userId);

@@ -5,8 +5,12 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Injector;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
+import com.hazelcast.core.HazelcastInstance;
 import com.pingo.chat.domain.e2e.E2eKeyRegistry;
+import com.pingo.chat.domain.e2e.MlsDeviceRegistry;
 import com.pingo.chat.domain.e2e.MlsRegistry;
+import com.pingo.chat.domain.e2e.RevokedDeviceRegistry;
+import com.pingo.core.boot.start.LegoBootStart;
 import com.pingo.chat.domain.file.FileRegistry;
 import com.pingo.chat.domain.history.MessageHistoryRegistry;
 import com.pingo.chat.domain.link.MessageLinkRegistry;
@@ -130,6 +134,45 @@ public class HallAppModule extends AbstractModule {
   @Singleton
   private MlsRegistry mlsRegistry(JdbcConnectionSupplier supplier) {
     return new MlsRegistry(supplier);
+  }
+
+  /**
+   * Cụm Hazelcast hall ĐÃ join sẵn (xem {@code HallBoot}'s javadoc + {@code app.yaml}'s {@code
+   * hazelcast:}) -- lấy lại instance {@code LegoBootStart#initVertx} đã tạo, KHÔNG tự tạo instance
+   * thứ 2 (2 instance riêng sẽ không cùng cluster, {@link RevokedDeviceRegistry} sẽ không thấy được
+   * thu hồi từ harbor/colony).
+   */
+  @Provides
+  @Singleton
+  private HazelcastInstance hazelcastInstance() {
+    return LegoBootStart.getHazelcastInstance(vertx);
+  }
+
+  /** Registry + trạng thái thu hồi thiết bị MLS -- xem javadoc {@link MlsDeviceRegistry}. */
+  @Provides
+  @Singleton
+  private MlsDeviceRegistry mlsDeviceRegistry(JdbcConnectionSupplier supplier) {
+    return new MlsDeviceRegistry(supplier);
+  }
+
+  /**
+   * Cache đồng bộ "deviceId đã revoke chưa" -- xem javadoc {@link RevokedDeviceRegistry}. Hydrate từ
+   * Postgres (nguồn thật) BẤT ĐỒNG BỘ, KHÔNG {@code .join()}/block -- bug thật đã gặp: {@code
+   * @Provides} method chạy trên thread gọi {@code injector.getInstance(...)} (main thread lúc boot,
+   * KHÔNG phải Vert.x event loop), nhưng {@link JdbcConnectionSupplier} hoàn thành Future của nó
+   * thông qua đúng Vert.x context/event loop đang bị HallBoot khởi tạo dở -- block-chờ ở đây khiến
+   * event loop không bao giờ chạy tiếp để tự hoàn thành chính Future đang bị chờ -> deadlock, service
+   * "start" xong (log in ra bình thường) nhưng treo cứng, không phản hồi BẤT KỲ request nào (kể cả
+   * /healthcheck, không đụng gì tới bảng này). Chấp nhận 1 cửa sổ rất ngắn (vài chục ms) lúc mới boot
+   * nơi cache còn rỗng/chưa kịp hydrate xong (thiết bị đã revoke trước đó tạm thời "sống lại") --
+   * hiếm khi trùng đúng lúc app khởi động lại, còn hơn đánh đổi cả service treo.
+   */
+  @Provides
+  @Singleton
+  private RevokedDeviceRegistry revokedDeviceRegistry(HazelcastInstance hazelcastInstance, MlsDeviceRegistry mlsDevices) {
+    var registry = new RevokedDeviceRegistry(hazelcastInstance);
+    mlsDevices.listAllRevokedDeviceIds().thenAccept(ids -> ids.forEach(registry::markRevoked));
+    return registry;
   }
 
   /** Ký (POST /register, /login) và verify (PUT /users, GET /conversations) token JWT -- cùng secret dùng bên harbor (xem HarborAppModule), 2 bên PHẢI cấu hình cùng giá trị {@code authTokenSecret}. */
