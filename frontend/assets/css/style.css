@@ -472,17 +472,27 @@
         .convSearchCount { flex: none; font-size: 11.5px; color: var(--ink-faint); font-family: ui-monospace, monospace; min-width: 32px; text-align: center; }
         .convSearchPrevBtn svg { transform: rotate(180deg); } /* tái dùng ICON.down, xoay ngược thành mũi tên lên */
 
-        /* Banner cảnh báo E2E (VD "X chưa bật mã hoá -- tin sẽ không đến được") -- xem
-           showConvE2eWarning/renderConvE2eWarnings ở messaging-core.js. TRƯỚC ĐÂY chỉ có showToast
-           (tự biến mất sau 2.2s) -- cảnh báo dài, người dùng không kịp đọc nếu không đang nhìn đúng lúc
-           nó hiện lên. Banner này NẰM LẠI trong header đoạn chat liên quan cho tới khi tự bấm đóng, và
-           tự hiện lại mỗi lần mở lại conversation đó (xem renderConvE2eWarnings) -- không mất thông tin
-           nếu người dùng không có mặt đúng lúc sự kiện xảy ra. */
-        .convE2eWarningBar { display: none; align-items: flex-start; gap: 8px; flex: none; padding: 9px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn-ink); font-size: 12.5px; line-height: 1.45; }
+        /* Banner cảnh báo E2E (VD "X chưa bật mã hoá -- tin sẽ không đến được", "nhóm vừa đổi khoá --
+           cần backup lại") -- xem showConvE2eWarning/renderConvE2eWarnings ở messaging-core.js. TRƯỚC
+           ĐÂY chỉ có showToast (tự biến mất sau 2.2s) -- cảnh báo dài, người dùng không kịp đọc nếu
+           không đang nhìn đúng lúc nó hiện lên. Banner này NẰM LẠI trong header đoạn chat liên quan
+           tới khi tự bấm đóng, và tự hiện lại mỗi lần mở lại conversation đó (xem renderConvE2eWarnings)
+           -- không mất thông tin nếu người dùng không có mặt đúng lúc sự kiện xảy ra.
+           Container xếp DỌC nhiều dòng (.convE2eWarningRow) -- mỗi loại cảnh báo (từng userId "chưa
+           sẵn sàng", hoặc dòng "cần backup lại" riêng) 1 dòng, tự đóng/tự có hành động riêng, không gộp
+           chung 1 khối text như trước (đóng 1 lần mất hết, không phân biệt được loại nào với loại nào). */
+        .convE2eWarningBar { display: none; flex-direction: column; flex: none; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn-ink); font-size: 12.5px; line-height: 1.45; }
         .convE2eWarningBar.show { display: flex; }
-        .convE2eWarningIcon { flex: none; margin-top: 1px; }
+        .convE2eWarningRow { display: flex; align-items: center; gap: 9px; padding: 8px 16px; }
+        .convE2eWarningRow + .convE2eWarningRow { border-top: 1px solid var(--warn-border); }
+        .convE2eWarningIcon { flex: none; width: 14px; text-align: center; font-size: 12px; opacity: .85; }
         .convE2eWarningText { flex: 1; min-width: 0; white-space: pre-line; }
-        .convE2eWarningClose { flex: none; border: none; background: none; color: inherit; opacity: .65; cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
+        /* Dòng "cần backup lại" khác màu icon (accent) để nổi rõ hơn dòng "chưa sẵn sàng mã hoá" -- 2
+           loại cần hành động khác nhau (tạo backup vs chờ người kia mở app), không nên trông giống hệt. */
+        .convE2eWarningRow.backupStale .convE2eWarningIcon { color: var(--accent-dark); opacity: 1; }
+        .convE2eWarningActionBtn { flex: none; border: 1px solid var(--accent-dark); background: rgba(var(--accent-rgb),.1); color: var(--accent-dark); font: inherit; font-weight: 600; font-size: 11.5px; border-radius: 999px; padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+        .convE2eWarningActionBtn:hover { background: rgba(var(--accent-rgb),.2); }
+        .convE2eWarningClose { flex: none; border: none; background: none; color: inherit; opacity: .55; cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 4px; }
         .convE2eWarningClose:hover { opacity: 1; }
 
         /* ---------- panel thông tin/thành viên bên phải -- kiểu Telegram "Bot Info" ---------- */

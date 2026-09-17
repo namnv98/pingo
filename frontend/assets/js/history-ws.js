@@ -587,8 +587,8 @@ function connect() {
                 break;
             case "E2E_TO_DEVICE":
                 // Relay sống của POST /e2e/to-device (xem HallApiHandlers#queueE2eToDevice) -- hiện
-                // chỉ dùng để phân phối Megolm session key cho group (xem e2eHandleToDeviceItem).
-                // frame.fromUserId = người gửi khoá, frame.body = {type, payload: <olm envelope>}.
+                // dùng để phân phối Welcome/Commit MLS + gói liên kết thiết bị (xem e2eHandleToDeviceItem).
+                // frame.fromUserId = người gửi, frame.body = {type, payload: <MLSMessage/gói liên kết b64>}.
                 if (frame.body) e2eHandleToDeviceItem(frame.body.type, frame.fromUserId, frame.conversationId, frame.body.payload);
                 break;
             case "CONVERSATION_ADDED":

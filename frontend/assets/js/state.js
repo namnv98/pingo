@@ -41,7 +41,7 @@ var rawBodyByMessageId = {};
 // "chưa nhận được khoá") -- {@code body} ở đây là PHONG BÌ GỐC (ciphertext), khác hẳn rawBodyByMessageId
 // (giữ bản đã giải mã/thất bại). Cần giữ riêng vì e2eResolveIncomingBody không cache lúc thất bại nên
 // phong bì gốc bị mất ngay sau khi resolve xong nếu không lưu lại đây -- dùng để TỰ THỬ LẠI khi khoá
-// tới muộn qua to-device (xem e2eRetryFailedMessagesIn trong e2e-crypto.js), thay vì bắt người dùng tự
+// tới muộn qua to-device (xem e2eRetryFailedMessagesIn trong mls-crypto.js), thay vì bắt người dùng tự
 // F5 mới thấy lại được (bug thật đã gặp: khoá đã lưu xong trong IndexedDB nhưng màn hình không tự vẽ
 // lại, chỉ F5 mới lộ ra).
 var e2eFailedEnvelopesByMessageId = {};

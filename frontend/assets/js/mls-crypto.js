@@ -660,6 +660,19 @@ function e2eDrainAddCommits(conversationId, st) {
     });
 }
 
+// Báo "cần backup lại" NGAY khi 1 Commit làm epoch nhảy (thêm/xoá thành viên, dọn leaf chết, hoặc
+// commit của người khác vừa nhận) -- backup lạnh (e2eCreateBackup) export state THEO EPOCH LÚC ĐÓ,
+// epoch sau đó đổi thì file cũ không còn dùng để đọc tiếp tin mới được nữa (forward secrecy MLS).
+// Tái dùng ĐÚNG banner "chưa sẵn sàng mã hoá" sẵn có (showConvE2eWarning, xem messaging-core.js) thay
+// vì tự dựng UI riêng -- theo yêu cầu, không dùng modal chặn như bản Olm cũ (e2e-crypto.js, đã bỏ).
+// KHÔNG gọi lúc tạo/join group LẦN ĐẦU (epoch 0 hoặc welcome/external-join đầu tiên): chưa có backup
+// nào tồn tại trước đó để mà "cũ" cả.
+function e2eWarnBackupStale(conversationId) {
+    if (typeof showConvE2eWarning !== 'function') return;
+    showConvE2eWarning(conversationId, (typeof E2E_BACKUP_STALE_WARNING_KEY !== 'undefined' ? E2E_BACKUP_STALE_WARNING_KEY : '__e2eBackupStale'),
+        'Nhóm mã hoá vừa đổi khoá (có người ra/vào nhóm) -- bản sao lưu cũ sẽ KHÔNG đọc được tin nhắn mới từ giờ trở đi. Tạo bản sao lưu mới trong Hồ sơ > Sao lưu lạnh.');
+}
+
 // 1 Add-commit chứa 1 hay nhiều Add proposal (có thể NHIỀU proposal cùng userId -- add nhiều thiết
 // bị của CÙNG 1 người trong 1 lần, xem e2eDrainAddCommits/e2eCommitAddMany), broadcast Welcome/Commit
 // tới đúng đối tượng. Trả về newState ĐÃ LƯU. consumed keys được zero-out.
@@ -703,7 +716,8 @@ function e2eCreateCommitAndDistribute(conversationId, state, adds, pendingAddsFo
             present.forEach(function (id) {
                 deliveries.push({ recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: e2eB64(commitWire) } });
             });
-            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
+            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); })
+                .then(function () { e2eWarnBackupStale(conversationId); return newState; });
         });
     });
 }
@@ -785,7 +799,8 @@ function e2eCommitRemove(conversationId, state, removeUserIds) {
             var commitWire = e2eB64(M.encodeMlsMessage(res.commit));
             var present = e2eMemberUserIdSet(newState).filter(function (id) { return id !== myUserId && removeUserIds.indexOf(id) === -1; });
             var deliveries = present.map(function (id) { return { recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: commitWire } }; });
-            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
+            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); })
+                .then(function () { e2eWarnBackupStale(conversationId); return newState; });
         });
     });
 }
@@ -820,7 +835,8 @@ function e2eCommitRemoveDeadLeaves(conversationId, state, leafIndexes) {
             // còn 1 leaf SỐNG khác (chỉ mất đúng leaf chết), vẫn cần nhận Commit để cây khớp lại.
             var present = e2eMemberUserIdSet(newState).filter(function (id) { return id !== myUserId; });
             var deliveries = present.map(function (id) { return { recipientUserId: id, type: 'mls_commit', conversationId: conversationId, body: { commit: commitWire } }; });
-            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); }).then(function () { return newState; });
+            return e2eDeliverBatch(deliveries).then(function () { return e2eSaveGroup(conversationId, newState); })
+                .then(function () { e2eWarnBackupStale(conversationId); return newState; });
         });
     });
 }
@@ -828,13 +844,26 @@ function e2eCommitRemoveDeadLeaves(conversationId, state, leafIndexes) {
 // Chạy NỀN, không chặn gì (chỉ dọn dẹp, không quan trọng bằng add/remove theo membership) -- throttle
 // theo conversationId để không gọi /mls/devices/revoked-check ở MỌI lượt refresh (e2eCheckGroupRotations
 // chạy khá thường xuyên) -- chỉ cần dọn kiểu "thỉnh thoảng", không cần tức thời.
+//
+// Lưu mốc chạy gần nhất ở localStorage (KHÔNG phải biến JS thường) -- bug thật đã gặp: biến JS mất
+// sạch mỗi lần RELOAD TRANG (F5), khiến cooldown coi như chưa từng chạy, dọn lại NGAY ở lượt refresh
+// đầu tiên sau mỗi lần load trang. Nếu group có sẵn 1 leaf chết (chưa dọn hết được, hoặc user vẫn
+// đang test đăng xuất/thu hồi thiết bị lặp lại) thì MỖI LẦN RELOAD lại tạo thêm 1 Commit dọn dẹp mới
+// -> epoch nhảy -> banner "cần backup lại" (e2eWarnBackupStale) hiện lại dù vừa backup xong.
 var E2E_PRUNE_DEAD_LEAVES_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 giờ/conversation
-var e2ePruneDeadLeavesLastRunAt = {}; // conversationId -> epoch millis lần dọn gần nhất
+var E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY = 'pingo_mls_prune_last';
+function e2ePruneDeadLeavesLastRunMap() {
+    try { return JSON.parse(localStorage.getItem(E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY + ':' + myUserId)) || {}; }
+    catch (e) { return {}; }
+}
 function e2ePruneDeadLeaves(conversationId, state) {
     if (!state) return Promise.resolve(state);
-    var last = e2ePruneDeadLeavesLastRunAt[conversationId] || 0;
+    var lastRunMap = e2ePruneDeadLeavesLastRunMap();
+    var last = lastRunMap[conversationId] || 0;
     if (Date.now() - last < E2E_PRUNE_DEAD_LEAVES_COOLDOWN_MS) return Promise.resolve(state);
-    e2ePruneDeadLeavesLastRunAt[conversationId] = Date.now();
+    lastRunMap[conversationId] = Date.now();
+    try { localStorage.setItem(E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY + ':' + myUserId, JSON.stringify(lastRunMap)); }
+    catch (e) { /* localStorage đầy -- cooldown chỉ là tối ưu phụ, bỏ qua lặng lẽ, không chặn luồng dọn dẹp */ }
     // `seqIdx` (0,1,2... ĐẾM THEO THỨ TỰ TRÊN DANH SÁCH LEAF ĐàLỌC) -- KHÔNG phải `x.idx` từ
     // e2eLeafNodes (đó là vị trí RAW trong toàn bộ ratchetTree, xen kẽ cả parent-node, không phải
     // "LeafIndex" mà M.createCommit's `remove.removed` cần -- bug thật đã tự bắt được lúc test: dùng
@@ -1086,7 +1115,7 @@ function e2eHandleCommit(conversationId, body) {
                     // đồng bộ GroupInfo public cho người cần External-Join, KHÔNG cần thắng/thua: state cục
                     // bộ của mình đã đúng dù publish này có thua ai khác public trước). Best-effort.
                     .then(function () { return e2ePublishGroupInfoBestEffort(conversationId, expectedEpoch, res.newState); })
-                    .then(function () { e2eRetryFailedMessagesIn(conversationId); });
+                    .then(function () { e2eWarnBackupStale(conversationId); e2eRetryFailedMessagesIn(conversationId); });
             });
         });
     }).catch(function (err) { console.warn('[e2e-mls] commit apply lỗi (epoch lệch? đã remove?)', err && err.message); });

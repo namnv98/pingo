@@ -494,19 +494,49 @@ function clearConvE2eWarningForUser(conversationId, userId) {
     saveE2eConvWarnings();
     renderConvE2eWarnings(conversationId);
 }
-function dismissConvE2eWarnings(conversationId) {
-    delete getE2eConvWarnings()[conversationId];
-    saveE2eConvWarnings();
-    renderConvE2eWarnings(conversationId);
+// "userId" giả dùng riêng cho dòng cảnh báo "cần backup lại" (mls-crypto.js's e2eWarnBackupStale) --
+// tái dùng ĐÚNG banner/hàng đợi warning theo-user ở trên thay vì tự dựng UI riêng, chỉ khác là key này
+// không phải userId thật nên không bao giờ trùng/bị clearConvE2eWarningForUser(id thật) xoá nhầm.
+var E2E_BACKUP_STALE_WARNING_KEY = '__e2eBackupStale';
+// Backup lạnh gộp CHUNG 1 file cho MỌI conversation (xem e2eCreateBackup) -- tạo xong 1 bản mới là hết
+// stale ở TẤT CẢ conversation đang cảnh báo cùng lúc, không chỉ đúng cái đang mở (gọi từ
+// e2eDoCreateBackup, sidebar-conversations.js, ngay sau khi tải file backup thành công).
+function clearAllE2eBackupStaleWarnings() {
+    var all = getE2eConvWarnings();
+    Object.keys(all).forEach(function (conversationId) { clearConvE2eWarningForUser(conversationId, E2E_BACKUP_STALE_WARNING_KEY); });
 }
+// Mỗi dòng cảnh báo (1 userId thật "chưa sẵn sàng mã hoá", hoặc dòng đặc biệt
+// E2E_BACKUP_STALE_WARNING_KEY "cần backup lại") render THÀNH 1 ROW RIÊNG, tự đóng được riêng lẻ --
+// TRƯỚC ĐÂY gộp chung 1 khối text (join '\n') dưới 1 icon + 1 nút đóng DUY NHẤT cho cả bar, đóng 1 lần
+// là mất hết mọi dòng kể cả dòng của người khác/loại khác, và không phân biệt được trực quan loại cảnh
+// báo nào với loại nào. Dòng "cần backup lại" có thêm nút hành động đi thẳng vào luồng tạo backup có
+// sẵn (e2eStartCreateBackupFlow, sidebar-conversations.js) thay vì bắt người dùng tự mò menu Hồ sơ.
 function renderConvE2eWarnings(conversationId) {
     var entry = conversations[conversationId];
     if (!entry) return; // card chưa dựng -- state đã lưu trong localStorage, ensureConversationCard tự gọi lại hàm này lúc dựng xong
     var bar = entry.el.querySelector('.convE2eWarningBar');
     var byUser = getE2eConvWarnings()[conversationId] || {};
-    var list = Object.keys(byUser).map(function (uid) { return byUser[uid]; });
-    bar.querySelector('.convE2eWarningText').innerText = list.join('\n');
-    bar.classList.toggle('show', list.length > 0);
+    var uids = Object.keys(byUser);
+    bar.innerHTML = '';
+    uids.forEach(function (uid) {
+        var isBackupStale = uid === E2E_BACKUP_STALE_WARNING_KEY;
+        var row = document.createElement('div');
+        row.className = 'convE2eWarningRow' + (isBackupStale ? ' backupStale' : '');
+        row.innerHTML =
+            '<i class="convE2eWarningIcon fa-solid ' + (isBackupStale ? 'fa-cloud-arrow-up' : 'fa-user-clock') + '"></i>' +
+            '<span class="convE2eWarningText"></span>' +
+            (isBackupStale ? '<button type="button" class="convE2eWarningActionBtn">Sao lưu ngay</button>' : '') +
+            '<button type="button" class="convE2eWarningClose" title="Đóng">✕</button>';
+        row.querySelector('.convE2eWarningText').innerText = byUser[uid];
+        if (isBackupStale) {
+            row.querySelector('.convE2eWarningActionBtn').onclick = function () {
+                if (typeof e2eStartCreateBackupFlow === 'function') e2eStartCreateBackupFlow();
+            };
+        }
+        row.querySelector('.convE2eWarningClose').onclick = function () { clearConvE2eWarningForUser(conversationId, uid); };
+        bar.appendChild(row);
+    });
+    bar.classList.toggle('show', uids.length > 0);
 }
 
 function ensureConversationCard(conversationId, label, subtitle) {
@@ -532,9 +562,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
         '<button class="icon infoBtn" title="Ẩn/hiện panel thông tin" onclick="toggleInfoPanel()">' + ICON.info + '</button>' +
         '</div></div>' +
-        '<div class="convE2eWarningBar"><span class="convE2eWarningIcon">⚠️</span>' +
-        '<span class="convE2eWarningText"></span>' +
-        '<button type="button" class="convE2eWarningClose" title="Đóng">✕</button></div>' +
+        '<div class="convE2eWarningBar"></div>' +
         '<div class="convSearchBar"><span class="convSearchIcon">' + ICON.search + '</span>' +
         '<input type="text" class="convSearchInput" placeholder="Tìm trong đoạn chat...">' +
         '<span class="convSearchCount"></span>' +
@@ -564,7 +592,6 @@ function ensureConversationCard(conversationId, label, subtitle) {
     card.querySelector('.renameBtn').onclick = function () { renameConversation(conversationId); };
     card.querySelector('.deleteBtn').onclick = function () { deleteConversation(conversationId); };
     card.querySelector('.leaveBtn').onclick = function () { leaveConversation(conversationId); };
-    card.querySelector('.convE2eWarningClose').onclick = function () { dismissConvE2eWarnings(conversationId); };
     var starBtnEl = card.querySelector('.starBtn');
     starBtnEl.classList.toggle('active', isConversationStarred(conversationId));
     starBtnEl.title = isConversationStarred(conversationId) ? 'Bỏ gắn sao' : 'Gắn sao';

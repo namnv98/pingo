@@ -169,7 +169,7 @@ function refreshProfileDeviceList() {
     }).catch(function () { listEl.innerText = 'Không tải được danh sách thiết bị.'; });
 }
 
-// --- Liên kết thiết bị mã hoá (gõ tay mã 6 ký tự, xem e2e-crypto.js's e2eRequestDeviceLink/
+// --- Liên kết thiết bị mã hoá (gõ tay mã 6 ký tự, xem mls-crypto.js's e2eRequestDeviceLink/
 // e2eApproveDeviceLink cho phần crypto+network) -- CHỈ còn dùng để chuyển giao LỊCH SỬ đã giải mã
 // giữa 2 thiết bị cùng tài khoản (mỗi thiết bị đã tự có identity riêng từ e2eInit, không cần "linking"
 // mới dùng được E2E nữa) -- 2 luồng UI, dùng cái nào tuỳ bạn đang ở thiết bị NGUỒN (có sẵn lịch sử) hay
@@ -247,7 +247,7 @@ function e2eStartRequestLinkFlow() {
     });
 }
 
-// --- Sao lưu lạnh (xuất/nhập file mã hoá cục bộ -- xem e2e-crypto.js's e2eCreateBackup/
+// --- Sao lưu lạnh (xuất/nhập file mã hoá cục bộ -- xem mls-crypto.js's e2eCreateBackup/
 // e2eRestoreBackup cho phần crypto, KHÔNG đụng gì tới server). ---
 
 // Hỏi cách bảo vệ file trước (tái dùng appConfirm làm lựa chọn 2 nhánh, giống hệt dialog xung đột
@@ -286,6 +286,9 @@ function e2eDoCreateBackup(mode, phrase) {
         a.click();
         a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+        // Backup mới vừa xuất, đúng epoch HIỆN TẠI của mọi group -- xoá hết banner "cần backup lại"
+        // đang treo (xem e2eWarnBackupStale, mls-crypto.js), kể cả ở các conversation khác conv đang mở.
+        if (typeof clearAllE2eBackupStaleWarnings === 'function') clearAllE2eBackupStaleWarnings();
         if (result.recoveryKeyHex) {
             showE2eRecoveryKeyModal(result.recoveryKeyHex);
         } else {
@@ -823,7 +826,8 @@ function renderInfoPanel(conversationId) {
     document.getElementById('infoConvIdValue').innerText = conv.conversationId.substring(0, 8) + '…';
     document.getElementById('infoTypeValue').innerText = isGroupConv ? 'Nhóm' : 'Nhắn tin trực tiếp';
     document.getElementById('infoActivityValue').innerText = relativeTime(conv.lastMessageAt);
-    // Mã hoá đầu cuối -- DM dùng Olm 1-1, GROUP dùng Megolm (xem e2eEncryptGroupOutgoing). Bật cho
+    // Mã hoá đầu cuối -- DM và group dùng CHUNG 1 cơ chế MLS (xem e2eEnableConversation, mls-crypto.js);
+    // DM chỉ đơn giản là 1 MLS group 2 thành viên, không có đường riêng. Bật cho
     // group thì CHỈ owner (canManageGroupInfo, cùng quyền với đổi tên/ảnh/thêm thành viên -- server
     // cũng chặn qua chính requireGroupOwner, xem HallApiHandlers#setConversationEncrypted). Đã bật
     // rồi thì KHÔNG cho tắt lại (server chặn) -- chỉ hiện trạng thái.
@@ -1115,14 +1119,13 @@ function enterApp() {
     refreshConversationList();
     loadNotifications(); // đồng bộ badge chuông thông báo ngay lúc vào app (xem history-ws.js)
     initPushNotifications(); // xin quyền + đăng ký token FCM của thiết bị này (xem push-notifications.js)
-    // nạp/tạo Account Olm + đảm bảo server có sẵn identity key/prekey (xem e2e-crypto.js) -- không
-    // chặn phần còn lại, tự bật e2eReady khi xong. Drain to-device (khoá Megolm group gửi lúc mình
-    // offline) CHỈ sau khi e2eInit() xong -- cần Account sẵn sàng mới giải mã được gói Olm 1-1 bọc
-    // ngoài (xem e2eHandleToDeviceItem). LỊCH SỬ cũ KHÔNG tự xin lại ở đây: thiết bị vừa đăng nhập chỉ
+    // Sinh/nạp KeyPackage MLS của thiết bị này + publish lên server (xem e2eInit, mls-crypto.js) --
+    // không chặn phần còn lại, tự bật e2eReady khi xong. Drain to-device (Welcome/Commit MLS gửi lúc
+    // mình offline) CHỈ sau khi e2eInit() xong -- cần e2eDeviceId/keypackage sẵn sàng mới join/decode
+    // được (xem e2eHandleToDeviceItem). LỊCH SỬ cũ KHÔNG tự xin lại ở đây: thiết bị vừa đăng nhập chỉ
     // đọc lại được qua 2 đường CÓ hành động rõ ràng của người dùng (nhập mã liên kết thiết bị, hoặc
-    // phục hồi từ file backup). Cơ chế key request (megolm_session_request, xem
-    // e2eRequestMissingGroupSession) chỉ dành cho tin THIẾU KEY RÒ RÌ lúc đang đọc (to-device thất lạc)
-    // và chỉ sender còn ở lại nhóm mới trả lời -- không phải đường "đăng nhập là kéo hết lịch sử".
+    // phục hồi từ file backup) -- MLS không có cơ chế "xin lại key" như Megolm cũ (m.room_key_request
+    // kiểu Matrix), tự bắt kịp epoch hiện tại qua External Commit (e2eTryExternalJoin) thay vào đó.
     //
     // refreshConversationList() ở dòng trên chạy TRƯỚC khi e2eInit() xong (e2eReady vẫn false lúc đó)
     // nên e2eCheckGroupRotations() bên trong nó no-op ngay -- proactive self-heal (external-join cho
