@@ -580,6 +580,30 @@ function e2eForceExternalJoin(conversationId) {
 // GroupInfo/epoch MỚI mà CAS trả kèm lúc thua, giới hạn số lần (E2E_EXTERNAL_JOIN_MAX_ATTEMPTS) để
 // không lặp vô hạn nếu 2 bên cứ liên tục đụng epoch nhau.
 var E2E_EXTERNAL_JOIN_MAX_ATTEMPTS = 4;
+
+// clientConfig riêng cho external-join "resync" (RFC 9420 §12.4.3.1, xem javadoc dài trong
+// e2eExternalJoinAttempt) -- so khớp leaf CŨ cần gỡ theo CREDENTIAL (identity "user:<userId>@<deviceId>")
+// thay vì M.defaultKeyPackageEqualityConfig (so bằng khoá KÝ THÔ của KeyPackage). Bắt buộc phải đổi: mỗi
+// KeyPackage rút từ hàng đợi cục bộ LUÔN sinh cặp khoá MỚI, nên nếu so bằng khoá mặc định thì KeyPackage
+// mới không bao giờ "trùng" được với leaf cũ của chính mình -- resync sẽ không tìm ra gì để gỡ, coi như
+// vô tác dụng. Chỉ khác đúng 1 field (keyPackageEqualityConfig) so với clientConfig thường (xem
+// e2eLoadGroup) -- các field còn lại dùng nguyên default vì resync không đụng gì tới chúng.
+function e2eResyncClientConfig() {
+    return {
+        keyRetentionConfig: M.defaultKeyRetentionConfig,
+        lifetimeConfig: M.defaultLifetimeConfig,
+        keyPackageEqualityConfig: {
+            compareKeyPackages: M.defaultKeyPackageEqualityConfig.compareKeyPackages,
+            compareKeyPackageToLeafNode: function (a, b) {
+                try {
+                    return new TextDecoder().decode(a.leafNode.credential.identity) === new TextDecoder().decode(b.credential.identity);
+                } catch (e) { return false; }
+            }
+        },
+        paddingConfig: M.defaultPaddingConfig,
+        authService: M.defaultAuthenticationService
+    };
+}
 function e2eExternalJoinAttempt(conversationId, gi, attempt) {
     var perfLabel = '[e2e-perf] e2eExternalJoinAttempt ' + conversationId + ' attempt#' + attempt;
     console.time(perfLabel);
@@ -597,6 +621,7 @@ function e2eExternalJoinAttempt(conversationId, gi, attempt) {
         var myPub = e2ePubToKeyPackage(head.pubB64);
         var myPriv = e2ePrivFromJson(head.privJson);
         var giMsg = M.decodeMlsMessage(e2eUnb64(gi.groupInfoB64), 0)[0];
+        var giMsgForResync = giMsg; // giữ tham chiếu để dùng lại nguyên GroupInfo cho lần join thứ 2 (resync)
         return M.joinGroupExternal(giMsg.groupInfo, myPub, myPriv, false, e2eImpl).then(function (res) {
             // Tự phát hiện leaf TRÙNG CHÍNH MÌNH trước khi publish -- bug thật đã gặp: thiết bị này
             // TỪNG external-join THÀNH CÔNG (CAS đã thắng, leaf đã nằm trong cây thật trên server) rồi
@@ -607,15 +632,35 @@ function e2eExternalJoinAttempt(conversationId, gi, attempt) {
             // leaf = 1 thiết bị" (đã tự bắt được trên dữ liệu test thật: 1 device xuất hiện 2 lần trong
             // cây). e2eLeafNodes(res.newState) đọc TRỰC TIẾP kết quả `M.joinGroupExternal` vừa tính cục
             // bộ (chưa publish gì) -- nếu credential của mình đã có mặt TỪ TRƯỚC lần join này (tức sau
-            // khi join xong sẽ thấy nó xuất hiện >1 lần), CHẶN LUÔN, không publish thêm leaf trùng.
-            // KHÔNG tự remove leaf cũ + rejoin ở đây -- private key của leaf cũ đã mất (đã bị tiêu/xoá
-            // khỏi hàng đợi KeyPackage từ lần join trước), tự dọn+rejoin an toàn cần 1 luồng riêng
-            // (remove-commit rồi mới add lại), ngoài phạm vi chặn-trùng đơn giản này.
+            // khi join xong sẽ thấy nó xuất hiện >1 lần), KHÔNG publish thẳng leaf trùng đó.
+            //
+            // SỬA TẬN GỐC bằng đúng cơ chế chính thống của giao thức thay vì chặn rồi bắt dọn tay: RFC
+            // 9420 §12.4.3.1 định nghĩa sẵn external-join "resync" cho ĐÚNG tình huống này (thiết bị mất
+            // state cục bộ, cần tái tham gia) -- bật resync=true khiến joinGroupExternal tự tìm leaf CŨ
+            // khớp (qua clientConfig.keyPackageEqualityConfig, xem e2eResyncClientConfig -- PHẢI so theo
+            // CREDENTIAL vì KeyPackage mới luôn khác khoá) rồi gỡ leaf đó + thêm leaf mới trong CÙNG 1
+            // commit atomic -- không có khoảng hở nào cả 2 leaf cùng tồn tại, không cần private key của
+            // leaf cũ (đang gỡ NÓ, không phải dùng NÓ). Chỉ bật resync SAU KHI đã xác nhận có trùng bằng 1
+            // lần join thường (resync=false) như trên -- KHÔNG bật mặc định cho mọi lần join: lúc không có
+            // leaf cũ nào để gỡ, `ratchetTree.findIndex` trả -1 và thư viện tính thẳng `-1/2` làm
+            // formerLeafIndex (toNodeIndex/nodeToLeafIndex chỉ ép kiểu, không kiểm tra âm/lẻ) -- tự đọc
+            // ts-mls@1.6.4 xác nhận, chưa kiểm chứng an toàn cho trường hợp thường nên chỉ dùng đúng lúc
+            // CẦN, không liều cho mọi lần join.
             var myIdentity = MLS_CRED_PREFIX + myUserId + MLS_CRED_DEVICE_SEP + e2eDeviceId;
             var myLeafCountAfterJoin = e2eLeafNodes(res.newState).filter(function (x) { return e2eLeafIdentity(x.n) === myIdentity; }).length;
-            if (myLeafCountAfterJoin > 1) {
-                throw Object.assign(new Error('Thiết bị này đã có mặt trong nhóm từ trước (lệch đồng bộ cục bộ) -- không tự thêm bản sao, cần dọn thủ công.'), { e2eDuplicateLeaf: true });
-            }
+            if (myLeafCountAfterJoin <= 1) return res;
+            console.warn('[e2e-mls] phát hiện leaf trùng danh tính lúc external-join (' + conversationId + ') -- tự resync (RFC 9420) gỡ leaf cũ + thêm leaf mới trong cùng 1 commit, không cần dọn tay');
+            return M.joinGroupExternal(giMsgForResync.groupInfo, myPub, myPriv, true, e2eImpl, undefined, e2eResyncClientConfig()).then(function (resyncRes) {
+                var countAfterResync = e2eLeafNodes(resyncRes.newState).filter(function (x) { return e2eLeafIdentity(x.n) === myIdentity; }).length;
+                if (countAfterResync > 1) {
+                    // resync cũng không gỡ hết (vd >1 leaf mồ côi do crash lặp lại nhiều lần liên tiếp
+                    // trước đây) -- không đoán/thử thêm, giữ nguyên lỗi cũ để báo cần soát thủ công thay
+                    // vì liều lĩnh publish tiếp 1 trạng thái còn trùng.
+                    throw Object.assign(new Error('Thiết bị này đã có mặt trong nhóm từ trước (lệch đồng bộ cục bộ) -- không tự thêm bản sao, cần dọn thủ công.'), { e2eDuplicateLeaf: true });
+                }
+                return resyncRes;
+            });
+        }).then(function (res) {
             return e2ePublishGroupInfo(conversationId, gi.epoch, res.newState).then(function (cas) {
                 if (!cas.won) {
                     if (attempt >= E2E_EXTERNAL_JOIN_MAX_ATTEMPTS || !cas.groupInfoB64) {

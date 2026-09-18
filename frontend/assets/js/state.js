@@ -69,81 +69,175 @@ function notoAnimUrlForEmoji(emoji) {
     return 'https://fonts.gstatic.com/s/e/notoemoji/latest/' + codepoint + '/lottie.json';
 }
 
-// BUG THẬT đã tự đo (không đoán): các file Lottie của Noto Animated Emoji dùng CHUNG khung canvas
-// (thường 1024x1024) nhưng HÌNH THẬT bên trong chiếm tỉ lệ khung RẤT khác nhau -- vd angry.json chỉ vẽ
-// trong ~12-19% khung (chừa chỗ để lắc/rung khi animate) trong khi heart.json vẽ gần kín ~80% khung ->
-// hiện cùng 1 kích thước px thì icon nọ to gấp ~5-6 lần icon kia dù cùng "size" khai báo. Tự đo bounding
-// box THẬT của mọi vertex trong mọi shape layer (field "v" -- điểm nằm TRÊN đường cong, không phải tay
-// cầm bezier "i"/"o" nên không bị lệch do control point tràn ra ngoài) rồi tự nhân bù scale cho MỌI icon
-// chiếm cùng 1 tỉ lệ khung (REACTION_ANIM_TARGET_FILL), áp qua CSS transform: scale(...) lên chính
-// <lottie-player> -- không sửa nội dung animation, chỉ phóng/thu đều khi hiển thị.
-function reactionAnimBBox(data) {
-    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    (function walk(o) {
-        if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) walk(o[i]); return; }
-        if (o && typeof o === 'object') {
-            if (Array.isArray(o.v)) {
-                for (var j = 0; j < o.v.length; j++) {
-                    var p = o.v[j];
-                    if (Array.isArray(p) && p.length >= 2 && typeof p[0] === 'number' && typeof p[1] === 'number') {
-                        if (p[0] < minX) minX = p[0];
-                        if (p[0] > maxX) maxX = p[0];
-                        if (p[1] < minY) minY = p[1];
-                        if (p[1] > maxY) maxY = p[1];
-                    }
-                }
-            }
-            for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) walk(o[k]); }
-        }
-    })(data.layers || []);
-    return isFinite(minX) ? {minX: minX, minY: minY, maxX: maxX, maxY: maxY} : null;
-}
-var REACTION_ANIM_TARGET_FILL = 0.8; // để chừa lề nhỏ quanh icon, không áp sát mép khung
-function reactionAnimScale(data) {
-    var bbox = reactionAnimBBox(data);
-    if (!bbox) return 1;
-    var canvasW = data.w || 1024, canvasH = data.h || 1024;
-    var coverage = Math.max((bbox.maxX - bbox.minX) / canvasW, (bbox.maxY - bbox.minY) / canvasH);
-    if (!isFinite(coverage) || coverage <= 0) return 1;
-    // Kẹp lại -- heuristic đo vertex có thể sai lệch (curve cong ra ngoài đoạn vertex-vertex thẳng),
-    // không phóng/thu quá đà lỡ có file đo hụt.
-    return Math.max(0.5, Math.min(REACTION_ANIM_TARGET_FILL / coverage, 3.5));
-}
+// ĐÃ TỪNG tự đo bounding box (bằng toạ độ thô trong JSON, rồi bằng getBBox() trên <svg> thật) để tự bù
+// scale cho icon "trông đều nhau" -- BỎ HẲN sau 2 lần vá vẫn không hết: 6 icon cố định (REACTIONS) thì ổn
+// vì bản thân 6 file đó vốn đã có tỉ lệ khung gần giống nhau, nhưng popup "+" kéo ngẫu nhiên từ ~1900
+// icon Noto Animated Emoji (pháo giấy/tia lửa/lá cờ...) có cách vẽ (đặc kín vs rải rác thành nhiều hạt
+// nhỏ) khác nhau quá xa để 1 con số "% khung phủ" đo bằng hình học nói lên đúng "độ lớn thị giác" -- hạt
+// confetti rải khắp khung có bbox phủ gần 100% (heuristic tưởng đã đủ to, không bù) nhưng nhìn bằng mắt
+// vẫn nhỏ li ti. Không có công thức hình học nào bù đúng hết cho nội dung vẽ tuỳ ý như vậy.
+//
+// Nhưng bỏ hẳn compensation (scale cố định = 1) làm icon nhìn NHỎ HẲN so với trước: tự đo thử nhiều file
+// Noto Animated Emoji thật (kể cả 6 icon cố định) thấy phần vẽ thật bên trong hầu hết chỉ chiếm ~85-95%
+// khung gốc (khung luôn chừa lề đều quanh mép để chỗ rung/lắc khi animate), tức là hiển thị "thật" (không
+// zoom gì) LUÔN có 1 viền trắng mỏng quanh mọi icon -- khác hẳn icon Unicode tĩnh vẽ sát mép glyph. Thay
+// vì tự đo (dễ sai/không đều như đã thấy), zoom vào 1 mức CỐ ĐỊNH, GIỐNG NHAU cho MỌI icon động (không
+// phân biệt icon nào) để cắt bớt viền lề đó -- không đo đạc gì, luôn cùng 1 số, nên không thể ra kết quả
+// khác nhau giữa các icon (không tái diễn bug "to nhỏ không đều"). overflow:hidden ở khung chứa (.emoji/
+// #reactionPicker button/.reactionMoreItem, xem style.css) tự cắt phần tràn ra khi zoom, khung hiển thị
+// (sizePx) không đổi. Icon nào vẽ chừa lề nhiều hơn mức trung bình (vd hiệu ứng hạt rải: confetti/pháo
+// giấy) vẫn sẽ nhỏ hơn 1 chút -- CHỦ Ý của artwork gốc, không cố bù tiếp (xem đoạn trên).
+var REACTION_ANIM_ZOOM = 1.15;
 
-// Cache CHUNG cho mọi nơi render reaction (badge dưới tin, 6 icon picker chính, lưới popup "+") -- tải
-// JSON + tính scale 1 LẦN DUY NHẤT cho mỗi URL rồi dùng lại mãi, kể cả khi DOM bị dựng lại (vd gõ tìm
-// kiếm trong popup "+" xoá sạch lưới cũ) -- tránh tải/tính lại tốn kém mỗi lần 1 icon quay lại khung nhìn.
-var reactionAnimEntryCache = {}; // url -> {data, scale}
-function loadReactionAnimEntry(url) {
-    if (reactionAnimEntryCache[url]) return Promise.resolve(reactionAnimEntryCache[url]);
+// Cache Storage API (Cache Storage -- CÙNG API Service Worker dùng, nhưng gọi thẳng được từ trang, KHÔNG
+// cần đăng ký Service Worker) để cache lại y hệt response JSON đã fetch, SỐNG SÓT qua reload trang -- khác
+// hẳn reactionAnimEntryCache/reactionMoreData (biến JS thường, mất sạch mỗi lần F5). Lý do cần thêm tầng
+// này dù CDN đã có Cache-Control riêng: (1) 6 icon reaction cố định (images/chat/animated/*.json) do
+// CHÍNH server app này phục vụ, đã tự đo bằng curl -I thấy KHÔNG gửi Cache-Control gì cả (chỉ Last-
+// Modified) -- mỗi lần F5 trình duyệt phải round-trip lại dù nội dung không đổi; (2) icon Noto Animated
+// Emoji lẻ (CDN fonts.gstatic.com, URL "latest") chỉ max-age=172800 (2 ngày). Dùng chung 1 tầng app-level
+// cho đồng nhất, không phụ thuộc server nào có cấu hình cache tốt hay không.
+var PERSISTENT_JSON_CACHE_NAME = 'pingo-reaction-cache-v1';
+// "latest" trong URL gstatic có thể đổi nội dung theo thời gian (Google cập nhật lại icon) nên KHÔNG cache
+// vĩnh viễn -- quá hạn vẫn dùng NGAY bản cũ (khỏi chặn UI chờ mạng) nhưng âm thầm tải lại cập nhật cache
+// cho lần sau (kiểu "stale-while-revalidate", khớp đúng header gstatic đã tự gợi ý).
+var PERSISTENT_JSON_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function fetchJsonNetwork(url) {
     return fetch(url).then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
-    }).then(function (data) {
-        var entry = {data: data, scale: reactionAnimScale(data)};
-        reactionAnimEntryCache[url] = entry;
-        return entry;
     });
 }
 
-// Gắn 1 <lottie-player> đã bù scale vào containerEl (thay hết nội dung cũ) -- dùng .load(data) với JSON
-// ĐÃ PARSE SẴN từ cache thay vì set attribute src="url" (luôn tự fetch lại + không có chỗ chèn scale bù
-// trước khi phát) để tận dụng đúng cache ở trên. onFail(): gọi khi tải/parse lỗi (lùi về emoji thô).
-function mountReactionAnim(containerEl, emoji, sizePx, onFail) {
+// Fetch mạng + ghi lại vào Cache Storage kèm header tự thêm "x-pingo-cached-at" (Response gốc không có
+// chỗ nào để biết CHÍNH APP cache lúc nào -- Cache-Control/Date là của server, không phải lúc mình ghi vào
+// cache). res.clone() TRƯỚC khi đọc .json() vì body chỉ đọc được 1 lần -- clone dành để ghi cache, bản gốc
+// dành để trả JSON ngay cho caller.
+function fetchAndCacheJson(cache, url) {
+    return fetch(url).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var headers = new Headers(res.headers);
+        headers.set('x-pingo-cached-at', String(Date.now()));
+        cache.put(url, new Response(res.clone().body, {status: res.status, statusText: res.statusText, headers: headers}))
+            .catch(function () {}); // lỗi ghi cache (vd hết quota) không được chặn hiển thị reaction
+        return res.json();
+    });
+}
+
+// Hàm dùng CHUNG cho mọi nơi cần fetch 1 URL trả JSON và cache lại lâu dài (animation reaction lẫn data
+// tên/nhóm emoji, xem ensureReactionMoreData trong compose-reactions-pins.js). Cache Storage không có (vd
+// Safari chế độ riêng tư cũ, trình duyệt cổ) hoặc lỗi thì tự lùi về fetch mạng thường -- KHÔNG BAO GIỜ để
+// thiếu cache làm hỏng tính năng.
+function fetchJsonWithPersistentCache(url) {
+    if (typeof caches === 'undefined') return fetchJsonNetwork(url);
+    return caches.open(PERSISTENT_JSON_CACHE_NAME).then(function (cache) {
+        return cache.match(url).then(function (cachedRes) {
+            if (!cachedRes) return fetchAndCacheJson(cache, url);
+            var cachedAt = Number(cachedRes.headers.get('x-pingo-cached-at')) || 0;
+            var isStale = Date.now() - cachedAt > PERSISTENT_JSON_CACHE_MAX_AGE_MS;
+            return cachedRes.json().then(function (data) {
+                if (isStale) fetchAndCacheJson(cache, url).catch(function () {});
+                return data;
+            });
+        });
+    }).catch(function () { return fetchJsonNetwork(url); });
+}
+
+function loadReactionAnimJson(url) {
+    var cached = reactionAnimEntryCache[url];
+    if (cached) return Promise.resolve(cached);
+    return fetchJsonWithPersistentCache(url).then(function (data) {
+        reactionAnimEntryCache[url] = data;
+        return data;
+    });
+}
+// Cache CHUNG cho mọi nơi render reaction (badge dưới tin, 6 icon picker chính, lưới popup "+") -- giữ
+// JSON ĐÃ PARSE trong RAM 1 LẦN DUY NHẤT cho mỗi URL rồi dùng lại mãi trong phiên hiện tại, kể cả khi DOM
+// bị dựng lại (vd gõ tìm kiếm trong popup "+" xoá sạch lưới cũ). Tầng NÀY mất khi F5 -- tầng sống sót qua
+// F5 là fetchJsonWithPersistentCache (Cache Storage) phía trên.
+var reactionAnimEntryCache = {}; // url -> JSON đã parse
+
+// Gắn 1 <lottie-player> vào containerEl, khung hiển thị CỐ ĐỊNH đúng sizePx, zoom vào giữa 1 mức CỐ ĐỊNH
+// REACTION_ANIM_ZOOM (không đo/không phụ thuộc icon nào -- xem javadoc phía trên). onFail(): gọi khi tải/
+// parse lỗi (lùi về emoji thô). autoplay=false: dựng xong CHỈ đứng yên ở khung hình đầu (không tự
+// play+loop) -- dùng cho lưới popup "+" (xem renderReactionMoreGrid): ~40-90 icon cùng hiện trong khung
+// nhìn 1 lúc, mỗi icon 1 vòng lặp rAF riêng CÙNG LÚC (BUG THẬT đã tự thấy: giật/lag rõ khi cuộn) -- chỉ
+// play() khi thật sự hover (xem attachReactionMoreHover) để tại 1 thời điểm hiếm khi có quá 1-2 icon đang
+// chạy animation cùng lúc. Mặc định (không truyền) vẫn autoplay như cũ cho khay 6 icon + badge dưới tin
+// nhắn (số lượng nhỏ, không cần tiết kiệm).
+//
+// BUG THẬT đã tự thấy (không đoán): xoá containerEl.innerHTML NGAY LẬP TỨC trước khi <lottie-player> có
+// gì để vẽ -- ở lưới popup "+" (IntersectionObserver huỷ/dựng lại liên tục lúc cuộn, xem
+// renderReactionMoreGrid), cuộn 1 icon ra rồi cuộn lại thấy 1 khung TRẮNG chớp qua trước khi icon hiện lại,
+// DÙ loadReactionAnimJson đã lấy JSON từ cache RAM/Cache Storage chỉ mất vài ms -- vì lottie-web vẫn cần
+// thời gian TỰ DỰNG LẠI SVG mỗi lần .load() (không cache được bước này, chỉ cache được bước TẢI JSON).
+// Sửa: dựng <lottie-player> NGẦM (display:none nhưng vẫn gắn thật vào DOM -- customElement cần
+// connectedCallback chạy mới khởi tạo đúng, không thể giữ rời rạc ngoài containerEl), đợi .load() xong mới
+// xoá nội dung cũ (glyph tĩnh...) và hiện lp ra CÙNG 1 nhịp, không có khoảng trắng ở giữa.
+//
+// BUG THẬT của thư viện @lottiefiles/lottie-player (repo GITHUB ĐÃ ARCHIVE 20/06/2026, không còn ai vá):
+// .load() có thể "thành công" (resolve, currentState báo "playing" bình thường, KHÔNG throw/lỗi console)
+// nhưng <svg> bên trong lại RỖNG HOÀN TOÀN (0 phần tử con) -- tự đo thấy xảy ra ở 2 tình huống KHÁC NHAU,
+// không đoán: (1) huỷ nhiều player đang chạy rồi dựng lại nhiều player mới CÙNG LÚC (xem populatePicker
+// trong compose-reactions-pins.js -- đã sửa bằng cách không huỷ/dựng lại DOM khay 6 icon cố định nữa vì
+// nội dung không đổi), (2) NGAY CẢ lần dựng ĐẦU TIÊN, tải nhiều animation ĐỒNG THỜI (vd 6 icon trong khay,
+// hoặc nhiều badge reaction dưới nhiều tin nhắn cùng lúc) thỉnh thoảng có 1-2 cái random bị lỗi này (không
+// cố định emoji nào, không phải do dữ liệu, thử lại là hết) -- và badge reaction dưới tin nhắn thì KHÔNG
+// thể áp dụng "chỉ dựng 1 lần" như khay 6 icon vì nội dung THẬT SỰ đổi mỗi khi có người thả/gỡ reaction
+// (renderReactions huỷ+dựng lại cả hàng reaction mỗi lần, xem messages-render.js).
+//
+// Không sửa được tận gốc trong thư viện đã archive -- tự dò (getBBox()/children.length của chính svg vừa
+// dựng, xem checkRenderedOk) rồi TỰ THỬ LẠI (dựng hẳn 1 <lottie-player> MỚI, KHÔNG dùng lại con cũ vì đã
+// xác nhận hỏng) tối đa 2 lần nữa trước khi đầu hàng lùi về emoji tĩnh -- attempt = tự truyền lại khi đệ
+// quy, code gọi mountReactionAnim từ bên ngoài luôn để trống (mặc định 1).
+var REACTION_ANIM_MAX_ATTEMPTS = 3;
+function checkReactionAnimRenderedOk(lp) {
+    var svg = lp.shadowRoot && lp.shadowRoot.querySelector('.animation svg');
+    return !!(svg && svg.children.length > 0);
+}
+function mountReactionAnim(containerEl, emoji, sizePx, onFail, autoplay, attempt) {
+    attempt = attempt || 1;
     var url = REACTION_ANIM_BY_EMOJI[emoji] || notoAnimUrlForEmoji(emoji);
     var lp = document.createElement('lottie-player');
     lp.setAttribute('background', 'transparent');
     lp.setAttribute('speed', '1');
     lp.style.width = sizePx + 'px';
     lp.style.height = sizePx + 'px';
-    lp.style.display = 'block';
-    containerEl.innerHTML = '';
+    lp.style.transform = 'scale(' + REACTION_ANIM_ZOOM + ')';
+    lp.style.display = 'none';
     containerEl.appendChild(lp);
-    loadReactionAnimEntry(url).then(function (entry) {
-        lp.style.transform = 'scale(' + entry.scale + ')';
+    loadReactionAnimJson(url).then(function (data) {
+        // loadReactionAnimJson trả về ĐÚNG 1 OBJECT JS DÙNG CHUNG cho mọi lần mount cùng emoji (cache theo
+        // URL) -- lottie-web tự MUTATE object animationData lúc render (gắn cache nội bộ/cờ "đã tính" lên
+        // thẳng các keyframe bên trong), nên PHẢI clone (JSON.parse(JSON.stringify(...)) -- animationData
+        // chỉ là dữ liệu thuần JSON) TRƯỚC MỖI LẦN load() để mỗi <lottie-player> luôn nhận 1 bản RIÊNG,
+        // không ai mutate chung với ai (tự đo thấy nếu dùng chung object, player thứ 2 trở đi luôn hỏng).
+        var dataForThisInstance = JSON.parse(JSON.stringify(data));
         // .load() (khác thuộc tính src) tự đặt loop:false/autoplay:false bên trong lottie-web -- phải tự
-        // bật lại loop + play NGAY SAU KHI load() resolve (lúc đó this._lottie chắc chắn đã tồn tại).
-        return lp.load(entry.data).then(function () { lp.loop = true; lp.play(); });
+        // bật lại loop + play NGAY SAU KHI load() resolve (lúc đó this._lottie chắc chắn đã tồn tại). Riêng
+        // autoplay=false: giữ loop=true sẵn (để attachReactionMoreHover chỉ cần gọi play() lúc hover) nhưng
+        // KHÔNG tự play -- lottie-player tự đứng ở khung hình đầu (không phải màn hình trắng).
+        return lp.load(dataForThisInstance).then(function () {
+            // Trong lúc đang tải, item có thể đã rời khung nhìn (containerEl.innerHTML bị reset về glyph
+            // tĩnh, xem renderReactionMoreGrid) hoặc bị 1 lần mount khác thay thế -- lp lúc này đã bị gỡ
+            // khỏi containerEl, KHÔNG được đụng vào nội dung hiện tại của containerEl nữa (tránh xoá nhầm
+            // nội dung đúng của lần mount/trạng thái mới hơn).
+            if (lp.parentElement !== containerEl) return;
+            lp.loop = true;
+            if (autoplay !== false) lp.play();
+            Array.from(containerEl.children).forEach(function (child) { if (child !== lp) child.remove(); });
+            lp.style.display = 'block';
+            // Đợi 1 khung hình cho <svg> kịp dựng (nếu dựng được) rồi mới đo -- dựng thành công thì gần như
+            // ngay lập tức, còn dựng hỏng thì CHỜ BAO LÂU CŨNG KHÔNG TỰ HẾT (đã tự đo, chờ thêm 1.5s vẫn
+            // rỗng), nên 1 khung hình là đủ để phân biệt 2 trường hợp, không cần chờ lâu hơn.
+            requestAnimationFrame(function () {
+                if (lp.parentElement !== containerEl || checkReactionAnimRenderedOk(lp)) return;
+                if (attempt >= REACTION_ANIM_MAX_ATTEMPTS) { if (onFail) onFail(); return; }
+                containerEl.innerHTML = ''; // lp này đã xác nhận hỏng (rỗng) -- bỏ hẳn, không giữ lại
+                mountReactionAnim(containerEl, emoji, sizePx, onFail, autoplay, attempt + 1);
+            });
+        });
     }).catch(function () { if (onFail) onFail(); });
 }
 var reactionPickerTarget = null; // {conversationId, messageId} đang mở picker cho tin nào

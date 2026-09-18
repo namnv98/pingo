@@ -9,6 +9,8 @@ document.addEventListener('click', closeAttachMenu);
 // Popup reaction (Facebook-style, 6 icon cố định trong REACTIONS) khác hẳn popup chèn emoji vào ô nhập (ensureComposeEmojiPicker, bộ Unicode đầy đủ) -- không dùng chung vì mục đích khác nhau.
 
 var pickerOnSelect = null; // callback(emoji) -- gán bởi openReactionPicker
+var reactionPickerOnMore = null; // callback() cho nút "+" -- luôn trỏ tới lần open GẦN NHẤT, xem populatePicker
+var reactionPickerBuilt = false; // đã dựng DOM 6 icon 1 lần chưa, xem javadoc populatePicker
 
 function ensureReactionPicker() {
     var picker = document.getElementById('reactionPicker');
@@ -19,7 +21,27 @@ function ensureReactionPicker() {
     return picker;
 }
 
+// BUG THẬT của thư viện @lottiefiles/lottie-player (đã tự đo bằng getBBox()/childElementCount, không
+// đoán -- repo GITHUB ĐÃ ARCHIVE 20/06/2026, đúng issue #231 "<lottie-player> tự biến mất sau khi chạy 1
+// lúc" từ bản 1.4.0 tới 2.0.2 = ĐÚNG BẢN đang tải qua CDN "@2", không có bản vá): huỷ nhiều <lottie-player>
+// đang chạy CÙNG LÚC dựng lại nhiều cái mới (chính là picker.innerHTML='' + tạo lại 6 nút mỗi lần mở) làm
+// MỌI lottie-player tạo ra SAU thời điểm đó vĩnh viễn render RỖNG (không throw, không lỗi console,
+// currentState vẫn báo "playing" bình thường) cho tới khi F5 lại trang -- tự tái hiện 100% qua UI thật:
+// mở picker lần 1 luôn ổn, đóng rồi mở lại lần 2 trắng tinh mãi mãi. issue #240 (rò rỉ listener trong
+// disconnectedCallback) càng khẳng định thư viện dọn dẹp nội bộ không đáng tin cậy khi bị huỷ/dựng lại
+// liên tục -- không phải chuyện sửa được bằng cách đổi thứ tự gọi destroy()/stop() phía code mình (đã tự
+// thử, không ăn thua).
+//
+// Sửa: REACTIONS là 6 icon CỐ ĐỊNH, không bao giờ đổi nội dung -- không có lý do gì phải huỷ+dựng lại DOM
+// (và do đó huỷ+dựng lại <lottie-player>) mỗi lần mở popup. Dựng ĐÚNG 1 LẦN cho cả phiên trang, các lần mở
+// sau chỉ show/hide lại (xem positionAndShowPicker/closeReactionPicker) -- icon animation cứ chạy liên tục
+// ở hậu trường, không bao giờ bị huỷ nên không bao giờ dính bug trên. pickerOnSelect (đã có sẵn, biến toàn
+// cục) và reactionPickerOnMore (thêm mới, cùng cơ chế) đảm bảo nút bấm luôn gọi ĐÚNG callback của lần mở
+// gần nhất dù DOM không dựng lại.
 function populatePicker(picker, onMore) {
+    reactionPickerOnMore = onMore;
+    if (reactionPickerBuilt) return;
+    reactionPickerBuilt = true;
     picker.innerHTML = '';
     REACTIONS.forEach(function (r, idx) {
         var btn = document.createElement('button');
@@ -42,7 +64,7 @@ function populatePicker(picker, onMore) {
     moreBtn.style.setProperty('--i', REACTIONS.length);
     moreBtn.title = 'Thêm reaction khác';
     moreBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
-    moreBtn.onclick = function (e) { e.stopPropagation(); onMore(); };
+    moreBtn.onclick = function (e) { e.stopPropagation(); if (reactionPickerOnMore) reactionPickerOnMore(); };
     picker.appendChild(moreBtn);
 }
 
@@ -70,18 +92,39 @@ function openReactionPicker(triggerEl, conversationId, messageId) {
 // nằm trong khung nhìn của lưới cuộn, ô rời khung nhìn tự huỷ về lại glyph Unicode tĩnh (rẻ) -- đúng
 // nghĩa "lazy-load" cho animation, không phải lazy-load DOM (DOM 1900 nút vẫn dựng hết 1 lần, nhẹ hơn
 // animation rất nhiều).
-var reactionMoreData = null; // [{emoji, name}] -- nạp 1 lần, cache lại (fetch lại thì query DevTools thấy request mới ngay nếu có gì sai)
+var reactionMoreData = null; // [{emoji, name, group}] -- nạp 1 lần, cache lại (fetch lại thì query DevTools thấy request mới ngay nếu có gì sai)
 var reactionMoreTarget = null; // callback(emoji) -- gán bởi openReactionMorePicker
 var reactionMoreObserver = null;
+// Đang gõ tìm kiếm thì null (xem input handler dưới) -- tab đang chọn để tô sáng + nhớ lại lúc mở popup lần sau.
+var reactionMoreActiveGroup = null;
+// "group" y hệt field "group" trong unicode-emoji-json (9 nhóm chuẩn Unicode CLDR, xem ensureReactionMoreData)
+// -- icon đại diện dùng luôn glyph Unicode tĩnh (không animate, chỉ để nhận diện nhóm, đỡ tốn tải/dựng
+// <lottie-player> cho có 9 nút). Nhãn tiếng Việt hiện qua title (hover) vì khung popup 352px không đủ chỗ
+// cho 9 tab có chữ.
+var REACTION_MORE_GROUPS = [
+    {group: 'Smileys & Emotion', icon: '😀', label: 'Mặt cười & Cảm xúc'},
+    {group: 'People & Body', icon: '🙌', label: 'Người & Cơ thể'},
+    {group: 'Animals & Nature', icon: '🐶', label: 'Động vật & Thiên nhiên'},
+    {group: 'Food & Drink', icon: '🍔', label: 'Đồ ăn & Thức uống'},
+    {group: 'Travel & Places', icon: '✈️', label: 'Du lịch & Địa điểm'},
+    {group: 'Activities', icon: '⚽', label: 'Hoạt động'},
+    {group: 'Objects', icon: '💡', label: 'Đồ vật'},
+    {group: 'Symbols', icon: '❤️', label: 'Ký hiệu'},
+    {group: 'Flags', icon: '🏳️', label: 'Cờ'}
+];
 
 function ensureReactionMoreData() {
     if (reactionMoreData) return Promise.resolve(reactionMoreData);
     // unicode-emoji-json (MIT, ~1900 emoji gốc + tên tiếng Anh) -- đủ cho "tìm theo tên", không cần tự
-    // vẽ/host lại font-data khổng lồ mà emoji-picker-element tự lo riêng cho việc CHÈN CHỮ.
-    return fetch('https://cdn.jsdelivr.net/npm/unicode-emoji-json/data-by-emoji.json')
-        .then(function (res) { return res.json(); })
+    // vẽ/host lại font-data khổng lồ mà emoji-picker-element tự lo riêng cho việc CHÈN CHỮ. "group" (field
+    // có sẵn trong data, đúng 9 nhóm CLDR chuẩn ở REACTION_MORE_GROUPS) dùng để chia tab.
+    // fetchJsonWithPersistentCache (state.js) -- cache lại qua Cache Storage, sống sót qua F5, không phải
+    // tải lại ~1900 dòng JSON mỗi lần mở lại app dù CDN đã có Cache-Control riêng.
+    return fetchJsonWithPersistentCache('https://cdn.jsdelivr.net/npm/unicode-emoji-json/data-by-emoji.json')
         .then(function (obj) {
-            reactionMoreData = Object.keys(obj).map(function (emoji) { return {emoji: emoji, name: obj[emoji].name}; });
+            reactionMoreData = Object.keys(obj).map(function (emoji) {
+                return {emoji: emoji, name: obj[emoji].name, group: obj[emoji].group};
+            });
             return reactionMoreData;
         });
 }
@@ -91,6 +134,35 @@ function filterReactionMoreData(q) {
     if (!q) return reactionMoreData;
     var qLower = q.toLowerCase();
     return reactionMoreData.filter(function (e) { return e.name.indexOf(qLower) !== -1; });
+}
+
+function filterReactionMoreDataByGroup(group) {
+    if (!reactionMoreData) return [];
+    return reactionMoreData.filter(function (e) { return e.group === group; });
+}
+
+// Vẽ lại hàng tab, tô sáng đúng nhóm đang chọn -- activeGroup=null nghĩa là đang ở chế độ tìm kiếm (không
+// tab nào được tô, xem input handler trong ensureReactionMorePicker).
+function renderReactionMoreTabs(activeGroup) {
+    var tabs = document.querySelector('#reactionMorePicker .reactionMoreTabs');
+    if (!tabs) return;
+    tabs.innerHTML = '';
+    REACTION_MORE_GROUPS.forEach(function (g) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'reactionMoreTab' + (g.group === activeGroup ? ' active' : '');
+        btn.title = g.label;
+        btn.innerText = g.icon;
+        btn.onclick = function (e) {
+            e.stopPropagation();
+            reactionMoreActiveGroup = g.group;
+            var search = document.querySelector('#reactionMorePicker .mediaPickerSearch');
+            if (search) search.value = '';
+            renderReactionMoreTabs(g.group);
+            renderReactionMoreGrid(filterReactionMoreDataByGroup(g.group));
+        };
+        tabs.appendChild(btn);
+    });
 }
 
 function renderReactionMoreGrid(list) {
@@ -110,9 +182,13 @@ function renderReactionMoreGrid(list) {
                 if (btn.querySelector('lottie-player')) return; // đã dựng sẵn (hiếm khi observer bắn lại lúc chưa kịp huỷ)
                 // mountReactionAnim (state.js) -- cache theo URL nên cùng 1 emoji cuộn ra/vào NHIỀU LẦN
                 // (hoặc gõ tìm kiếm làm dựng lại cả lưới) chỉ tải+parse JSON THẬT SỰ 1 LẦN DUY NHẤT, các
-                // lần sau chỉ dựng lại <lottie-player> từ dữ liệu đã có sẵn trong bộ nhớ -- và tự bù scale
-                // đồng nhất kích thước (xem javadoc reactionAnimScale).
-                mountReactionAnim(btn, emoji, 26, function () { btn.innerHTML = '<span class="static">' + emoji + '</span>'; });
+                // lần sau chỉ dựng lại <lottie-player> từ dữ liệu đã có sẵn trong bộ nhớ. Kích thước LUÔN
+                // cố định 26px, không tự bù to/nhỏ theo nội dung vẽ bên trong (xem javadoc mountReactionAnim).
+                // autoplay=false -- BUG THẬT đã tự thấy: cả lưới cùng lúc có thể tới ~40-90 icon trong khung
+                // nhìn (rootMargin 100px), mỗi icon tự chạy 1 vòng lặp rAF SONG SONG -> giật/lag rõ lúc cuộn.
+                // Chỉ play() thật sự lúc hover (xem addEventListener mouseenter/mouseleave dưới), đứng yên ở
+                // khung hình đầu lúc còn lại -- tại 1 thời điểm hiếm khi có quá 1-2 icon đang chạy animation.
+                mountReactionAnim(btn, emoji, 26, function () { btn.innerHTML = '<span class="static">' + emoji + '</span>'; }, false);
             } else {
                 btn.innerHTML = '<span class="static">' + emoji + '</span>'; // rời khung nhìn -- huỷ hẳn lottie-player (dừng rAF), không chỉ ẩn
             }
@@ -130,6 +206,18 @@ function renderReactionMoreGrid(list) {
             if (reactionMoreTarget) reactionMoreTarget(e.emoji);
             closeReactionMorePicker();
         };
+        // Gắn 1 LẦN DUY NHẤT lúc tạo nút (không phải mỗi lần mount/huỷ animation) -- chỉ có tác dụng khi
+        // đang thật sự nằm trong khung nhìn (có <lottie-player>, xem mountReactionAnim autoplay=false ở
+        // trên); rời khung nhìn thì nút đã bị thay bằng glyph tĩnh nên querySelector dưới tự trả về null,
+        // hover lúc đó vô hại (không có gì để play/stop).
+        btn.addEventListener('mouseenter', function () {
+            var lp = btn.querySelector('lottie-player');
+            if (lp) lp.play();
+        });
+        btn.addEventListener('mouseleave', function () {
+            var lp = btn.querySelector('lottie-player');
+            if (lp) lp.stop(); // stop() (không phải pause()) -- về lại khung hình đầu, hover lần sau luôn xem từ đầu, đồng nhất
+        });
         grid.appendChild(btn);
         reactionMoreObserver.observe(btn);
     });
@@ -143,11 +231,22 @@ function ensureReactionMorePicker() {
     picker.className = 'mediaPicker'; // dùng chung khung/kích thước với #gifPicker/#stickerPicker, xem CSS
     picker.innerHTML =
         '<input type="text" class="mediaPickerSearch" placeholder="Tìm reaction theo tên...">' +
+        '<div class="reactionMoreTabs"></div>' +
         '<div class="reactionMoreGrid"></div>';
     picker.addEventListener('click', function (e) { e.stopPropagation(); });
     // Lọc cục bộ trong mảng đã tải sẵn (không phải gọi API như Giphy) -- không cần debounce, tính tức thời với ~1900 phần tử.
+    // Gõ tìm kiếm thì BỎ QUA tab đang chọn, tìm trên toàn bộ (giống Slack/Discord/Messenger) -- xoá ô tìm
+    // kiếm (vd bấm lại 1 tab) mới quay về đúng nhóm đang nhớ.
     picker.querySelector('.mediaPickerSearch').addEventListener('input', function (e) {
-        renderReactionMoreGrid(filterReactionMoreData(e.target.value.trim()));
+        var q = e.target.value.trim();
+        if (q) {
+            renderReactionMoreTabs(null);
+            renderReactionMoreGrid(filterReactionMoreData(q));
+        } else {
+            var g = reactionMoreActiveGroup || REACTION_MORE_GROUPS[0].group;
+            renderReactionMoreTabs(g);
+            renderReactionMoreGrid(filterReactionMoreDataByGroup(g));
+        }
     });
     document.body.appendChild(picker);
     return picker;
@@ -166,9 +265,14 @@ function openReactionMorePicker(triggerEl, onSelect) {
     picker.querySelector('.mediaPickerSearch').value = '';
     var grid = picker.querySelector('.reactionMoreGrid');
     grid.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Đang tải...</div>';
-    ensureReactionMoreData().then(function (data) {
+    ensureReactionMoreData().then(function () {
         // Bấm đóng popup trong lúc đang tải (kịp closeReactionMorePicker về null) thì thôi, không render lên popup đã đóng.
-        if (reactionMoreTarget) renderReactionMoreGrid(data);
+        if (!reactionMoreTarget) return;
+        // Nhớ lại tab lần mở gần nhất (mặc định nhóm đầu tiên) thay vì luôn show cả 1914 emoji.
+        var g = reactionMoreActiveGroup || REACTION_MORE_GROUPS[0].group;
+        reactionMoreActiveGroup = g;
+        renderReactionMoreTabs(g);
+        renderReactionMoreGrid(filterReactionMoreDataByGroup(g));
     }).catch(function (err) {
         var grid2 = document.querySelector('#reactionMorePicker .reactionMoreGrid');
         if (grid2) grid2.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Lỗi tải: ' + err.message + '</div>';
