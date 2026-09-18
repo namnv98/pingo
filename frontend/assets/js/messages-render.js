@@ -206,10 +206,10 @@ function renderReactions(messageId, rowEl) {
             // Giống Facebook thật: chỉ hiện SỐ LƯỢNG khi >= 2 người -- 1 người thì chỉ cần mỗi emoji là đủ.
             pill.innerHTML = '<span class="emoji"></span>' + (uids.length > 1 ? '<span class="count"></span>' : '');
             var emojiEl = pill.querySelector('.emoji');
-            var iconSrc = REACTION_ICON_BY_EMOJI[emoji];
-            // Fallback về ký tự emoji thô cho reaction cũ không khớp bộ icon hiện tại -- không để badge trống trơn.
-            if (iconSrc) emojiEl.innerHTML = '<img src="' + iconSrc + '" width="14" height="14" alt="' + emoji + '">';
-            else emojiEl.innerText = emoji;
+            // mountReactionAnim (state.js) tự lo: cache JSON theo URL, tự bù scale cho đồng nhất kích
+            // thước icon (mỗi file Lottie vẽ hình thật chiếm tỉ lệ khung khác nhau), và lùi về ký tự
+            // emoji thô nếu Google Noto không có sẵn animation cho emoji đó.
+            mountReactionAnim(emojiEl, emoji, 14, function () { emojiEl.innerText = emoji; });
             if (uids.length > 1) pill.querySelector('.count').innerText = uids.length;
             // Tooltip tự làm (đẹp/nhanh hơn title mặc định của trình duyệt) -- xem showReactionTooltip.
             var tooltipText = uids.map(displayName).join(', ') + ' đã bày tỏ cảm xúc ' + emoji;
@@ -960,7 +960,19 @@ function renderMessageContent(el, body, onMediaReady) {
             }
         } else {
             el.classList.remove('media-only');
-            renderMessageText(el, messageBodyText(body));
+            // e2eFailed (placeholder "chưa giải mã được", xem e2eResolveIncomingBody/e2eResolveEditedBody,
+            // mls-crypto.js) -- KHÔNG qua renderMessageText: hàm đó escape HTML trước khi chèn nên không
+            // thể lách 1 icon <i class="fa-solid fa-lock"> vào giữa text (sẽ hiện nguyên chữ thẻ, không
+            // render icon) -- TRƯỚC ĐÂY nhét thẳng emoji 🔒 vào đầu chuỗi text cho qua. Dựng thẳng element
+            // <i> thật + text node cạnh nhau, không phải chuỗi HTML, nên không cần/không đi qua escape.
+            if (body.e2eFailed) {
+                var lockIconEl = document.createElement('i');
+                lockIconEl.className = 'msgLockIcon fa-solid fa-lock';
+                el.appendChild(lockIconEl);
+                el.appendChild(document.createTextNode(messageBodyText(body)));
+            } else {
+                renderMessageText(el, messageBodyText(body));
+            }
         }
     }
 }

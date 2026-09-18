@@ -78,8 +78,8 @@ public class HallApiHandlers {
    */
   private static final String MEMBER_REMOVED_ADDRESS = "conversation_member_removed";
   /**
-   * Địa chỉ EventBus broadcast "vừa có 1 tin to-device mới cho user X" (mã hoá đầu cuối -- thiết
-   * lập Olm session/phân phối Megolm session key, xem {@link #queueE2eToDevice}) — CHỈ để relay SỐNG
+   * Địa chỉ EventBus broadcast "vừa có 1 tin to-device mới cho user X" (mã hoá đầu cuối MLS -- Welcome/
+   * Commit + payload link thiết bị, xem {@link #queueE2eToDevice}) — CHỈ để relay SỐNG
    * cho session đang mở của đúng user X (tối ưu tốc độ, không phải đường đảm bảo duy nhất — hàng đợi
    * DB mới là nguồn thật, xem {@link E2eKeyRegistry#drainToDeviceMessages}). Harbor lắng nghe (thêm
    * consumer tương tự {@code RoutingVersionSync#onMemberRemoved}), relay {@code MessageType.E2E_TO_DEVICE}.
@@ -1087,10 +1087,75 @@ public class HallApiHandlers {
     }
     return mlsDevices.revokeDevice(userId, deviceId)
         .thenCompose(revokedNow -> {
-          if (revokedNow) revokedDevices.markRevoked(deviceId);
+          if (revokedNow) {
+            revokedDevices.markRevoked(deviceId);
+            notifyPruneHintForRevokedDevice(userId, deviceId);
+          }
           return mls.deleteKeyPackagesOfDevice(deviceId, userId);
         })
         .thenApply(unused -> bytes(new JsonObject().put("deviceId", deviceId.toString())));
+  }
+
+  /**
+   * Sau khi 1 thiết bị vừa bị THU HỒI (revoke, kể cả tự thu hồi chính mình lúc logout) -- báo NGAY
+   * cho mọi thành viên của mọi conversation đã bật mã hoá mà chủ thiết bị đó đang tham gia, để client
+   * của họ TỰ dọn leaf chết của thiết bị này khỏi cây MLS ngay lập tức (bỏ qua cooldown 6h/conversation
+   * phía client, xem {@code mls-crypto.js#e2ePruneDeadLeaves}) thay vì đợi tự nhiên tới lượt đồng bộ
+   * định kỳ của họ -- TRƯỚC ĐÂY không có cơ chế này, leaf chết cứ nằm im trong cây tới khi TÌNH CỜ có
+   * ai mở đúng conversation đó sau cooldown, có thể rất lâu với conversation ít hoạt động.
+   *
+   * Tái dùng ĐÚNG hàng đợi to-device sẵn có (persist + relay sống qua EventBus, xem {@link
+   * #queueE2eToDevice}) -- KHÔNG cần cơ chế "cờ/version" mới: server vốn đã CÂM (không đọc/không biết
+   * gì về nội dung MLS, chỉ trung chuyển), thêm 1 {@code type} message RỖNG "mls_prune_hint" là đủ,
+   * đúng tinh thần thiết kế Delivery Service sẵn có -- client tự quyết định làm gì với hint đó.
+   *
+   * Chạy NỀN, KHÔNG chặn response của {@link #deleteMlsDevice} (chỉ là gợi ý tối ưu tốc độ dọn dẹp,
+   * KHÔNG phải đường bảo mật/đúng-đắn chính -- chu kỳ dọn định kỳ phía client vẫn tự chạy dù hint này
+   * lỗi/rớt mất) -- lỗi chỉ log, không ném lên caller của {@code deleteMlsDevice}.
+   */
+  private void notifyPruneHintForRevokedDevice(UUID revokedUserId, UUID revokedDeviceId) {
+    membership.listE2eEnabledConversationIds(revokedUserId)
+        .thenCompose(conversationIds -> {
+          var perConversation = conversationIds.stream()
+              .map(conversationId -> membership.getMembers(conversationId)
+                  .thenCompose(memberIds -> {
+                    var deliveries = memberIds.stream()
+                        .map(memberId -> queueAndRelayToDevice(
+                            memberId, revokedUserId, conversationId, "mls_prune_hint", new JsonObject()))
+                        .toList();
+                    return CompletableFuture.allOf(deliveries.toArray(CompletableFuture[]::new));
+                  }))
+              .toList();
+          return CompletableFuture.allOf(perConversation.toArray(CompletableFuture[]::new));
+        })
+        .exceptionally(err -> {
+          System.err.println("[mls-prune-hint] báo dọn leaf chết lỗi (bỏ qua, thiết bị " + revokedDeviceId
+              + " vẫn coi như đã revoke đúng, chỉ lỡ mất 1 gợi ý dọn sớm): " + err);
+          return null;
+        });
+  }
+
+  /**
+   * Persist 1 tin to-device + relay sống qua EventBus nếu recipient đang online -- CÙNG 1 khuôn với
+   * vòng lặp deliveries trong {@link #queueE2eToDevice}, tách riêng ra đây để {@link
+   * #notifyPruneHintForRevokedDevice} dùng lại thay vì phải đi qua HTTP body giả.
+   */
+  private CompletableFuture<Void> queueAndRelayToDevice(
+      UUID recipientUserId, UUID senderUserId, UUID conversationId, String type, JsonObject body) {
+    var id = UUID.randomUUID();
+    // conversationId CÓ THỂ null (vd payload "link thiết bị" không gắn với 1 conversation cụ thể,
+    // xem createDeviceLinkRequest) -- không phải mọi caller đều có conversation để gắn.
+    return e2eKeys.queueToDeviceMessage(id, recipientUserId, senderUserId, conversationId, type, body.encode())
+        .thenAccept(unused -> vertx.eventBus().publish(
+            E2E_TO_DEVICE_ADDRESS,
+            new JsonObject()
+                .put("id", id.toString())
+                .put("recipientUserId", recipientUserId.toString())
+                .put("senderUserId", senderUserId.toString())
+                .put("conversationId", conversationId == null ? null : conversationId.toString())
+                .put("type", type)
+                .put("body", body)))
+        .toCompletableFuture();
   }
 
   private static final int MLS_REVOKED_CHECK_MAX_IDS = 500;
@@ -1232,8 +1297,9 @@ public class HallApiHandlers {
 
   /**
    * {@code POST /e2e/to-device} — body JSON {@code {deliveries: [{recipientUserId, type, conversationId
-   * (tuỳ chọn), body: {...}}, ...]}}. Gửi hàng loạt tin báo hiệu mã hoá THẲNG cho từng user (thiết
-   * lập Olm session, phân phối/rotate Megolm session key) -- KHÔNG đi qua conversation fan-out
+   * (tuỳ chọn), body: {...}}, ...]}}. Gửi hàng loạt tin báo hiệu mã hoá MLS THẲNG cho từng user
+   * (Welcome/Commit khi thêm/bớt thành viên nhóm, hoặc payload "link thiết bị" -- xem
+   * {@code E2eKeyRegistry#createDeviceLinkRequest}) -- KHÔNG đi qua conversation fan-out
    * thường (xem javadoc {@link E2eKeyRegistry}). Mỗi delivery vừa PERSIST (nguồn thật, đọc lại lúc
    * offline qua {@link #drainE2eToDevice}) vừa publish EventBus để relay SỐNG ngay nếu recipient
    * đang online (xem {@link #E2E_TO_DEVICE_ADDRESS}, harbor's RoutingVersionSync lắng nghe).
@@ -1258,20 +1324,7 @@ public class HallApiHandlers {
         continue;
       }
       var conversationId = UUIDUtils.parseOrDefault(delivery.getString("conversationId"));
-      var id = UUID.randomUUID();
-      var future = e2eKeys
-          .queueToDeviceMessage(id, recipientUserId, senderId, conversationId, type, payload.encode())
-          .thenAccept(unused -> vertx.eventBus().publish(
-              E2E_TO_DEVICE_ADDRESS,
-              new JsonObject()
-                  .put("id", id.toString())
-                  .put("recipientUserId", recipientUserId.toString())
-                  .put("senderUserId", senderId.toString())
-                  .put("conversationId", conversationId == null ? null : conversationId.toString())
-                  .put("type", type)
-                  .put("body", payload)))
-          .toCompletableFuture();
-      futures.add(future);
+      futures.add(queueAndRelayToDevice(recipientUserId, senderId, conversationId, type, payload));
     }
     return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
         .thenApply(unused -> bytes(new JsonObject().put("count", futures.size())));
@@ -1288,18 +1341,21 @@ public class HallApiHandlers {
   }
 
   // ================= Liên kết thiết bị mã hoá (KHÔNG quét QR -- gõ tay mã 6 ký tự) =================
-  // Thiết bị MỚI (chưa có Olm.Account cục bộ) xin 1 mã ngắn hạn ở đây, hiển thị cho user gõ tay sang
-  // thiết bị ĐÃ bật E2E; thiết bị đó lấy bundle (identity+one-time key) của thiết bị mới, mã hoá
-  // NGUYÊN Account thật của mình (Olm 1-1 bình thường, tái dùng {@code POST /e2e/to-device} sẵn có
-  // để chuyển gói đó về CHÍNH MÌNH) -- xem frontend's e2eRequestDeviceLink/e2eApproveDeviceLink.
-  // Server CHỈ trung chuyển 2 public key (identity+one-time) ở các endpoint dưới đây, KHÔNG BAO GIỜ
-  // thấy private key/nội dung gói chuyển giao (đi qua hàng đợi to-device đã mã hoá sẵn từ client).
+  // Thiết bị MỚI (chưa từng join group MLS nào) xin 1 mã ngắn hạn ở đây, hiển thị cho user gõ tay sang
+  // thiết bị ĐÃ bật E2E; thiết bị đó lấy bundle (KeyPackage MLS tạm của thiết bị mới, field vẫn tên
+  // identity+one-time key từ thời Olm cũ), tạo 1 group MLS TẠM 2 thành viên (mình + thiết bị mới) rồi
+  // gửi Welcome + gói lịch sử đã mã hoá (payload application-message MLS, tái dùng {@code POST
+  // /e2e/to-device} sẵn có để chuyển về CHÍNH MÌNH) -- xem frontend's
+  // e2eRequestDeviceLink/e2eApproveDeviceLink.
+  // Server CHỈ trung chuyển 2 "public key" (thật ra là 1 KeyPackage MLS encode, tách 2 field cho hợp
+  // shape cũ) ở các endpoint dưới đây, KHÔNG BAO GIỜ thấy private key/nội dung gói chuyển giao (đi
+  // qua hàng đợi to-device đã mã hoá sẵn từ client).
 
   /**
    * {@code POST /e2e/device-link/request} — body {@code {identityKey, oneTimeKeyId, oneTimeKey}}
-   * (bundle của 1 {@code Olm.Account} TẠM, thiết bị mới tự tạo, chỉ dùng 1 lần cho việc này). Trả
-   * {@code {code, expiresInSeconds}} -- mã hết hạn sau 5 phút (xem
-   * {@link E2eKeyRegistry#claimDeviceLinkRequest}).
+   * (bundle chứa 1 KeyPackage MLS TẠM, thiết bị mới tự tạo, chỉ dùng 1 lần cho việc này -- field vẫn
+   * giữ tên thời Olm cũ, xem javadoc {@link E2eKeyRegistry}). Trả {@code {code, expiresInSeconds}} --
+   * mã hết hạn sau 5 phút (xem {@link E2eKeyRegistry#claimDeviceLinkRequest}).
    */
   @RegisterHandler(apis = {@RegisterIApi(method = ApiMethod.POST, endpoint = "e2e/device-link/request", type = Type.HTTP)})
   public CompletionStage<byte[]> requestDeviceLink(IRequest request) {

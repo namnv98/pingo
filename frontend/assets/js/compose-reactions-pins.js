@@ -19,13 +19,13 @@ function ensureReactionPicker() {
     return picker;
 }
 
-function populatePicker(picker) {
+function populatePicker(picker, onMore) {
     picker.innerHTML = '';
     REACTIONS.forEach(function (r, idx) {
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.style.setProperty('--i', idx);
-        btn.innerHTML = '<img src="' + r.icon + '" width="28" height="28" alt="' + r.emoji + '">';
+        mountReactionAnim(btn, r.emoji, 28);
         btn.onclick = function (e) {
             e.stopPropagation();
             if (pickerOnSelect) pickerOnSelect(r.emoji);
@@ -33,6 +33,17 @@ function populatePicker(picker) {
         };
         picker.appendChild(btn);
     });
+    // Nút "+" mở bộ emoji ĐẦY ĐỦ (dùng lại chính #composeEmojiPicker/emoji-picker-element, xem
+    // openComposeEmojiPicker) để thả BẤT KỲ emoji nào làm reaction, không giới hạn 6 icon cố định kiểu
+    // Facebook ở trên -- đúng ý "ấn vào load thêm reaction".
+    var moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'reactionPickerMore';
+    moreBtn.style.setProperty('--i', REACTIONS.length);
+    moreBtn.title = 'Thêm reaction khác';
+    moreBtn.innerHTML = '<i class="fa-solid fa-plus"></i>';
+    moreBtn.onclick = function (e) { e.stopPropagation(); onMore(); };
+    picker.appendChild(moreBtn);
 }
 
 function openReactionPicker(triggerEl, conversationId, messageId) {
@@ -44,9 +55,133 @@ function openReactionPicker(triggerEl, conversationId, messageId) {
     closePinMenu();
     reactionPickerTarget = {conversationId: conversationId, messageId: messageId};
     pickerOnSelect = function (emoji) { sendReaction(conversationId, messageId, emoji); };
-    populatePicker(ensureReactionPicker());
+    populatePicker(ensureReactionPicker(), function () {
+        closeReactionPicker();
+        openReactionMorePicker(triggerEl, function (emoji) { sendReaction(conversationId, messageId, emoji); });
+    });
     positionAndShowPicker(triggerEl);
 }
+
+// ===== Popup "+" -- reaction ĐỘNG ngoài 6 icon cố định, tìm theo tên, lazy-load animation =====
+// Không dùng emoji-picker-element ở đây (khác hẳn ô chèn emoji vào text, xem openComposeEmojiPicker):
+// nó chỉ render glyph tĩnh theo font hệ điều hành, không có chỗ nào để nhét icon động vào -- phải tự vẽ
+// lưới riêng. ~1900 emoji mà bật <lottie-player> (rAF thật) CÙNG LÚC cho tất cả chắc chắn giật (đã tự
+// cân nhắc, không phải đoán) -- IntersectionObserver dưới đây CHỈ dựng lottie-player cho ô đang thật sự
+// nằm trong khung nhìn của lưới cuộn, ô rời khung nhìn tự huỷ về lại glyph Unicode tĩnh (rẻ) -- đúng
+// nghĩa "lazy-load" cho animation, không phải lazy-load DOM (DOM 1900 nút vẫn dựng hết 1 lần, nhẹ hơn
+// animation rất nhiều).
+var reactionMoreData = null; // [{emoji, name}] -- nạp 1 lần, cache lại (fetch lại thì query DevTools thấy request mới ngay nếu có gì sai)
+var reactionMoreTarget = null; // callback(emoji) -- gán bởi openReactionMorePicker
+var reactionMoreObserver = null;
+
+function ensureReactionMoreData() {
+    if (reactionMoreData) return Promise.resolve(reactionMoreData);
+    // unicode-emoji-json (MIT, ~1900 emoji gốc + tên tiếng Anh) -- đủ cho "tìm theo tên", không cần tự
+    // vẽ/host lại font-data khổng lồ mà emoji-picker-element tự lo riêng cho việc CHÈN CHỮ.
+    return fetch('https://cdn.jsdelivr.net/npm/unicode-emoji-json/data-by-emoji.json')
+        .then(function (res) { return res.json(); })
+        .then(function (obj) {
+            reactionMoreData = Object.keys(obj).map(function (emoji) { return {emoji: emoji, name: obj[emoji].name}; });
+            return reactionMoreData;
+        });
+}
+
+function filterReactionMoreData(q) {
+    if (!reactionMoreData) return [];
+    if (!q) return reactionMoreData;
+    var qLower = q.toLowerCase();
+    return reactionMoreData.filter(function (e) { return e.name.indexOf(qLower) !== -1; });
+}
+
+function renderReactionMoreGrid(list) {
+    var grid = document.querySelector('#reactionMorePicker .reactionMoreGrid');
+    if (!grid) return;
+    if (reactionMoreObserver) reactionMoreObserver.disconnect();
+    grid.innerHTML = '';
+    if (!list.length) {
+        grid.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Không tìm thấy reaction nào.</div>';
+        return;
+    }
+    reactionMoreObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            var btn = entry.target;
+            var emoji = btn.dataset.emoji;
+            if (entry.isIntersecting) {
+                if (btn.querySelector('lottie-player')) return; // đã dựng sẵn (hiếm khi observer bắn lại lúc chưa kịp huỷ)
+                // mountReactionAnim (state.js) -- cache theo URL nên cùng 1 emoji cuộn ra/vào NHIỀU LẦN
+                // (hoặc gõ tìm kiếm làm dựng lại cả lưới) chỉ tải+parse JSON THẬT SỰ 1 LẦN DUY NHẤT, các
+                // lần sau chỉ dựng lại <lottie-player> từ dữ liệu đã có sẵn trong bộ nhớ -- và tự bù scale
+                // đồng nhất kích thước (xem javadoc reactionAnimScale).
+                mountReactionAnim(btn, emoji, 26, function () { btn.innerHTML = '<span class="static">' + emoji + '</span>'; });
+            } else {
+                btn.innerHTML = '<span class="static">' + emoji + '</span>'; // rời khung nhìn -- huỷ hẳn lottie-player (dừng rAF), không chỉ ẩn
+            }
+        });
+    }, {root: grid, rootMargin: '100px 0px'});
+    list.forEach(function (e) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'reactionMoreItem';
+        btn.title = e.name;
+        btn.dataset.emoji = e.emoji;
+        btn.innerHTML = '<span class="static">' + e.emoji + '</span>';
+        btn.onclick = function (ev) {
+            ev.stopPropagation();
+            if (reactionMoreTarget) reactionMoreTarget(e.emoji);
+            closeReactionMorePicker();
+        };
+        grid.appendChild(btn);
+        reactionMoreObserver.observe(btn);
+    });
+}
+
+function ensureReactionMorePicker() {
+    var picker = document.getElementById('reactionMorePicker');
+    if (picker) return picker;
+    picker = document.createElement('div');
+    picker.id = 'reactionMorePicker';
+    picker.className = 'mediaPicker'; // dùng chung khung/kích thước với #gifPicker/#stickerPicker, xem CSS
+    picker.innerHTML =
+        '<input type="text" class="mediaPickerSearch" placeholder="Tìm reaction theo tên...">' +
+        '<div class="reactionMoreGrid"></div>';
+    picker.addEventListener('click', function (e) { e.stopPropagation(); });
+    // Lọc cục bộ trong mảng đã tải sẵn (không phải gọi API như Giphy) -- không cần debounce, tính tức thời với ~1900 phần tử.
+    picker.querySelector('.mediaPickerSearch').addEventListener('input', function (e) {
+        renderReactionMoreGrid(filterReactionMoreData(e.target.value.trim()));
+    });
+    document.body.appendChild(picker);
+    return picker;
+}
+
+function openReactionMorePicker(triggerEl, onSelect) {
+    closeReactionPicker();
+    closeComposeEmojiPicker();
+    closeGifPicker();
+    closeStickerPicker();
+    closeAttachMenu();
+    reactionMoreTarget = onSelect;
+    var picker = ensureReactionMorePicker();
+    picker.classList.add('show');
+    positionComposeEmojiPicker(triggerEl, picker); // dùng chung logic định vị với #composeEmojiPicker/#gifPicker
+    picker.querySelector('.mediaPickerSearch').value = '';
+    var grid = picker.querySelector('.reactionMoreGrid');
+    grid.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Đang tải...</div>';
+    ensureReactionMoreData().then(function (data) {
+        // Bấm đóng popup trong lúc đang tải (kịp closeReactionMorePicker về null) thì thôi, không render lên popup đã đóng.
+        if (reactionMoreTarget) renderReactionMoreGrid(data);
+    }).catch(function (err) {
+        var grid2 = document.querySelector('#reactionMorePicker .reactionMoreGrid');
+        if (grid2) grid2.innerHTML = '<div class="mediaPickerStatus" style="grid-column:1/-1">Lỗi tải: ' + err.message + '</div>';
+    });
+}
+
+function closeReactionMorePicker() {
+    var picker = document.getElementById('reactionMorePicker');
+    if (picker) picker.classList.remove('show');
+    if (reactionMoreObserver) { reactionMoreObserver.disconnect(); reactionMoreObserver = null; }
+    reactionMoreTarget = null;
+}
+document.addEventListener('click', closeReactionMorePicker);
 
 function positionAndShowPicker(triggerEl) {
     var picker = ensureReactionPicker();
@@ -110,6 +245,7 @@ function ensurePinMenu() {
 
 function openPinMenu(triggerEl, conversationId, messageId) {
     closeReactionPicker();
+    closeReactionMorePicker();
     closeComposeEmojiPicker();
     closeGifPicker();
     closeStickerPicker();
@@ -180,13 +316,17 @@ function ensureComposeEmojiPicker() {
     return picker;
 }
 
-function openComposeEmojiPicker(triggerEl, inputEl) {
+// onSelect(emoji): callback -- hiện chỉ dùng để chèn emoji vào ô nhập (xem messaging-core.js). Popup
+// reaction "+" KHÔNG dùng cái này nữa (xem openReactionMorePicker) vì emoji-picker-element chỉ render
+// glyph tĩnh, không có chỗ nhét icon động.
+function openComposeEmojiPicker(triggerEl, onSelect) {
     closeReactionPicker(); // các popup emoji/sticker/GIF/attach không nên cùng mở 1 lúc
+    closeReactionMorePicker();
     closeGifPicker();
     closeStickerPicker();
     closeAttachMenu();
     var picker = ensureComposeEmojiPicker();
-    composeEmojiPickerTarget = function (emoji) { insertEmojiAtCursor(inputEl, emoji); };
+    composeEmojiPickerTarget = onSelect;
     composeEmojiPickerTriggerEl = triggerEl;
     picker.classList.add('show');
     positionComposeEmojiPicker(triggerEl, picker);
@@ -307,6 +447,7 @@ function loadMediaItems(kind, q) {
 
 function openMediaPicker(kind, triggerEl, conversationId) {
     closeReactionPicker();
+    closeReactionMorePicker();
     closeComposeEmojiPicker();
     closeAttachMenu();
     closeMediaPicker(kind === 'stickers' ? 'gifs' : 'stickers'); // đóng nốt cái CÒN LẠI (gif hoặc sticker)

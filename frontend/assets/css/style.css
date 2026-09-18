@@ -109,16 +109,18 @@
         button.primary { background: var(--primary-btn-bg); color: var(--primary-btn-fg); border-color: var(--primary-btn-bg); font-weight: 600; }
         button.primary:hover { background: var(--primary-btn-hover-bg); border-color: var(--primary-btn-hover-bg); }
         button.icon { padding: 6px 9px; }
-        /* 6 icon reply/pin/lock/link/trash/react (mặt cười) dùng Font Awesome Free (CDN, xem <link>
+        /* 7 icon reply/pin/lock/link/trash/edit/react (mặt cười) dùng Font Awesome Free (CDN, xem <link>
            trong <head>) -- font-family/font-weight thật sự đến từ class .fa-solid của chính thư viện
            đó, ở đây chỉ set font-size cho khớp cỡ 14px các icon SVG khác trong app đang dùng (mặc định
            FA ăn theo font-size chữ thường 13px của body, hơi nhỏ hơn 1 chút so với phần còn lại). Nút
            react trước dùng emoji 🙂 (màu vàng cố định, lạc tông với cụm nút xám/đen còn lại) -- đổi
-           sang icon đồng màu như các icon khác. Bản Free chỉ có style "solid" (khối đặc) cho các icon
-           này -- style "regular" (nét mảnh, khớp tông ICON object hơn) cần Font Awesome Pro, không
-           dùng được.
-           Class: fa-solid fa-reply / fa-thumbtack / fa-lock / fa-link / fa-trash. */
-        .fa-reply, .fa-thumbtack, .fa-lock, .fa-link, .fa-trash, .fa-face-smile { font-size: 14px; }
+           sang icon đồng màu như các icon khác. "edit" (renameBtn/profileRenameBtn/infoPanelAvatarEditBtn)
+           TRƯỚC ĐÂY dùng 1 SVG tự vẽ riêng (ICON.edit, hình bút khác dáng) trong khi msgEditBtn (nút "Sửa
+           tin nhắn") lại dùng fa-pen -- 2 icon "sửa" khác nhau cùng lúc trong app, đổi hết về fa-pen cho
+           đồng nhất. Bản Free chỉ có style "solid" (khối đặc) cho các icon này -- style "regular" (nét
+           mảnh, khớp tông ICON object hơn) cần Font Awesome Pro, không dùng được.
+           Class: fa-solid fa-reply / fa-thumbtack / fa-lock / fa-link / fa-trash / fa-pen. */
+        .fa-reply, .fa-thumbtack, .fa-lock, .fa-link, .fa-trash, .fa-pen, .fa-face-smile { font-size: 14px; }
         input[type=text], input[type=password], select { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; font-family: inherit; background: var(--surface); color: var(--ink); }
         input[type=text]:focus, input[type=password]:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
         label { font-size: 12px; color: var(--ink-soft); font-weight: 500; }
@@ -406,7 +408,8 @@
         .conv-list-item .meta { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; margin-top: 3px; }
         .conv-list-item.unread .meta { color: var(--ink-soft); font-weight: 600; }
         .conv-list-item .metaPrefix, .conv-list-item .metaCaption, .conv-list-item .metaText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .conv-list-item .metaPrefix { flex: none; }
+        .conv-list-item .metaPrefix, .conv-list-item .metaLockIcon { flex: none; }
+        .conv-list-item .metaLockIcon { font-size: 12px; }
         .conv-list-item .metaCaption { min-width: 20px; }
         .conv-list-item .metaText { flex: 1; min-width: 0; }
         /* Pill màu cho tin có file (ảnh/video) -- kiểu "Photo"/"Video (x3)" trong ảnh tham khảo, thay
@@ -455,6 +458,14 @@
            tràn, không thì đẩy lệch/che mất cụm icon bên phải (headRight), vỡ cả hàng đầu khung chat. */
         .conv-head .convLabel { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .conv-head.group .convLabel::before { content: '# '; color: var(--ink-faint); font-weight: 400; }
+        /* Icon khoá "đã bật mã hoá đầu cuối" (convLabelLockIcon, xem refreshConversationList) -- màu
+           nhạt như tiền tố "# " của group ở trên, cùng ngôn ngữ hình ảnh, không tô nổi hơn chữ tên hội
+           thoại đứng cạnh nó. KHÔNG được đặt font-weight ở đây (khác với "# " ở trên) -- bản Free của
+           Font Awesome chỉ có glyph cho style "solid" ở đúng font-weight 900 (đặt qua .fa-solid), đè
+           thành 400 làm trình duyệt không tìm được glyph, hiện ô tofu trống thay vì icon khoá (bug thật
+           đã tự gặp -- xem đúng lời giải thích ở khối comment "6 icon reply/pin/lock/link/trash/edit" gần
+           đầu file này). */
+        .conv-head .convLabelLockIcon { color: var(--ink-faint); margin-right: 5px; font-size: 13px; }
         .conv-head .subtitle { font-weight: 400; color: var(--ink-faint); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .conv-head .subtitle:empty { display: none; }
         .conv-head .online-status { font-weight: 500; color: #16a34a; font-size: 11.5px; margin-top: 2px; display: none; }
@@ -643,6 +654,15 @@
            scroll listener trong ensureConversationCard). Badge tròn góc trên-phải đếm số tin mới đã
            tới TRONG LÚC đang cuộn lên (xem bumpJumpBadge) -- bấm vào mới thật sự cuộn xuống xem, KHÔNG
            tự cuộn (đúng yêu cầu: có tin mới không tự nhảy xuống, chỉ báo rồi để người dùng tự bấm). */
+        /* Phủ đúng .conv-log-wrap (position:relative sẵn có ở trên) trong lúc loadHistory() đang chạy
+           (fetch + giải mã batch đầu tiên, có thể mất vài giây ngay sau login -- xem javadoc
+           E2E_INITIAL_DRAIN_TIMEOUT_MS ở mls-crypto.js) -- che đúng khoảng "trắng tinh" TRƯỚC ĐÂY thay
+           vì để lộ nền .conv-log rỗng. Mặc định "show" ngay trong markup (ensureConversationCard) --
+           chỉ có class ẩn (.convLogLoading không "show"), không có JS nào tự BẬT lại nó. */
+        .convLogLoading { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: var(--surface); z-index: 4; }
+        .convLogLoading.show { display: flex; }
+        .convLogSpinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: convLogSpin .7s linear infinite; }
+        @keyframes convLogSpin { to { transform: rotate(360deg); } }
         .jumpToBottomBtn { position: absolute; right: 20px; bottom: 16px; width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-md); display: none; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; padding: 0; z-index: 5; transition: transform .1s; }
         .jumpToBottomBtn:hover { transform: translateY(-2px); }
         .jumpToBottomBtn.show { display: flex; }
@@ -856,6 +876,10 @@
         .searchResultSnippet mark { background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; border-radius: 3px; padding: 0 1px; }
         .msg-caption { margin-top: 6px; }
         .bubble .mention { color: var(--accent-dark); font-weight: 600; }
+        /* Icon khoá cho placeholder "chưa giải mã được" (msgLockIcon, xem renderMessageContent) --
+           KHÔNG set color riêng, ăn theo currentColor của .bubble (đen ở "theirs", trắng ở "mine") --
+           tự đúng theo mọi theme/màu bubble mà không cần biết trước đang render bên nào. */
+        .bubble .msgLockIcon { margin-right: 5px; }
         /* Link trong tin nhắn chữ -- xanh + gạch chân (mine: nền màu đậm nên chỉ cần chữ đậm, không
            gạch chân rối mắt trên nền xanh). */
         .bubble .msgLink { color: var(--accent-dark); text-decoration: underline; word-break: break-all; }
@@ -1008,8 +1032,8 @@
            chọn emoji sẽ mất :hover, cả cụm phải giữ hiện CƯỠNG BỨC bằng class này (gắn/gỡ lúc mở/đóng
            popup, xem openReactionPicker/closeReactionPicker) tới khi popup thật sự đóng. */
         .msg-actions.picker-open { opacity: 1; pointer-events: auto; }
-        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn, .forwardBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
-        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover, .forwardBtn:hover { background: var(--canvas); }
+        .react-btn, .msgDeleteBtn, .replyBtn, .pinBtn, .forwardBtn, .msgEditBtn { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-sm); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; padding: 0; flex: none; color: var(--ink-faint); }
+        .react-btn:hover, .msgDeleteBtn:hover, .replyBtn:hover, .pinBtn:hover, .forwardBtn:hover, .msgEditBtn:hover { background: var(--canvas); }
         /* Xoá luôn tô đỏ (không đợi hover) -- hành động phá huỷ, quy ước iOS/Telegram đánh dấu sẵn
            bằng màu ngay cả lúc chưa tương tác, không phải chỉ đổi màu lúc hover như các nút khác. Đỏ
            nhạt (#ef4444, không phải #dc2626 đậm) -- vẫn đủ nhận ra "nguy hiểm" nhưng đỡ gắt hơn giữa
@@ -1023,8 +1047,10 @@
         /* Mặc định TRUNG TÍNH (trắng/viền xám/chữ đen) -- đúng màu badge reaction trong ảnh tham khảo;
            chỉ tô tím khi ĐÂY LÀ reaction của chính mình (.mine bên dưới), không tô tím tất cả. */
         .reaction-pill { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 3px 8px; font-size: 12.5px; font-weight: 700; color: var(--ink); cursor: pointer; box-shadow: var(--shadow-sm); transition: border-color .1s, transform .1s; }
-        .reaction-pill .emoji { font-size: 13px; }
-        .reaction-pill .emoji img { display: block; }
+        /* overflow:hidden -- mountReactionAnim (state.js) tự bù scale (có thể tới 3.5x) cho icon đồng đều
+           kích thước, không kẹp lại thì icon phóng to tràn ra ngoài khung, đè lên phần tử bên cạnh. */
+        .reaction-pill .emoji { font-size: 13px; overflow: hidden; }
+        .reaction-pill .emoji img, .reaction-pill .emoji lottie-player { display: block; pointer-events: none; }
         .reaction-pill:hover { border-color: var(--accent); transform: translateY(-1px); }
         .reaction-pill.mine { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-dark); }
 
@@ -1121,10 +1147,13 @@
         #reactionPicker::after { content: ''; position: absolute; left: var(--arrow-left, 50%); bottom: -6px; width: 11px; height: 11px; background: var(--surface); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: translateX(-50%) rotate(45deg); border-radius: 0 0 3px 0; z-index: -1; }
         /* Mỗi emoji là 1 nút tròn; hover NỔI lên + phóng to + nền accent-soft, active ép xuống. Emoji
            lần lượt nảy vào (stagger qua --i đặt ở JS) cho cảm giác "bung" vui mắt lúc mở. */
-        #reactionPicker button { border: none; background: none; font-size: 23px; width: 40px; height: 40px; padding: 0; cursor: pointer; border-radius: 50%; line-height: 1; display: flex; align-items: center; justify-content: center; transition: transform .13s cubic-bezier(.34,1.56,.64,1), background .12s; animation: emojiPop .3s cubic-bezier(.34,1.56,.64,1) both; animation-delay: calc(var(--i, 0) * 28ms); }
+        #reactionPicker button { border: none; background: none; font-size: 23px; width: 40px; height: 40px; padding: 0; cursor: pointer; border-radius: 50%; line-height: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; transition: transform .13s cubic-bezier(.34,1.56,.64,1), background .12s; animation: emojiPop .3s cubic-bezier(.34,1.56,.64,1) both; animation-delay: calc(var(--i, 0) * 28ms); }
         #reactionPicker button:hover { background: var(--accent-soft); transform: translateY(-7px) scale(1.32); }
         #reactionPicker button:active { transform: translateY(-2px) scale(1.1); }
-        #reactionPicker button img { display: block; pointer-events: none; }
+        #reactionPicker button img, #reactionPicker button lottie-player { display: block; pointer-events: none; }
+        /* Nút "+" mở bộ emoji đầy đủ (xem populatePicker) -- tách màu để không lẫn với 6 icon reaction thật, viền chấm gợi ý "còn nữa". */
+        #reactionPicker button.reactionPickerMore { color: var(--ink-soft); border: 1.5px dashed var(--line); }
+        #reactionPicker button.reactionPickerMore:hover { color: var(--accent); border-color: var(--accent); }
         @keyframes emojiPop { from { opacity: 0; transform: scale(.4) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 
         /* Menu ghim (.pinBtn trong .msg-actions) -- danh sách nút chữ dọc, cùng cơ chế định vị/kẹp
@@ -1177,6 +1206,14 @@
         .mediaPickerGrid img { width: 100%; height: 90px; object-fit: cover; border-radius: 8px; cursor: pointer; background: var(--canvas); display: block; transition: transform .1s; }
         .mediaPickerGrid img:hover { transform: scale(1.03); }
         .mediaPickerStatus { flex: none; padding: 20px; text-align: center; color: var(--ink-faint); font-size: 12.5px; }
+
+        /* Popup "+" của reaction (xem openReactionMorePicker) -- dùng chung khung .mediaPicker (352x420,
+           search pill) nhưng lưới riêng: ô nhỏ vuông thay vì thumbnail lớn 2 cột. */
+        .reactionMoreGrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, 36px); gap: 4px; padding: 0 8px 8px; align-content: start; justify-content: space-between; }
+        .reactionMoreItem { width: 36px; height: 36px; border: none; background: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: 20px; line-height: 1; transition: background .1s, transform .1s; }
+        .reactionMoreItem:hover { background: var(--reaction-hover-bg); transform: scale(1.12); }
+        .reactionMoreItem .static { pointer-events: none; }
+        .reactionMoreItem lottie-player { display: block; pointer-events: none; }
 
         /* Khung soạn tin kiểu ảnh tham khảo: PHẲNG hoàn toàn, không viền/không pill bo tròn quanh cả
            khối -- chỉ 1 gạch mảnh phân cách với khung tin nhắn phía trên, nút tròn màu ĐẶC (không

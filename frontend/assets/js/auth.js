@@ -96,6 +96,16 @@ function register() { doAuth('/register'); }
 function logout() {
     identityConfirmed = false; // truoc khi close() de ws.onclose khong tu retry
     if (ws) { ws.close(); ws = null; }
+    // BUG THẬT đã tự bắt được trên dữ liệu test thật: e2eInit() memo hoá theo `e2eInitializedForUserId
+    // !== myUserId` -- logout() KHÔNG hề đụng tới biến này, nên đăng xuất rồi đăng nhập LẠI CÙNG 1 user
+    // trong CÙNG 1 tab (không reload trang) khiến e2eInit() coi "đã init cho user này rồi", trả NGAY
+    // e2eReadyPromise CŨ mà KHÔNG chạy lại `e2eDeviceId = e2eGetOrCreateDeviceId()` -- `e2eDeviceId`
+    // (biến JS) kẹt ở deviceId CŨ (vừa bị chính logout() này revoke!) dù localStorage/JWT phiên MỚI đã
+    // đúng deviceId MỚI hoàn toàn. Hậu quả: mọi thao tác MLS sau đó (add/remove/prune leaf...) ký nhầm
+    // dưới danh tính thiết bị ĐÃ CHẾT, gây hàng loạt hiện tượng khó hiểu (leaf cũ không tự dọn được khi
+    // chính mình vừa đăng nhập lại, tưởng nhầm là bug ở nơi khác). Xoá cờ memo ở đây để LẦN e2eInit() kế
+    // tiếp (dù cùng user hay khác user) luôn tự reset + đọc lại deviceId mới cho đúng.
+    e2eInitializedForUserId = null;
     unregisterPushToken(); // TRƯỚC clearAuth() -- cần authToken còn hợp lệ để gọi DELETE /push-tokens (xem push-notifications.js)
     // Đăng xuất PHẢI thu hồi luôn chính thiết bị này (không chỉ xoá token cục bộ) -- nếu không, ai
     // lấy được token cũ (chưa hết hạn, TOKEN_TTL 7 ngày) vẫn dùng được bình thường sau khi "đã đăng

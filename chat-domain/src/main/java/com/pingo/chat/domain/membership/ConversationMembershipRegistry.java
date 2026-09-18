@@ -143,6 +143,26 @@ public class ConversationMembershipRegistry {
     }
 
     /**
+     * conversationId của MỌI conversation đã bật mã hoá mà {@code userId} đang là thành viên -- dùng
+     * để báo "prune hint" (xem {@code HallApiHandlers#deleteMlsDevice}) khi 1 thiết bị của họ vừa bị
+     * thu hồi: cần biết đúng những nhóm MLS nào có thể có leaf chết của thiết bị đó để báo cho các
+     * thành viên KHÁC tự dọn ngay, không đợi chu kỳ dọn lười (6h/conversation, xem mls-crypto.js's
+     * e2ePruneDeadLeaves) tự nhiên chạy tới. Query GỌN (không kèm unread/last-message... như {@link
+     * #listConversationsForUser}) vì đây chỉ cần đúng 1 việc: liệt kê id.
+     */
+    public CompletionStage<Set<UUID>> listE2eEnabledConversationIds(UUID userId) {
+        return supplier.executeReadOnly(conn -> conn.preparedQuery(
+                "SELECT cm.conversation_id FROM conversation_members cm "
+                    + "JOIN conversations c ON c.id = cm.conversation_id "
+                    + "WHERE cm.user_id = ? AND c.e2e_enabled = true")
+            .execute(Tuple.of(userId))
+            .toCompletionStage()
+            .thenApply(rows -> StreamSupport.stream(rows.spliterator(), false)
+                .map(row -> row.getUUID("conversation_id"))
+                .collect(Collectors.toUnmodifiableSet())));
+    }
+
+    /**
      * Xoá 1 thành viên khỏi conversation — dùng chung cho CẢ "kick người khác" lẫn "tự rời nhóm"
      * (khác biệt chỉ nằm ở tầng {@code HallApiHandlers}, không phải ở đây: cùng 1 câu DELETE, chỉ
      * khác {@code userId} truyền vào là của ai). Xem {@code HallApiHandlers#removeConversationMember}.

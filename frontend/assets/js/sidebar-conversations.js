@@ -73,7 +73,7 @@ function ensureProfileModal() {
         '<input type="file" accept="image/*" id="profileAvatarInput" style="display:none">' +
         '<button type="button" class="bgUploadBtn" id="profileChangeAvatarBtn">' + ICON.image + ' Đổi ảnh</button></div>' +
         '<div class="profileUsernameRow"><span id="profileUsernameValue"></span>' +
-        '<button type="button" class="icon" id="profileRenameBtn" title="Đổi tên hiển thị">' + ICON.edit + '</button></div>' +
+        '<button type="button" class="icon fa-solid fa-pen" id="profileRenameBtn" title="Đổi tên hiển thị"></button></div>' +
         '<div class="bgPickerSectionTitle">Mã hoá đầu cuối</div>' +
         '<div class="profileE2eRow" id="profileE2eLinkOldRow"><span>Chia sẻ lịch sử đã giải mã trên máy này cho 1 thiết bị mới</span>' +
         '<button type="button" class="bgUploadBtn" id="profileE2eLinkOldBtn">Nhập mã từ thiết bị mới</button></div>' +
@@ -818,7 +818,7 @@ function renderInfoPanel(conversationId) {
     var canManageGroupInfo = !isGroupConv || isOwnerMe;
     var avatarWrapEl = document.getElementById('infoPanelAvatarWrap');
     avatarWrapEl.classList.toggle('editable', isGroupConv && canManageGroupInfo);
-    if (isGroupConv) document.getElementById('infoPanelAvatarEditBtn').innerHTML = ICON.edit;
+    if (isGroupConv) document.getElementById('infoPanelAvatarEditBtn').classList.add('fa-solid', 'fa-pen');
     document.getElementById('infoPanelName').innerText = conversationLabel(conv);
     document.getElementById('infoPanelSubtitle').innerText = conv.memberUserIds.length + ' thành viên';
     document.getElementById('infoMemberCount').innerText = conv.memberUserIds.length;
@@ -1195,7 +1195,7 @@ function conversationLastMessagePreview(conv) {
     // #listConversationsForUser) -- body ở đây null kèm cờ lastMessageEncrypted, hoặc chính
     // client vừa nhận 1 tin e2e qua WS còn nguyên envelope (updateConvListEntryFromMessage patch
     // thẳng, chưa giải mã) -- cả 2 case đều hiện placeholder cố định, không cố parse .message.
-    if (conv.lastMessageEncrypted || (body && body.e2e)) return {kind: 'text', text: prefix + '🔒 Tin nhắn đã mã hoá'};
+    if (conv.lastMessageEncrypted || (body && body.e2e)) return {kind: 'text', text: prefix + 'Tin nhắn đã mã hoá', locked: true};
     if (!body) return {kind: 'text', text: prefix};
     var files = getMessageFiles(body);
     if (files.length) {
@@ -1463,6 +1463,14 @@ function buildConvListItem(conv) {
             metaEl.appendChild(captionEl);
         }
     } else {
+        // preview.locked (tin đã mã hoá, chưa/không giải mã được để hiện preview thật) -- icon khoá
+        // riêng 1 element thật (<i class="fa-solid fa-lock">) thay vì nhét emoji 🔒 lẫn trong text, để
+        // đồng bộ với icon khoá dùng ở info panel (index.html#infoE2eRow) -- xem sửa cùng đợt ở đó.
+        if (preview.locked) {
+            var lockIconEl = document.createElement('i');
+            lockIconEl.className = 'metaLockIcon fa-solid fa-lock';
+            metaEl.appendChild(lockIconEl);
+        }
         // Span riêng + flex:1;min-width:0 (.metaText) -- ellipsis áp thẳng lên text node con của flex container không đáng tin cậy.
         // .textContent không phải .innerText -- Chrome tự chuyển "\n" trong .innerText thành <br> thật, ép xuống dòng bất kể white-space:nowrap.
         var textEl = document.createElement('span');
@@ -1483,7 +1491,18 @@ function buildConvListItem(conv) {
         // Tách riêng khỏi check "label đổi" ở trên -- e2eEnabled có thể bật trong khi tên hội thoại
         // không đổi gì, vẫn phải tự cập nhật ổ khoá ngay, không đợi tên đổi mới chạy tới đây.
         var labelEl = entry.el.querySelector('.convLabel');
-        if (labelEl) labelEl.innerText = (conv.e2eEnabled ? '🔒 ' : '') + label;
+        if (labelEl) {
+            // Icon khoá riêng 1 element thật (<i class="fa-solid fa-lock">) thay vì nhét emoji 🔒 vào
+            // đầu chuỗi label -- .convLabel::before đã dùng cho tiền tố "# " của group (style.css), 2
+            // tiền tố emoji/CSS-content trộn lẫn trước đây không đồng bộ kiểu icon với phần còn lại app.
+            labelEl.innerHTML = '';
+            if (conv.e2eEnabled) {
+                var labelLockIconEl = document.createElement('i');
+                labelLockIconEl.className = 'convLabelLockIcon fa-solid fa-lock';
+                labelEl.appendChild(labelLockIconEl);
+            }
+            labelEl.appendChild(document.createTextNode(label));
+        }
         var subtitleEl = entry.el.querySelector('.subtitle');
         if (subtitleEl && subtitleEl.innerText !== subtitle) subtitleEl.innerText = subtitle;
         // Đồng bộ mute (server-authoritative, có thể đổi từ tab/thiết bị khác) + hiện/ẩn "Rời nhóm" (chỉ group, không DM).

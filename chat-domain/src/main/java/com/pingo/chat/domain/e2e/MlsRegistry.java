@@ -76,7 +76,20 @@ public class MlsRegistry {
    */
   public CompletionStage<JsonArray> claimKeyPackages(UUID targetUserId, int limit) {
     return supplier.executeReadOnly(conn -> conn.preparedQuery(
-                    "SELECT device_id FROM mls_key_packages WHERE user_id = ? GROUP BY device_id ORDER BY MIN(created_at) ASC")
+                    // Loại thiết bị ĐÃ REVOKE -- BUG THẬT đã tự bắt được: revokeDevice() CHỈ set
+                    // revoked_at, KHÔNG động tới mls_key_packages (dọn keypackage của 1 thiết bị chỉ
+                    // xảy ra khi CHÍNH thiết bị đó tự gỡ qua DELETE /mls/devices, xem
+                    // HallApiHandlers#deleteMlsDevice -- 1 thiết bị revoke qua đường KHÁC, hoặc còn
+                    // sót KeyPackage publish TRƯỚC LẦN revoke gần nhất chưa kịp bị dọn, vẫn nằm nguyên
+                    // trong bảng này) -- không lọc thì client "hồi sinh" được 1 leaf cho thiết bị ĐÃ
+                    // CHẾT bằng KeyPackage cũ còn sót, leaf đó chết ngay khi vừa add xong (device
+                    // không bao giờ đọc/gửi được gì -- JWT của nó đã bị chặn từ HallApiHandlers), rồi
+                    // lần dọn dẹp SAU đó lại thấy leaf revoked, dọn xong, ĐỒNG BỘ MEMBER lại "hồi
+                    // sinh" y hệt lần nữa -- vòng lặp dọn/hồi sinh vô tận, không bao giờ tự hiện đúng
+                    // cảnh báo "chưa thiết lập mã hoá" cho người này (claim KHÔNG BAO GIỜ trả rỗng).
+                    "SELECT device_id FROM mls_key_packages kp WHERE user_id = ? "
+                        + "AND NOT EXISTS (SELECT 1 FROM mls_devices d WHERE d.device_id = kp.device_id AND d.revoked_at IS NOT NULL) "
+                        + "GROUP BY device_id ORDER BY MIN(created_at) ASC")
                     .execute(Tuple.of(targetUserId))
                     .toCompletionStage())
             .thenApply(rows -> {
@@ -133,7 +146,13 @@ public class MlsRegistry {
    */
   public CompletionStage<JsonArray> claimKeyPackagesAllDevices(UUID targetUserId) {
     return supplier.executeReadOnly(conn -> conn.preparedQuery(
-                    "SELECT DISTINCT device_id FROM mls_key_packages WHERE user_id = ?")
+                    // Loại thiết bị ĐÃ REVOKE -- xem javadoc CHI TIẾT ở claimKeyPackages (cùng bug,
+                    // cùng lý do): revokeDevice() không tự dọn mls_key_packages của thiết bị bị revoke
+                    // qua đường KHÁC (vd tự thu hồi từ màn "Thiết bị của tôi", không phải chính chủ tự
+                    // gỡ qua DELETE /mls/devices) -- không lọc thì e2eDrainAddCommits/e2eCommitAddMany
+                    // add nhầm 1 leaf CHẾT NGAY LÚC ADD cho thiết bị đã revoke.
+                    "SELECT DISTINCT kp.device_id FROM mls_key_packages kp WHERE kp.user_id = ? "
+                        + "AND NOT EXISTS (SELECT 1 FROM mls_devices d WHERE d.device_id = kp.device_id AND d.revoked_at IS NOT NULL)")
                     .execute(Tuple.of(targetUserId))
                     .toCompletionStage())
             .thenApply(rows -> {

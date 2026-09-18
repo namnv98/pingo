@@ -45,17 +45,107 @@ var rawBodyByMessageId = {};
 // F5 mới thấy lại được (bug thật đã gặp: khoá đã lưu xong trong IndexedDB nhưng màn hình không tự vẽ
 // lại, chỉ F5 mới lộ ra).
 var e2eFailedEnvelopesByMessageId = {};
-// Icon ảnh thay emoji Unicode để hiển thị đồng nhất mọi OS; emoji vẫn là định danh gửi server (chỉ lưu chuỗi emoji, không biết icon) và để chèn vào ô nhập tin.
+// Icon ĐỘNG (Lottie JSON, Noto Animated Emoji của Google, tải cục bộ -- xem javadoc <lottie-player>
+// trong index.html) thay emoji Unicode để hiển thị đồng nhất mọi OS; emoji vẫn là định danh gửi server
+// (chỉ lưu chuỗi emoji, không biết icon) và để chèn vào ô nhập tin.
 var REACTIONS = [
-    {emoji: '👍', icon: 'images/chat/like.svg'},
-    {emoji: '❤️', icon: 'images/chat/heart.svg'},
-    {emoji: '😆', icon: 'images/chat/haha.svg'},
-    {emoji: '😮', icon: 'images/chat/wow.svg'},
-    {emoji: '😢', icon: 'images/chat/sad.svg'},
-    {emoji: '😠', icon: 'images/chat/angry.svg'}
+    {emoji: '👍', anim: 'images/chat/animated/like.json'},
+    {emoji: '❤️', anim: 'images/chat/animated/heart.json'},
+    {emoji: '😆', anim: 'images/chat/animated/haha.json'},
+    {emoji: '😮', anim: 'images/chat/animated/wow.json'},
+    {emoji: '😢', anim: 'images/chat/animated/sad.json'},
+    {emoji: '😠', anim: 'images/chat/animated/angry.json'}
 ];
-var REACTION_ICON_BY_EMOJI = {};
-REACTIONS.forEach(function (r) { REACTION_ICON_BY_EMOJI[r.emoji] = r.icon; });
+var REACTION_ANIM_BY_EMOJI = {};
+REACTIONS.forEach(function (r) { REACTION_ANIM_BY_EMOJI[r.emoji] = r.anim; });
+
+// Nút "+" trong reaction picker (xem populatePicker/openReactionPicker) cho thả BẤT KỲ emoji nào ngoài
+// 6 icon cố định ở trên -- không tự tải trước hàng nghìn file cho toàn bộ bảng emoji, thay vào đó tự suy
+// ra URL Lottie JSON của Google Noto Animated Emoji NGAY từ chuỗi emoji (cùng CDN, cùng định dạng file
+// với 6 icon cục bộ). Array.from (không phải .split('')) để tách đúng theo code point, không vỡ cặp
+// surrogate UTF-16 của các emoji nằm ngoài BMP (đa số emoji hiện đại, vd 👍 = U+1F44D).
+function notoAnimUrlForEmoji(emoji) {
+    var codepoint = Array.from(emoji).map(function (ch) { return ch.codePointAt(0).toString(16); }).join('_');
+    return 'https://fonts.gstatic.com/s/e/notoemoji/latest/' + codepoint + '/lottie.json';
+}
+
+// BUG THẬT đã tự đo (không đoán): các file Lottie của Noto Animated Emoji dùng CHUNG khung canvas
+// (thường 1024x1024) nhưng HÌNH THẬT bên trong chiếm tỉ lệ khung RẤT khác nhau -- vd angry.json chỉ vẽ
+// trong ~12-19% khung (chừa chỗ để lắc/rung khi animate) trong khi heart.json vẽ gần kín ~80% khung ->
+// hiện cùng 1 kích thước px thì icon nọ to gấp ~5-6 lần icon kia dù cùng "size" khai báo. Tự đo bounding
+// box THẬT của mọi vertex trong mọi shape layer (field "v" -- điểm nằm TRÊN đường cong, không phải tay
+// cầm bezier "i"/"o" nên không bị lệch do control point tràn ra ngoài) rồi tự nhân bù scale cho MỌI icon
+// chiếm cùng 1 tỉ lệ khung (REACTION_ANIM_TARGET_FILL), áp qua CSS transform: scale(...) lên chính
+// <lottie-player> -- không sửa nội dung animation, chỉ phóng/thu đều khi hiển thị.
+function reactionAnimBBox(data) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    (function walk(o) {
+        if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) walk(o[i]); return; }
+        if (o && typeof o === 'object') {
+            if (Array.isArray(o.v)) {
+                for (var j = 0; j < o.v.length; j++) {
+                    var p = o.v[j];
+                    if (Array.isArray(p) && p.length >= 2 && typeof p[0] === 'number' && typeof p[1] === 'number') {
+                        if (p[0] < minX) minX = p[0];
+                        if (p[0] > maxX) maxX = p[0];
+                        if (p[1] < minY) minY = p[1];
+                        if (p[1] > maxY) maxY = p[1];
+                    }
+                }
+            }
+            for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) walk(o[k]); }
+        }
+    })(data.layers || []);
+    return isFinite(minX) ? {minX: minX, minY: minY, maxX: maxX, maxY: maxY} : null;
+}
+var REACTION_ANIM_TARGET_FILL = 0.8; // để chừa lề nhỏ quanh icon, không áp sát mép khung
+function reactionAnimScale(data) {
+    var bbox = reactionAnimBBox(data);
+    if (!bbox) return 1;
+    var canvasW = data.w || 1024, canvasH = data.h || 1024;
+    var coverage = Math.max((bbox.maxX - bbox.minX) / canvasW, (bbox.maxY - bbox.minY) / canvasH);
+    if (!isFinite(coverage) || coverage <= 0) return 1;
+    // Kẹp lại -- heuristic đo vertex có thể sai lệch (curve cong ra ngoài đoạn vertex-vertex thẳng),
+    // không phóng/thu quá đà lỡ có file đo hụt.
+    return Math.max(0.5, Math.min(REACTION_ANIM_TARGET_FILL / coverage, 3.5));
+}
+
+// Cache CHUNG cho mọi nơi render reaction (badge dưới tin, 6 icon picker chính, lưới popup "+") -- tải
+// JSON + tính scale 1 LẦN DUY NHẤT cho mỗi URL rồi dùng lại mãi, kể cả khi DOM bị dựng lại (vd gõ tìm
+// kiếm trong popup "+" xoá sạch lưới cũ) -- tránh tải/tính lại tốn kém mỗi lần 1 icon quay lại khung nhìn.
+var reactionAnimEntryCache = {}; // url -> {data, scale}
+function loadReactionAnimEntry(url) {
+    if (reactionAnimEntryCache[url]) return Promise.resolve(reactionAnimEntryCache[url]);
+    return fetch(url).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+    }).then(function (data) {
+        var entry = {data: data, scale: reactionAnimScale(data)};
+        reactionAnimEntryCache[url] = entry;
+        return entry;
+    });
+}
+
+// Gắn 1 <lottie-player> đã bù scale vào containerEl (thay hết nội dung cũ) -- dùng .load(data) với JSON
+// ĐÃ PARSE SẴN từ cache thay vì set attribute src="url" (luôn tự fetch lại + không có chỗ chèn scale bù
+// trước khi phát) để tận dụng đúng cache ở trên. onFail(): gọi khi tải/parse lỗi (lùi về emoji thô).
+function mountReactionAnim(containerEl, emoji, sizePx, onFail) {
+    var url = REACTION_ANIM_BY_EMOJI[emoji] || notoAnimUrlForEmoji(emoji);
+    var lp = document.createElement('lottie-player');
+    lp.setAttribute('background', 'transparent');
+    lp.setAttribute('speed', '1');
+    lp.style.width = sizePx + 'px';
+    lp.style.height = sizePx + 'px';
+    lp.style.display = 'block';
+    containerEl.innerHTML = '';
+    containerEl.appendChild(lp);
+    loadReactionAnimEntry(url).then(function (entry) {
+        lp.style.transform = 'scale(' + entry.scale + ')';
+        // .load() (khác thuộc tính src) tự đặt loop:false/autoplay:false bên trong lottie-web -- phải tự
+        // bật lại loop + play NGAY SAU KHI load() resolve (lúc đó this._lottie chắc chắn đã tồn tại).
+        return lp.load(entry.data).then(function () { lp.loop = true; lp.play(); });
+    }).catch(function () { if (onFail) onFail(); });
+}
 var reactionPickerTarget = null; // {conversationId, messageId} đang mở picker cho tin nào
 var reactionPickerTriggerEl = null; // nút 🙂 đã mở picker hiện tại -- giữ hiện cưỡng bức (class "picker-open") tới khi đóng
 
@@ -85,8 +175,7 @@ var identityConfirmed = false;
 var ICON = {
     search: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
     star: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/></svg>',
-    edit: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
-    // trash/pin/reply/lock/link dùng Font Awesome (CDN) thay vì SVG ở đây.
+    // edit/trash/pin/reply/lock/link dùng Font Awesome (CDN) thay vì SVG ở đây.
     info: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
     paperclip: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
     plus: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',

@@ -505,12 +505,21 @@ function clearAllE2eBackupStaleWarnings() {
     var all = getE2eConvWarnings();
     Object.keys(all).forEach(function (conversationId) { clearConvE2eWarningForUser(conversationId, E2E_BACKUP_STALE_WARNING_KEY); });
 }
-// Mỗi dòng cảnh báo (1 userId thật "chưa sẵn sàng mã hoá", hoặc dòng đặc biệt
-// E2E_BACKUP_STALE_WARNING_KEY "cần backup lại") render THÀNH 1 ROW RIÊNG, tự đóng được riêng lẻ --
-// TRƯỚC ĐÂY gộp chung 1 khối text (join '\n') dưới 1 icon + 1 nút đóng DUY NHẤT cho cả bar, đóng 1 lần
-// là mất hết mọi dòng kể cả dòng của người khác/loại khác, và không phân biệt được trực quan loại cảnh
-// báo nào với loại nào. Dòng "cần backup lại" có thêm nút hành động đi thẳng vào luồng tạo backup có
-// sẵn (e2eStartCreateBackupFlow, sidebar-conversations.js) thay vì bắt người dùng tự mò menu Hồ sơ.
+// Nối danh sách tên kiểu tiếng Việt: "A", "A và B", "A, B và C".
+function e2eJoinNamesVi(names) {
+    if (names.length <= 1) return names[0] || '';
+    if (names.length === 2) return names[0] + ' và ' + names[1];
+    return names.slice(0, -1).join(', ') + ' và ' + names[names.length - 1];
+}
+// Cảnh báo "chưa thiết lập mã hoá" của TỪNG NGƯỜI (byUser[uid] chỉ là TÊN thô, không phải câu hoàn
+// chỉnh -- xem showConvE2eWarning call site ở e2eDrainAddCommits/e2eCommitAddMany, mls-crypto.js) được
+// GỘP CHUNG thành 1 row DUY NHẤT, liệt kê tên bằng e2eJoinNamesVi -- TRƯỚC ĐÂY mỗi người 1 row riêng,
+// group add nhiều người 1 lượt (VD tạo group mới với nhiều thành viên chưa mở app) làm banner dài
+// ngoằng, chiếm hết header đoạn chat. Đóng row này xoá cảnh báo của TẤT CẢ những người đang gộp trong
+// đó (không xoá được lẻ từng người nữa -- đổi lại đơn giản hơn, tự dựng lại đúng danh sách còn thiếu
+// ở lượt add-commit kế tiếp nếu cần). Dòng "cần backup lại" (E2E_BACKUP_STALE_WARNING_KEY) vẫn giữ
+// RIÊNG 1 row của nó (text tuỳ ý, không phải tên người) và nút hành động đi thẳng vào luồng tạo backup
+// có sẵn (e2eStartCreateBackupFlow, sidebar-conversations.js) thay vì bắt người dùng tự mò menu Hồ sơ.
 function renderConvE2eWarnings(conversationId) {
     var entry = conversations[conversationId];
     if (!entry) return; // card chưa dựng -- state đã lưu trong localStorage, ensureConversationCard tự gọi lại hàm này lúc dựng xong
@@ -518,24 +527,40 @@ function renderConvE2eWarnings(conversationId) {
     var byUser = getE2eConvWarnings()[conversationId] || {};
     var uids = Object.keys(byUser);
     bar.innerHTML = '';
-    uids.forEach(function (uid) {
-        var isBackupStale = uid === E2E_BACKUP_STALE_WARNING_KEY;
+    var pendingUids = uids.filter(function (uid) { return uid !== E2E_BACKUP_STALE_WARNING_KEY; });
+    if (pendingUids.length) {
+        var names = pendingUids.map(function (uid) { return byUser[uid]; });
+        var text = e2eJoinNamesVi(names) + ' chưa thiết lập mã hoá — các tin nhắn gửi trong lúc này sẽ không đến được họ. ' +
+            'Khi họ mở app và thiết lập lần đầu, chỉ những tin nhắn gửi SAU thời điểm đó mới hiển thị được cho họ.';
         var row = document.createElement('div');
-        row.className = 'convE2eWarningRow' + (isBackupStale ? ' backupStale' : '');
+        row.className = 'convE2eWarningRow';
         row.innerHTML =
-            '<i class="convE2eWarningIcon fa-solid ' + (isBackupStale ? 'fa-cloud-arrow-up' : 'fa-user-clock') + '"></i>' +
+            '<i class="convE2eWarningIcon fa-solid fa-user-clock"></i>' +
             '<span class="convE2eWarningText"></span>' +
-            (isBackupStale ? '<button type="button" class="convE2eWarningActionBtn">Sao lưu ngay</button>' : '') +
             '<button type="button" class="convE2eWarningClose" title="Đóng">✕</button>';
-        row.querySelector('.convE2eWarningText').innerText = byUser[uid];
-        if (isBackupStale) {
-            row.querySelector('.convE2eWarningActionBtn').onclick = function () {
-                if (typeof e2eStartCreateBackupFlow === 'function') e2eStartCreateBackupFlow();
-            };
-        }
-        row.querySelector('.convE2eWarningClose').onclick = function () { clearConvE2eWarningForUser(conversationId, uid); };
+        row.querySelector('.convE2eWarningText').innerText = text;
+        row.querySelector('.convE2eWarningClose').onclick = function () {
+            pendingUids.forEach(function (uid) { clearConvE2eWarningForUser(conversationId, uid); });
+        };
         bar.appendChild(row);
-    });
+    }
+    if (E2E_BACKUP_STALE_WARNING_KEY in byUser) {
+        var backupRow = document.createElement('div');
+        backupRow.className = 'convE2eWarningRow backupStale';
+        backupRow.innerHTML =
+            '<i class="convE2eWarningIcon fa-solid fa-cloud-arrow-up"></i>' +
+            '<span class="convE2eWarningText"></span>' +
+            '<button type="button" class="convE2eWarningActionBtn">Sao lưu ngay</button>' +
+            '<button type="button" class="convE2eWarningClose" title="Đóng">✕</button>';
+        backupRow.querySelector('.convE2eWarningText').innerText = byUser[E2E_BACKUP_STALE_WARNING_KEY];
+        backupRow.querySelector('.convE2eWarningActionBtn').onclick = function () {
+            if (typeof e2eStartCreateBackupFlow === 'function') e2eStartCreateBackupFlow();
+        };
+        backupRow.querySelector('.convE2eWarningClose').onclick = function () {
+            clearConvE2eWarningForUser(conversationId, E2E_BACKUP_STALE_WARNING_KEY);
+        };
+        bar.appendChild(backupRow);
+    }
     bar.classList.toggle('show', uids.length > 0);
 }
 
@@ -556,7 +581,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<button class="icon searchToggleBtn" title="Tìm trong đoạn chat">' + ICON.search + '</button>' +
         '<button class="icon starBtn" title="Gắn sao">' + ICON.star + '</button>' +
         '<button class="icon muteBtn fa-solid fa-bell-slash" title="Tắt thông báo"></button>' +
-        '<button class="icon renameBtn" title="Đổi tên riêng">' + ICON.edit + '</button>' +
+        '<button class="icon renameBtn fa-solid fa-pen" title="Đổi tên riêng"></button>' +
         '<button class="icon bgBtn" title="Đổi hình nền &amp; màu chat">' + ICON.image + '</button>' +
         '<button class="icon leaveBtn fa-solid fa-right-from-bracket" title="Rời nhóm" style="display:none"></button>' +
         '<button class="icon deleteBtn fa-solid fa-trash" title="Xoá hẳn cuộc trò chuyện này"></button>' +
@@ -571,6 +596,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         '<button type="button" class="icon convSearchCloseBtn" title="Đóng (Esc)">' + ICON.closeSm + '</button>' +
         '</div>' +
         '<div class="conv-log-wrap"><div class="conv-log"></div>' +
+        '<div class="convLogLoading show"><span class="convLogSpinner"></span></div>' +
         '<button type="button" class="jumpToBottomBtn" title="Xuống tin mới nhất">' + ICON.down +
         '<span class="jumpBadge"></span></button></div>' +
         '<div class="typing-indicator"><span class="typingDots"><span></span><span></span><span></span></span><span class="typingText"></span></div>' +
@@ -602,6 +628,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     document.getElementById('chatMain').appendChild(card);
 
     var logEl = card.querySelector('.conv-log');
+    var logLoadingEl = card.querySelector('.convLogLoading');
     // Áp nền/màu bong bóng NGAY lúc dựng card, trước khi tin nhắn đầu tiên render, để không bị "nháy" từ mặc định sang đã chọn.
     applyConversationBackground(conversationId, logEl);
     applyConversationBubbleColor(conversationId, card);
@@ -909,6 +936,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
         e.stopPropagation();
         if (openAttachMenuEl === attachMenuEl) { closeAttachMenu(); return; }
         closeReactionPicker();
+        closeReactionMorePicker();
         closeComposeEmojiPicker();
         closeGifPicker();
         closeStickerPicker();
@@ -922,7 +950,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     attachBtnEl.onclick = function () { closeAttachMenu(); fileInputEl.click(); };
     emojiBtnEl.onclick = function (e) {
         e.stopPropagation(); // không thì document click listener (đóng picker) chạy ngay sau khi vừa mở
-        openComposeEmojiPicker(emojiBtnEl, inputEl);
+        openComposeEmojiPicker(emojiBtnEl, function (emoji) { insertEmojiAtCursor(inputEl, emoji); });
     };
     // Định vị theo attachMenuBtnEl (luôn hiển thị), không theo nút bên trong .attachMenu -- 1 phần tử trong tổ tiên display:none luôn cho getBoundingClientRect() ra toàn số 0 (bug thật đã gặp).
     stickerTrayBtnEl.onclick = function (e) {
@@ -1183,7 +1211,7 @@ function ensureConversationCard(conversationId, label, subtitle) {
     editBarEl.querySelector('.replyBarClose').onclick = function(e){ e.stopPropagation(); cancelEdit(); inputEl.focus(); };
 
     var entry = {
-        label: initialLabel, el: card, logEl: logEl,
+        label: initialLabel, el: card, logEl: logEl, logLoadingEl: logLoadingEl,
         jumpBtnEl: jumpBtnEl, jumpBadgeEl: jumpBadgeEl, readObserver: readObserver,
         stickToBottom: true, unreadIdSet: new Set(), totalUnreadCount: 0, renderedMessageIds: new Set(),
         pendingFiles: [], // [{file, objectUrl}, ...] -- file/\u1ea3nh/video \u0110ANG ch\u1edd g\u1eedi (multi-file, xem stagePendingFiles)
@@ -1218,6 +1246,18 @@ function ensureConversationCard(conversationId, label, subtitle) {
     card.querySelector('.convSearchNextBtn').onclick = function (e) { e.stopPropagation(); stepConvSearch(conversationId, 1); };
     updateConvHeadPresence(conversationId);
     return entry;
+}
+
+// Card vừa dựng luôn hiện spinner mặc định (class "show" ngay trong markup, xem ensureConversationCard)
+// -- che đúng chỗ khung chat còn trống thay vì trắng tinh trong lúc loadHistory (fetch + giải mã batch
+// đầu tiên) đang chạy, xem history-ws.js#loadHistory. Ẩn NGAY khi tin ĐẦU TIÊN thật sự render được (qua
+// callback onEach của e2eResolveIncomingBatch, xem loadLatestPage/loadAroundReadCursor) để lộ dần từng
+// tin thay vì đợi hiện xong 1 lượt -- HOẶC ẩn khi loadHistory settle xong (kể cả 0 tin/lỗi) làm lưới an
+// toàn cuối cùng, phòng trường hợp onEach không bao giờ chạy (conversation rỗng, hoặc fetch lỗi giữa
+// chừng). idempotent -- gọi lại nhiều lần/gọi khi đã ẩn sẵn đều an toàn.
+function hideConvLoading(conversationId) {
+    var entry = conversations[conversationId];
+    if (entry && entry.logLoadingEl) entry.logLoadingEl.classList.remove('show');
 }
 
 // ===== Tìm trong 1 đoạn chat đang mở -- xem .convSearchBar trong ensureConversationCard, dùng

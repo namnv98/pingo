@@ -365,6 +365,70 @@ die() {
 
 
 # ============================================================================
+# PARALLEL HELPER
+#
+# Chay nhieu "job" (build/push/deploy tung module) SONG SONG thay vi tuan tu --
+# diem nghen chinh cua script cu: docker build/push va helm upgrade+rollout deu
+# lap tuan tu qua DEPLOY_MODULES, moi buoc doi xong roi moi sang module ke tiep,
+# du cac module HOAN TOAN doc lap nhau (khong module nao doi module kia).
+#
+# Moi arg la 1 chuoi "label|||command" (dung ||| lam delimiter vi command co the
+# chua khoang trang/dau nhay). Output cua tung job bi redirect rieng vao 1 file
+# tam (khong in xen ke lung tung ra terminal khi chay song song), roi in lai
+# THEO THU TU sau khi TAT CA job xong. Fail (khong die() ngay) neu BAT KY job nao
+# fail -- in het log truoc, cho caller tu quyet dinh die() sau khi thay ro job
+# nao loi vi sao (khong nuot loi im lang).
+# ============================================================================
+
+run_parallel() {
+  local labels=()
+  local logs=()
+  local pids=()
+  local item
+  local label
+  local cmd
+  local logf
+
+  for item in "$@"; do
+    label="${item%%|||*}"
+    cmd="${item#*|||}"
+    logf="$(mktemp)"
+
+    labels+=("$label")
+    logs+=("$logf")
+
+    (eval "$cmd") >"$logf" 2>&1 &
+    pids+=("$!")
+  done
+
+  local failed=0
+  local idx
+
+  local rc
+
+  for idx in "${!pids[@]}"; do
+    # wait TRUOC roi moi cat -- job chay nen (background) co the CHUA ghi het log
+    # tai thoi diem nay, cat truoc se in thieu dong cuoi (bug thuc su gap luc viet).
+    wait "${pids[$idx]}"
+    rc=$?
+
+    printf -- '----- %s -----\n' "${labels[$idx]}"
+    cat "${logs[$idx]}"
+    rm -f "${logs[$idx]}"
+
+    if [ "$rc" -eq 0 ]; then
+      log "OK: ${labels[$idx]}"
+    else
+      warn "LOI: ${labels[$idx]}"
+      failed=1
+    fi
+  done
+
+  return "$failed"
+}
+
+
+# ============================================================================
 # FLAGS
 # ============================================================================
 
@@ -721,23 +785,21 @@ ensure_local_registry() {
 
 build_images() {
 
+  local jobs=()
+  local module
+  local path
+  local image
+
   for module in "${DEPLOY_MODULES[@]}"; do
-
-    local path
-    local image
-
     path="$(module_path "$module")"
     image="$(image_ref "$module")"
-
-
-    log "docker build ${image}"
-
-
-    docker build \
-      -t "$image" \
-      "$REPO_ROOT/$path"
-
+    jobs+=("docker build ${image}|||docker build -t '${image}' '${REPO_ROOT}/${path}'")
   done
+
+  log "docker build song song (${#DEPLOY_MODULES[@]} image)..."
+
+  run_parallel "${jobs[@]}" \
+    || die "Co image build loi -- xem log job nao FAIL o tren."
 }
 
 
@@ -747,19 +809,19 @@ build_images() {
 
 push_images() {
 
+  local jobs=()
+  local module
+  local image
+
   for module in "${DEPLOY_MODULES[@]}"; do
-
-    local image
-
     image="$(image_ref "$module")"
-
-
-    log "docker push ${image}"
-
-
-    docker push "$image"
-
+    jobs+=("docker push ${image}|||docker push '${image}'")
   done
+
+  log "docker push song song (${#DEPLOY_MODULES[@]} image)..."
+
+  run_parallel "${jobs[@]}" \
+    || die "Co image push loi -- xem log job nao FAIL o tren."
 }
 
 
@@ -894,37 +956,41 @@ ensure_firebase_secret() {
 # ============================================================================
 
 deploy_helm() {
-  for module in "${DEPLOY_MODULES[@]}"; do
-    local release
-    local chart
-    local image
-    local workload
+  local jobs=()
+  local module
+  local release
+  local chart
+  local image
+  local workload
+  local cmd
 
+  for module in "${DEPLOY_MODULES[@]}"; do
     release="$(release_name "$module")"
     chart="$(chart_path "$module")"
     image="$(image_ref "$module")"
     workload="$(workload_ref "$module")"
 
-    log \
-      "helm upgrade -i ${release} " \
-      "(namespace=${NAMESPACE}, image=${image})"
-    helm upgrade -i \
-      "$release" \
-      "$chart" \
-      -n "$NAMESPACE" \
-      --set-string imageId="$image" \
-      --set-string imagePullPolicy=Always \
-      --wait \
-      --timeout 3m
+    # KHONG "--wait" o buoc helm upgrade -- rollout restart + rollout status ngay sau moi la
+    # buoc CHAC CHAN can cho (image moi thuc su vua build/push), "--wait" o day chi lam CHO
+    # 2 LAN cho CUNG 1 lan deploy (bug hieu suat thuc su: rendered manifest thuong KHONG doi
+    # giua 2 lan chay -- image_ref van la ...:local nhu cu -- nen "helm upgrade -i --wait" o
+    # day thuong CHO XONG NGAY vi khong co gi de cho, nhung khi CO doi that (lan dau cai/doi
+    # resource/env...) thi lai cho hai lan chong nhau: 1 lan o day, 1 lan o rollout status).
+    # imagePullPolicy=Always de rollout restart ben duoi chac chan keo lai dung image vua push.
+    cmd="helm upgrade -i '${release}' '${chart}' -n '${NAMESPACE}' --set-string imageId='${image}' --set-string imagePullPolicy=Always --timeout 3m"
+    cmd="${cmd} && kubectl rollout restart ${workload} -n '${NAMESPACE}'"
+    cmd="${cmd} && kubectl rollout status ${workload} -n '${NAMESPACE}' --timeout=3m"
 
-    # Rendered manifest thuong KHONG doi giua 2 lan chay (image_ref van la ...:local nhu cu) --
-    # "helm upgrade -i" o tren se KHONG tu restart pod dang chay, nen image MOI vua build/push van
-    # bi bo qua. Ep restart thu cong o day thi imagePullPolicy=Always moi thuc su keo lai image moi.
-    log "kubectl rollout restart ${workload} (namespace=${NAMESPACE})"
-    kubectl rollout restart "$workload" -n "$NAMESPACE"
-    kubectl rollout status "$workload" -n "$NAMESPACE" --timeout=3m
-
+    jobs+=("deploy ${release} (image=${image})|||${cmd}")
   done
+
+  # 6 service HOAN TOAN doc lap nhau (khong service nao phu thuoc rollout cua service kia) --
+  # tuan tu tung cai truoc day la diem cho LAU NHAT cua ca script (moi service tu cho JVM boot +
+  # readiness probe rieng, x6 lan luot). Chay song song o day la toi uu co gia tri nhat.
+  log "helm upgrade + rollout restart song song (${#DEPLOY_MODULES[@]} service)..."
+
+  run_parallel "${jobs[@]}" \
+    || die "Co service deploy loi -- xem log job nao FAIL o tren (vd: kubectl get pods -n ${NAMESPACE})."
 }
 
 # ============================================================================

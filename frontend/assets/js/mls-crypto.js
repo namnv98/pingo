@@ -222,7 +222,16 @@ function e2eLeafNodes(state) { return (state.ratchetTree || []).map(function (n,
 function e2eLeafIndexesOf(state, targetUserId) {
     var leaves = e2eLeafNodes(state);
     var out = [];
-    for (var i = 0; i < leaves.length; i++) { if (e2eLeafUserId(leaves[i].n) === targetUserId) out.push(i); }
+    // LeafIndex (thứ mà M.createCommit's remove.removed cần) = vị trí RAW trong ratchetTree / 2 (leaf
+    // luôn nằm ở vị trí CHẴN, xen kẽ parent-node ở vị trí lẻ, theo đúng RFC 9420) -- BUG THẬT đã tự
+    // bắt được trên dữ liệu test thật: dùng nhầm "i" (đếm tuần tự CHỈ trên các leaf ĐANG CÒN trong
+    // e2eLeafNodes, tức đã bỏ qua mọi ô blank do lần remove trước để lại) làm LeafIndex -- ĐÚNG khi
+    // cây chưa từng remove ai (không có ô blank nào), nhưng SAI ngay khi cây đã có ít nhất 1 ô blank
+    // (group đã qua vài lượt add/remove là chắc chắn có) vì "i" khi đó lệch khỏi vị trí RAW/2 thật --
+    // trỏ nhầm sang 1 leaf KHÁC (có lúc trúng ngay leaf của CHÍNH mình, M.createCommit ném thẳng
+    // "Commit cannot contain a remove proposal removing committer"). Phải dùng leaves[i].idx (RAW, từ
+    // e2eLeafNodes) / 2, KHÔNG phải "i".
+    for (var i = 0; i < leaves.length; i++) { if (e2eLeafUserId(leaves[i].n) === targetUserId) out.push(leaves[i].idx / 2); }
     return out;
 }
 function e2eMemberUserIds(state) { return e2eLeafNodes(state).map(function (x) { return e2eLeafUserId(x.n); }).filter(function (id) { return id; }); }
@@ -372,6 +381,9 @@ function e2eSaveGroup(conversationId, state) {
     return e2eDbPut('groups', e2eGroupKey(conversationId), { stateB64: e2eB64(M.encodeGroupState(state)) });
 }
 function e2eDeleteGroup(conversationId) {
+    // Dọn luôn cờ "leaf mượn" (nếu có, xem e2eMarkGroupBorrowed) -- state đang bị xoá nên cờ này (nếu
+    // còn) sẽ mồ côi, tự dọn tránh 1 lần join thật SAU NÀY bị ép External-Join thừa không cần thiết.
+    if (typeof e2eClearGroupBorrowed === 'function') e2eClearGroupBorrowed(conversationId);
     return e2eDbDelete('groups', e2eGroupKey(conversationId));
 }
 
@@ -479,14 +491,16 @@ function e2eTryExternalJoin(conversationId) {
     // với external-join (thua thì mất trắng lịch sử epoch cũ, dù mình có Welcome đúng epoch đó chờ sẵn).
     // e2eDoTryExternalJoin tự re-check e2eLoadGroup ngay khi bắt đầu, nên nếu Welcome đã tới trong lúc
     // đợi thì external-join tự thành no-op (trả về state Welcome vừa lưu), không tốn thêm 1 epoch nào.
+    console.time('[e2e-perf] e2eTryExternalJoin ' + conversationId); // xem javadoc do thoi gian o e2eInit -- cung 1 dot dieu tra do tre login
     var p = e2eWaitInitialDrain().then(function () { return e2eDoTryExternalJoin(conversationId); });
     p.then(clear, clear);
+    p.then(function () { console.timeEnd('[e2e-perf] e2eTryExternalJoin ' + conversationId); }, function () { console.timeEnd('[e2e-perf] e2eTryExternalJoin ' + conversationId); });
     e2eExternalJoinInFlight[conversationId] = p;
     return p;
 }
 function e2eDoTryExternalJoin(conversationId) {
     return e2eLoadGroup(conversationId).then(function (state) {
-        if (state) return state; // race: vừa nhận Welcome/join xong ở nơi khác trong lúc đang xử lý
+        if (state) { console.log('[e2e-perf] e2eDoTryExternalJoin: da co state cuc bo, khong can join (' + conversationId + ')'); return state; } // race: vừa nhận Welcome/join xong ở nơi khác trong lúc đang xử lý
         return e2eFetchGroupInfo(conversationId).then(function (gi) {
             if (!gi.groupInfoB64) return null; // group thật sự chưa từng tồn tại -- không có gì để tự join vào
             // e2eWithKpQueueLock -- xem javadoc chỗ khai báo: e2eExternalJoinAttempt tiêu 1 KeyPackage
@@ -495,6 +509,67 @@ function e2eDoTryExternalJoin(conversationId) {
             return e2eWithKpQueueLock(function () { return e2eExternalJoinAttempt(conversationId, gi, 1); });
         });
     });
+}
+
+// ===== Leaf "mượn" từ backup lạnh / link thiết bị (chưa phải leaf THẬT của thiết bị này) =====
+// e2eImportTransfer (cuối file, dùng chung cho e2eRestoreBackup và e2eHandleLinkPayload) clone
+// NGUYÊN group state -- KỂ CẢ PRIVATE KEY của leaf -- từ 1 thiết bị khác sang thiết bị này, cho
+// những conversation CHƯA có local. Vi phạm bất biến "1 leaf MLS = ĐÚNG 1 thiết bị" mà chính
+// e2eCredential/e2eDrainAddCommits/e2eCommitAddMany tuân thủ ở mọi nơi khác -- NẾU thiết bị này dùng
+// thẳng state mượn để GỬI (M.createApplicationMessage, xem e2eMaybeEncryptForSend): 2 thiết bị (thiết
+// bị gốc + thiết bị vừa link/restore) độc lập encrypt trên CÙNG secret-tree ratchet của CÙNG 1 leaf,
+// rất dễ trùng generation ngay sau khi clone -> TÁI SỬ DỤNG (key, nonce) AES-GCM cho 2 ciphertext khác
+// nhau (lộ XOR 2 bản rõ, mất luôn tính chống giả mạo của GCM), và mất Post-Compromise Security (lộ 1
+// máy sau này vẫn ảnh hưởng máy kia vì chung secret) -- lỗ hổng THẬT, không phải lý thuyết, vì mục
+// đích chính của link thiết bị là dùng SONG SONG nhiều máy, không phải archive-rồi-bỏ máy cũ.
+// ĐỌC (decrypt tin đến, xử lý commit đến) bằng state mượn thì AN TOÀN -- không tạo ciphertext mới,
+// không có (key,nonce) nào để tái sử dụng -- nên chỉ cần chặn đường GỬI, không cần chặn đọc.
+// Cờ "mượn" lưu RIÊNG (localStorage, KHÔNG nhét vào record 'groups' trong IndexedDB) vì record đó bị
+// e2eSaveGroup ghi đè liên tục bởi MỌI đợt xử lý commit/tin đến hợp lệ SAU NÀY (member sync, key
+// rotation, tin nhắn tới...) -- gộp chung sẽ vô tình tự xoá cờ ngay lần lưu kế tiếp dù thiết bị này
+// vẫn chưa hề có leaf thật của riêng nó. Namespace theo myUserId giống các cờ cục bộ khác (xem
+// E2E_CONV_WARNINGS_STORAGE_KEY, messaging-core.js).
+var E2E_BORROWED_LEAF_STORAGE_KEY = 'pingoE2eBorrowedLeaf_v1';
+var e2eBorrowedLeafConvIds = null;
+function e2eGetBorrowedLeafSet() {
+    if (e2eBorrowedLeafConvIds === null) {
+        try { e2eBorrowedLeafConvIds = JSON.parse(localStorage.getItem(E2E_BORROWED_LEAF_STORAGE_KEY + ':' + myUserId)) || {}; }
+        catch (e) { e2eBorrowedLeafConvIds = {}; }
+    }
+    return e2eBorrowedLeafConvIds;
+}
+function e2eSaveBorrowedLeafSet() {
+    try { localStorage.setItem(E2E_BORROWED_LEAF_STORAGE_KEY + ':' + myUserId, JSON.stringify(e2eBorrowedLeafConvIds)); }
+    catch (e) { /* mất cờ (localStorage đầy) -- rủi ro thấp: lần gửi tới bị coi nhầm "leaf thật", không mất an toàn ngược lại */ }
+}
+function e2eMarkGroupBorrowed(conversationId) { var set = e2eGetBorrowedLeafSet(); set[conversationId] = true; e2eSaveBorrowedLeafSet(); }
+function e2eIsGroupBorrowed(conversationId) { return !!e2eGetBorrowedLeafSet()[conversationId]; }
+function e2eClearGroupBorrowed(conversationId) {
+    var set = e2eGetBorrowedLeafSet();
+    if (!(conversationId in set)) return;
+    delete set[conversationId];
+    e2eSaveBorrowedLeafSet();
+}
+
+// BẮT BUỘC tự External-Join lấy leaf THẬT của thiết bị này, BỎ QUA state cục bộ hiện có dù đã tồn tại
+// -- khác e2eTryExternalJoin/e2eDoTryExternalJoin ở trên (return NGAY state cục bộ nếu đã có, đúng
+// cho trường hợp bình thường vì state đó luôn là leaf thật của chính thiết bị này). Ở đây state cục bộ
+// (nếu có) là leaf MƯỢN (xem khối comment ngay trên) nên phải luôn tự join lại bằng KeyPackage thật
+// của THIẾT BỊ NÀY bất kể cục bộ đã có gì. Dùng CHUNG e2eExternalJoinInFlight với e2eTryExternalJoin
+// (khoá theo conversationId) -- tránh 2 lần tự join chồng nhau cho CÙNG 1 conversation dù gọi từ
+// đường nào (gửi tin hay nhận tin đều có thể trigger).
+function e2eForceExternalJoin(conversationId) {
+    if (e2eExternalJoinInFlight[conversationId]) return e2eExternalJoinInFlight[conversationId];
+    var clear = function () { delete e2eExternalJoinInFlight[conversationId]; };
+    var p = e2eWaitInitialDrain().then(function () {
+        return e2eFetchGroupInfo(conversationId).then(function (gi) {
+            if (!gi.groupInfoB64) throw new Error('không lấy được thông tin nhóm để thiết bị này tự tham gia lại');
+            return e2eWithKpQueueLock(function () { return e2eExternalJoinAttempt(conversationId, gi, 1); });
+        });
+    });
+    p.then(clear, clear);
+    e2eExternalJoinInFlight[conversationId] = p;
+    return p;
 }
 
 // Thử tự join bằng ĐÚNG 1 GroupInfo/epoch cụ thể -- CAS lúc publish (xem javadoc bảng
@@ -506,9 +581,14 @@ function e2eDoTryExternalJoin(conversationId) {
 // không lặp vô hạn nếu 2 bên cứ liên tục đụng epoch nhau.
 var E2E_EXTERNAL_JOIN_MAX_ATTEMPTS = 4;
 function e2eExternalJoinAttempt(conversationId, gi, attempt) {
-    return e2eLoadKpQueue().then(function (queue) {
+    var perfLabel = '[e2e-perf] e2eExternalJoinAttempt ' + conversationId + ' attempt#' + attempt;
+    console.time(perfLabel);
+    var done = function () { console.timeEnd(perfLabel); };
+    var result = e2eLoadKpQueue().then(function (queue) {
         if (queue.length) return queue;
+        console.time('[e2e-perf] top-up KeyPackage trong external-join (queue rong)');
         return e2eMaybeTopUpKeyPackages().then(function () { return e2eLoadKpQueue(); }).then(function (q) {
+            console.timeEnd('[e2e-perf] top-up KeyPackage trong external-join (queue rong)');
             if (!q.length) throw new Error('không sinh được keypackage để tự tham gia nhóm');
             return q;
         });
@@ -518,6 +598,24 @@ function e2eExternalJoinAttempt(conversationId, gi, attempt) {
         var myPriv = e2ePrivFromJson(head.privJson);
         var giMsg = M.decodeMlsMessage(e2eUnb64(gi.groupInfoB64), 0)[0];
         return M.joinGroupExternal(giMsg.groupInfo, myPub, myPriv, false, e2eImpl).then(function (res) {
+            // Tự phát hiện leaf TRÙNG CHÍNH MÌNH trước khi publish -- bug thật đã gặp: thiết bị này
+            // TỪNG external-join THÀNH CÔNG (CAS đã thắng, leaf đã nằm trong cây thật trên server) rồi
+            // reload/crash NGAY TRƯỚC lúc e2eSaveGroup kịp lưu cục bộ -- lần sau mở app, e2eLoadGroup
+            // thấy null (chưa lưu được) nên lại tưởng "chưa từng join", tự external-join THÊM 1 LẦN NỮA
+            // bằng KeyPackage khác -- MLS không tự dedupe theo credential, join thẳng sẽ tạo 1 leaf THỨ
+            // 2 với ĐÚNG credential "user:<myUserId>@<e2eDeviceId>" như leaf cũ, vi phạm bất biến "1
+            // leaf = 1 thiết bị" (đã tự bắt được trên dữ liệu test thật: 1 device xuất hiện 2 lần trong
+            // cây). e2eLeafNodes(res.newState) đọc TRỰC TIẾP kết quả `M.joinGroupExternal` vừa tính cục
+            // bộ (chưa publish gì) -- nếu credential của mình đã có mặt TỪ TRƯỚC lần join này (tức sau
+            // khi join xong sẽ thấy nó xuất hiện >1 lần), CHẶN LUÔN, không publish thêm leaf trùng.
+            // KHÔNG tự remove leaf cũ + rejoin ở đây -- private key của leaf cũ đã mất (đã bị tiêu/xoá
+            // khỏi hàng đợi KeyPackage từ lần join trước), tự dọn+rejoin an toàn cần 1 luồng riêng
+            // (remove-commit rồi mới add lại), ngoài phạm vi chặn-trùng đơn giản này.
+            var myIdentity = MLS_CRED_PREFIX + myUserId + MLS_CRED_DEVICE_SEP + e2eDeviceId;
+            var myLeafCountAfterJoin = e2eLeafNodes(res.newState).filter(function (x) { return e2eLeafIdentity(x.n) === myIdentity; }).length;
+            if (myLeafCountAfterJoin > 1) {
+                throw Object.assign(new Error('Thiết bị này đã có mặt trong nhóm từ trước (lệch đồng bộ cục bộ) -- không tự thêm bản sao, cần dọn thủ công.'), { e2eDuplicateLeaf: true });
+            }
             return e2ePublishGroupInfo(conversationId, gi.epoch, res.newState).then(function (cas) {
                 if (!cas.won) {
                     if (attempt >= E2E_EXTERNAL_JOIN_MAX_ATTEMPTS || !cas.groupInfoB64) {
@@ -551,6 +649,8 @@ function e2eExternalJoinAttempt(conversationId, gi, attempt) {
             });
         });
     });
+    result.then(done, done);
+    return result;
 }
 
 // ===== plaintext cache (vì MLS private message chỉ giải được 1 lần theo ratchet position) =====
@@ -573,9 +673,19 @@ function e2eInit() {
     // decrypt/rotation nào gọi e2eTryExternalJoin (chỉ có thể xảy ra sau khi e2eReady=true, tức sau
     // dòng này) đều thấy e2eInitialDrainPromise đã tồn tại và đợi đúng lượt drain của phiên này.
     e2eInitialDrainPromise = new Promise(function (resolve) { e2eInitialDrainResolve = resolve; });
+    // Đo thời gian THẬT từng bước -- user báo "login xong bấm vào 1 hội thoại chỉ 1-2 tin mà chờ
+    // 10-15 giây", chỉ đọc code không đủ để biết CHÍNH XÁC bước nào chậm (network round-trip thật/
+    // crypto thật/độ trễ backend đều là ẩn số không suy ra được từ source). console.time/timeEnd tạm
+    // thời (không đổi hành vi, chỉ log) -- mở DevTools Console lúc gặp lại độ trễ để thấy đúng bước
+    // nào chiếm bao nhiêu, thay vì đoán tiếp. Có thể gỡ khi đã xác định xong nguyên nhân.
+    console.time('[e2e-perf] e2eInit tong');
     e2eReadyPromise = Promise.resolve()
-        .then(function () { e2eCs = M.getCiphersuiteFromName(MLS_CIPHERSUITE); return M.getCiphersuiteImpl(e2eCs); })
-        .then(function (impl) { e2eImpl = impl; })
+        .then(function () {
+            console.time('[e2e-perf] getCiphersuiteImpl');
+            e2eCs = M.getCiphersuiteFromName(MLS_CIPHERSUITE);
+            return M.getCiphersuiteImpl(e2eCs);
+        })
+        .then(function (impl) { console.timeEnd('[e2e-perf] getCiphersuiteImpl'); e2eImpl = impl; })
         // e2eWithKpQueueLock -- xem javadoc chỗ khai báo: chỉ mình e2eInit không tự đụng chính nó
         // (đã memo hoá qua e2eReadyPromise), nhưng vẫn có thể chạy chồng lên e2eCreateGroupWithMembers/
         // e2eDoTryExternalJoin của 1 conversation khác nếu chúng khởi động ngay sau khi e2eReady=true
@@ -583,11 +693,30 @@ function e2eInit() {
         .then(function () {
             return e2eWithKpQueueLock(function () {
                 return e2eLoadKpQueue()
-                    .then(function (queue) { return queue.length ? null : e2eMaybeTopUpKeyPackages(); })
-                    .then(function () { e2eReady = true; return e2eMaybeTopUpKeyPackages(); });
+                    .then(function (queue) {
+                        if (queue.length) return null;
+                        // Queue RỖNG (thiết bị hoàn toàn mới, hoặc IndexedDB vừa bị xoá) -- nhánh này
+                        // sinh MỚI 10 KeyPackage (MLS_KEYPACKAGE_TOP_UP, crypto thật -- X25519+Ed25519
+                        // mỗi cái) RỒI publish lên server -- nghi ngờ hàng đầu cho độ trễ vài giây ngay
+                        // sau login lần đầu trên 1 thiết bị/trình duyệt mới.
+                        console.time('[e2e-perf] top-up KeyPackage lan dau (queue rong)');
+                        return e2eMaybeTopUpKeyPackages().then(function (r) { console.timeEnd('[e2e-perf] top-up KeyPackage lan dau (queue rong)'); return r; });
+                    })
+                    .then(function () {
+                        e2eReady = true;
+                        // Lượt gọi THỨ 2 này LUÔN chạy (không điều kiện) -- cố ý, để tự đối chiếu lại
+                        // với server ngay cả khi queue cục bộ vốn đã đủ (không qua nhánh top-up ở
+                        // trên) -- nhưng đồng nghĩa lúc queue vừa rỗng ở trên (đã sinh+publish xong),
+                        // lượt này CHẮC CHẮN chỉ để re-fetch server count rồi thấy khớp, không làm gì
+                        // thêm -- 1 round-trip mạng thừa mỗi lần init từ máy mới, đo riêng ra đây để
+                        // thấy rõ có đáng kể không.
+                        console.time('[e2e-perf] doi chieu lai KeyPackage voi server (luon chay)');
+                        return e2eMaybeTopUpKeyPackages().then(function (r) { console.timeEnd('[e2e-perf] doi chieu lai KeyPackage voi server (luon chay)'); return r; });
+                    });
             });
         })
-        .catch(function (err) { console.warn('[e2e-mls] init lỗi — không dùng được MLS phiên này', err); e2eReady = false; });
+        .catch(function (err) { console.warn('[e2e-mls] init lỗi — không dùng được MLS phiên này', err); e2eReady = false; })
+        .then(function (r) { console.timeEnd('[e2e-perf] e2eInit tong'); return r; });
     return e2eReadyPromise;
 }
 
@@ -647,7 +776,7 @@ function e2eDrainAddCommits(conversationId, st) {
             // biến mất sau 2.2s -- việc này thường xảy ra NỀN (proactive rotation/sync), người dùng
             // không đứng nhìn màn hình đúng lúc đó thì mất luôn cảnh báo -- đổi sang banner NẰM LẠI
             // trong header đoạn chat (showConvE2eWarning, xem messaging-core.js) tới khi tự đóng.
-            if (typeof showConvE2eWarning === 'function') showConvE2eWarning(conversationId, next, (typeof displayName === 'function' ? displayName(next) : next) + ' chưa sẵn sàng mã hoá -- tin nhắn sẽ KHÔNG đến được cho người này cho tới khi họ mở lại app');
+            if (typeof showConvE2eWarning === 'function') showConvE2eWarning(conversationId, next, typeof displayName === 'function' ? displayName(next) : next);
             return e2eDrainAddCommits(conversationId, { state: st.state, pendingAdds: rest });
         }
         var adds = bundles.map(function (b) { return { userId: next, keyPackage: e2ePubToKeyPackage(b.keyPackage) }; });
@@ -856,6 +985,17 @@ function e2ePruneDeadLeavesLastRunMap() {
     try { return JSON.parse(localStorage.getItem(E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY + ':' + myUserId)) || {}; }
     catch (e) { return {}; }
 }
+// Xoá mốc cooldown của ĐÚNG 1 conversation -- dùng khi có tín hiệu THẬT báo cần dọn ngay (server vừa
+// broadcast "mls_prune_hint" sau khi 1 thiết bị bị thu hồi, xem e2eHandlePruneHint) thay vì đợi tự
+// nhiên hết 6h. KHÔNG xoá SẠCH cả map (các conversation khác không liên quan tới hint này vẫn nên giữ
+// nguyên cooldown của chúng, tránh dọn tràn lan không cần thiết).
+function e2eClearPruneDeadLeavesCooldown(conversationId) {
+    var map = e2ePruneDeadLeavesLastRunMap();
+    if (!(conversationId in map)) return;
+    delete map[conversationId];
+    try { localStorage.setItem(E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY + ':' + myUserId, JSON.stringify(map)); }
+    catch (e) { /* không xoá được cooldown thì lượt dọn NGAY này thôi, lượt sau (định kỳ) vẫn tự chạy bình thường */ }
+}
 function e2ePruneDeadLeaves(conversationId, state) {
     if (!state) return Promise.resolve(state);
     var lastRunMap = e2ePruneDeadLeavesLastRunMap();
@@ -864,23 +1004,56 @@ function e2ePruneDeadLeaves(conversationId, state) {
     lastRunMap[conversationId] = Date.now();
     try { localStorage.setItem(E2E_PRUNE_DEAD_LEAVES_STORAGE_KEY + ':' + myUserId, JSON.stringify(lastRunMap)); }
     catch (e) { /* localStorage đầy -- cooldown chỉ là tối ưu phụ, bỏ qua lặng lẽ, không chặn luồng dọn dẹp */ }
-    // `seqIdx` (0,1,2... ĐẾM THEO THỨ TỰ TRÊN DANH SÁCH LEAF ĐàLỌC) -- KHÔNG phải `x.idx` từ
-    // e2eLeafNodes (đó là vị trí RAW trong toàn bộ ratchetTree, xen kẽ cả parent-node, không phải
-    // "LeafIndex" mà M.createCommit's `remove.removed` cần -- bug thật đã tự bắt được lúc test: dùng
-    // nhầm raw idx ném thẳng "Tried to remove empty leaf node". Xem đúng cách làm ở e2eLeafIndexesOf.
+    // LeafIndex = x.idx (vị trí RAW trong ratchetTree, từ e2eLeafNodes) / 2 -- xem javadoc
+    // e2eLeafIndexesOf cho lý do đầy đủ. BUG THẬT đã tự bắt được trên dữ liệu test thật: bản TRƯỚC ĐÂY
+    // dùng "seqIdx" (đếm tuần tự trên danh sách leaf ĐÃ LỌC, bỏ qua các ô blank do lần remove trước để
+    // lại) làm LeafIndex -- đúng lúc cây chưa từng remove ai, nhưng SAI ngay khi cây đã có ô blank
+    // (conversation càng lâu càng chắc chắn có), trỏ nhầm sang leaf KHÁC (kể cả leaf của CHÍNH mình,
+    // M.createCommit ném "Commit cannot contain a remove proposal removing committer") -- dọn leaf
+    // chết coi như CHẠY nhưng luôn thất bại âm thầm (bị .catch nuốt lỗi ngay bên dưới), leaf revoked
+    // cứ nằm mãi trong cây dù prune "đã chạy".
+    // Loại ĐÚNG leaf khớp e2eDeviceId hiện tại (nhanh, đúng trong đại đa số trường hợp) -- KHÔNG loại
+    // hẳn mọi leaf của myUserId nữa: người dùng có thể có NHIỀU thiết bị CŨ đã logout (đã revoke) của
+    // CHÍNH họ còn kẹt trong cây (vd tự logout xong login lại nhiều lần) -- muốn dọn ĐƯỢC cả đám leaf
+    // chết đó khi CHÍNH họ đang online bằng 1 thiết bị SỐNG khác, không chỉ dọn hộ leaf chết của NGƯỜI
+    // KHÁC. Rủi ro duy nhất: `e2eDeviceId` (biến JS) có thể LỆCH khỏi leaf THẬT đang nắm private key
+    // trong `state` (vd localStorage bị xoá/reset khác thời điểm với IndexedDB) -- lọt lưới, cố remove
+    // NHẦM committer -- e2eCommitRemoveDeadLeaves bên dưới tự bắt đúng lỗi này và fallback an toàn.
     var leaves = e2eLeafNodes(state)
-        .map(function (x, seqIdx) { return { idx: seqIdx, deviceId: e2eLeafDeviceId(x.n) }; })
-        .filter(function (x) { return x.deviceId && x.deviceId !== e2eDeviceId; }); // bỏ qua leaf của CHÍNH thiết bị này (chắc chắn còn sống)
+        .map(function (x) { return { idx: x.idx / 2, userId: e2eLeafUserId(x.n), deviceId: e2eLeafDeviceId(x.n) }; })
+        .filter(function (x) { return x.deviceId && x.deviceId !== e2eDeviceId; });
     if (!leaves.length) return Promise.resolve(state);
     return e2eCheckRevokedDeviceIds(leaves.map(function (x) { return x.deviceId; })).then(function (revokedIds) {
         if (!revokedIds.length) return state;
         var revokedSet = new Set(revokedIds);
-        var deadLeafIndexes = leaves.filter(function (x) { return revokedSet.has(x.deviceId); }).map(function (x) { return x.idx; });
-        if (!deadLeafIndexes.length) return state;
-        console.warn('[e2e-mls] phát hiện', deadLeafIndexes.length, 'leaf chết (thiết bị đã bị thu hồi) trong', conversationId, '-- tự dọn');
-        return e2eCommitRemoveDeadLeaves(conversationId, state, deadLeafIndexes);
+        var deadLeaves = leaves.filter(function (x) { return revokedSet.has(x.deviceId); });
+        if (!deadLeaves.length) return state;
+        console.warn('[e2e-mls] phát hiện', deadLeaves.length, 'leaf chết (thiết bị đã bị thu hồi) trong', conversationId, '-- tự dọn');
+        return e2eCommitRemoveDeadLeaves(conversationId, state, deadLeaves.map(function (x) { return x.idx; }));
     }).catch(function (err) {
-        // Dọn dẹp best-effort -- lỗi (mạng, thua CAS...) không được phép làm hỏng luồng rotation chính,
+        // BUG THẬT đã tự bắt được trên dữ liệu test thật: nếu candidate list (lọc theo e2eDeviceId ở
+        // trên) lỡ LỌT ĐÚNG leaf committer thật (do lệch e2eDeviceId như javadoc ở trên) -- toàn bộ
+        // batch bị M.createCommit từ chối ("cannot contain a remove proposal removing committer"),
+        // kéo theo leaf CHẾT THẬT của NGƯỜI KHÁC trong CÙNG batch cũng bị vạ lây, không dọn được, dù
+        // bản thân chúng hoàn toàn hợp lệ để remove. Fallback: thử lại NGAY 1 lần, lần này lọc CHẶT
+        // hơn theo userId (loại HẾT leaf của CHÍNH myUserId, không chỉ đúng 1 thiết bị) -- an toàn
+        // tuyệt đối (committer luôn thuộc myUserId), đổi lại leaf chết CỦA CHÍNH MÌNH thì đành chịu
+        // không tự dọn được lượt này (vẫn còn cơ hội dọn ở lượt SAU, do 1 thiết bị SỐNG KHÁC dọn hộ).
+        if (/removing committer/.test(err && err.message)) {
+            console.warn('[e2e-mls] dọn leaf chết đụng đúng committer (e2eDeviceId lệch state cục bộ) -- fallback lọc theo userId');
+            var safeLeaves = leaves.filter(function (x) { return x.userId !== myUserId; });
+            if (!safeLeaves.length) return state;
+            return e2eCheckRevokedDeviceIds(safeLeaves.map(function (x) { return x.deviceId; })).then(function (revokedIds2) {
+                var revokedSet2 = new Set(revokedIds2);
+                var safeDeadIndexes = safeLeaves.filter(function (x) { return revokedSet2.has(x.deviceId); }).map(function (x) { return x.idx; });
+                if (!safeDeadIndexes.length) return state;
+                return e2eCommitRemoveDeadLeaves(conversationId, state, safeDeadIndexes);
+            }).catch(function (err2) {
+                console.warn('[e2e-mls] dọn leaf chết lỗi (bỏ qua, thử lại lượt sau)', err2 && err2.message);
+                return state;
+            });
+        }
+        // Lỗi khác (mạng, thua CAS...) -- best-effort, không được phép làm hỏng luồng rotation chính,
         // thử lại ở lượt sau (cooldown đã ghi nhận ở trên, không retry dồn dập ngay).
         console.warn('[e2e-mls] dọn leaf chết lỗi (bỏ qua, thử lại lượt sau)', err && err.message);
         return state;
@@ -896,7 +1069,7 @@ function e2eCommitAddMany(conversationId, state, addUserIds) {
             // showConvE2eWarning (banner nằm lại trong header) thay vì showToast (tự biến mất sau 2.2s).
             results.filter(function (r) { return !r.bundles.length; }).forEach(function (r) {
                 console.warn('[e2e-mls] người này chưa bật MLS, không add được:', r.userId);
-                if (typeof showConvE2eWarning === 'function') showConvE2eWarning(conversationId, r.userId, (typeof displayName === 'function' ? displayName(r.userId) : r.userId) + ' chưa sẵn sàng mã hoá -- tin nhắn sẽ KHÔNG đến được cho người này cho tới khi họ mở lại app');
+                if (typeof showConvE2eWarning === 'function') showConvE2eWarning(conversationId, r.userId, typeof displayName === 'function' ? displayName(r.userId) : r.userId);
             });
             var readyUserIds = results.filter(function (r) { return r.bundles.length; }).map(function (r) { return r.userId; });
             var adds = [];
@@ -931,6 +1104,16 @@ function e2eMaybeEncryptForSend(conversationId, plainBody) {
             return synced;
         }).then(function (state) {
             if (!state) throw new Error('đang chờ thiết lập nhóm mã hoá (chờ người khởi tạo nhóm)');
+            if (!e2eIsGroupBorrowed(conversationId)) return state;
+            // Leaf MƯỢN từ backup lạnh/link thiết bị (xem javadoc e2eMarkGroupBorrowed, ngay trên
+            // e2eForceExternalJoin) -- TUYỆT ĐỐI không dùng để GỬI (rủi ro tái sử dụng key/nonce AES-GCM
+            // với thiết bị đã tạo ra leaf này), bắt tự External-Join lấy leaf THẬT của thiết bị này
+            // trước, chỉ xoá cờ SAU KHI join thành công.
+            return e2eForceExternalJoin(conversationId).then(function (freshState) {
+                e2eClearGroupBorrowed(conversationId);
+                return freshState;
+            });
+        }).then(function (state) {
             var payload = JSON.stringify(plainBody);
             return M.createApplicationMessage(state, new TextEncoder().encode(payload), e2eImpl).then(function (res) {
                 (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
@@ -966,9 +1149,9 @@ function e2eDecryptIncomingBody(fromUserId, body, messageId, conversationId) {
             if (state) return state;
             return e2eTryExternalJoin(conversationId);
         }).then(function (state) {
-            if (!state) return { message: '🔒 Tin nhắn MLS (thiết bị này chưa tham gia nhóm)', e2eFailed: true };
+            if (!state) return { message: 'Tin nhắn MLS (thiết bị này chưa tham gia nhóm)', e2eFailed: true };
             var msg = M.decodeMlsMessage(e2eUnb64(body.ct), 0)[0];
-            if (!msg || msg.wireformat !== 'mls_private_message') return { message: '🔒 Tin MLS không hợp lệ', e2eFailed: true };
+            if (!msg || msg.wireformat !== 'mls_private_message') return { message: 'Tin MLS không hợp lệ', e2eFailed: true };
             return M.processPrivateMessage(state, msg.privateMessage, M.emptyPskIndex, e2eImpl).then(function (res) {
                 (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
                 // res.kind === 'applicationMessage' => có .message (bytes); hoặc newState-only
@@ -979,7 +1162,7 @@ function e2eDecryptIncomingBody(fromUserId, body, messageId, conversationId) {
                         return plain;
                     });
                 }
-                return e2eSaveGroup(conversationId, res.newState).then(function () { return { message: '🔒 Không giải mã được (không phải tin ứng dụng)', e2eFailed: true }; });
+                return e2eSaveGroup(conversationId, res.newState).then(function () { return { message: 'Không giải mã được (không phải tin ứng dụng)', e2eFailed: true }; });
             });
         });
     });
@@ -989,7 +1172,7 @@ function e2eResolveIncomingBody(fromUserId, body, messageId, conversationId) {
     if (!body || !body.mls) return Promise.resolve(body); // tin thường hoặc tin Olm cũ (e2e true, không mls) — để caller render placeholder cũ
     return e2eGetCachedPlaintext(messageId).then(function (cached) {
         if (cached) return cached;
-        if (!e2eReady) return { message: '🔒 Tin nhắn MLS (thiết bị chưa sẵn sàng)', e2eFailed: true };
+        if (!e2eReady) return { message: 'Tin nhắn MLS (thiết bị chưa sẵn sàng)', e2eFailed: true };
         return e2eDecryptIncomingBody(fromUserId, body, messageId, conversationId).then(function (plain) {
             if (plain && plain.e2eFailed) {
                 if (messageId) e2eFailedEnvelopesByMessageId[messageId] = { fromUserId: fromUserId, conversationId: conversationId, body: body };
@@ -1000,28 +1183,39 @@ function e2eResolveIncomingBody(fromUserId, body, messageId, conversationId) {
         }).catch(function (err) {
             console.warn('[e2e-mls] decrypt lỗi', err);
             if (messageId) e2eFailedEnvelopesByMessageId[messageId] = { fromUserId: fromUserId, conversationId: conversationId, body: body };
-            return { message: '🔒 Không giải mã được tin nhắn MLS', e2eFailed: true };
+            return { message: 'Không giải mã được tin nhắn MLS', e2eFailed: true };
         });
     });
 }
 
 function e2eResolveEditedBody(fromUserId, body, messageId, conversationId) {
     if (!body || !body.mls) return Promise.resolve(body);
-    if (!e2eReady) return Promise.resolve({ message: '🔒 Tin nhắn MLS (thiết bị chưa sẵn sàng)', e2eFailed: true });
+    if (!e2eReady) return Promise.resolve({ message: 'Tin nhắn MLS (thiết bị chưa sẵn sàng)', e2eFailed: true });
     return e2eDecryptIncomingBody(fromUserId, body, null, conversationId).then(function (plain) {
         if (plain && plain.e2eFailed) return plain;
         return e2eCachePlaintext(messageId, plain).then(function () { return plain; });
     });
 }
 
-function e2eResolveIncomingBatch(conversationId, messages) {
+// `onEach` (tuỳ chọn) -- gọi NGAY khi TỪNG tin resolve xong, KHÔNG đợi hết cả mảng -- dùng để render
+// dần từng tin (xem loadLatestPage/loadAroundReadCursor, history-ws.js) thay vì đợi TOÀN BỘ batch
+// xong rồi mới hiện 1 lượt (bug UX thật đã gặp: khung chat "trắng tinh" suốt lúc giải mã cả trang,
+// đặc biệt ngay sau login khi tin đầu tiên có thể phải tự External-Join trước, tốn thêm vài giây
+// round-trip mạng). Vẫn trả về mảng ĐẦY ĐỦ qua promise như cũ cho caller nào chỉ cần kết quả cuối
+// (maybeLoadOlder/maybeLoadNewer, messages-render.js) -- KHÔNG bắt buộc phải truyền onEach.
+function e2eResolveIncomingBatch(conversationId, messages, onEach) {
     // TUẦN TỰ (không Promise.all): mỗi private message advance secret-tree ratchet position của group
     // state; decrypt 2 tin cùng lúc trên CÙNG state sẽ trùng nonce/ratchet -> fail. Gửi theo thứ tự
     // created_at (mảng đã sort đúng khi load lịch sử) để mỗi tin thấy state mới nhất của tin trước.
     var chain = Promise.resolve([]);
     messages.forEach(function (m) {
         chain = chain.then(function (acc) {
-            return e2eResolveIncomingBody(m.fromUserId, m.body, m.id, conversationId).then(function (b) { acc.push(Object.assign({}, m, { body: b })); return acc; });
+            return e2eResolveIncomingBody(m.fromUserId, m.body, m.id, conversationId).then(function (b) {
+                var resolved = Object.assign({}, m, { body: b });
+                acc.push(resolved);
+                if (onEach) onEach(resolved);
+                return acc;
+            });
         });
     });
     return chain;
@@ -1050,7 +1244,65 @@ function e2eHandleToDeviceItem(type, senderUserId, conversationId, body) {
     if (type === 'mls_link_welcome') return e2eHandleLinkWelcome(senderUserId, body); // device-link group tạm
     if (type === 'mls_link_payload') return e2eHandleLinkPayload(senderUserId, body);
     if (type === 'mls_link_commit') return e2eHandleCommit(null, body); // (không dùng cho link, giữ an toàn)
+    // mls_prune_hint CỐ TÌNH không return promise của nó (chạy nền, không chặn chain drain) -- đo thật
+    // bằng console.time (xem [e2e-perf]) phát hiện: hint này tự thử LẠI 3 lần với sleep cứng
+    // [0,1500,3500]ms (E2E_PRUNE_HINT_RETRY_DELAYS_MS) CỘNG network thật mỗi lần (sync+commit member)
+    // -- tổng >9s cho ĐÚNG 1 item, trong khi e2eTryExternalJoin của MỌI conversation khác (kể cả
+    // conversation không liên quan gì tới hint này) phải ĐỢI e2eWaitInitialDrain xong (hoặc hết
+    // E2E_INITIAL_DRAIN_TIMEOUT_MS=8000) mới được mở -- đây chính là nguyên nhân "mở hội thoại chỉ
+    // 1-2 tin mà chờ 8-10s" dù bản thân external-join chỉ mất ~20ms. Hint này vốn đã tự nhận
+    // "vô hại nếu gọi thừa" + tự khoá theo conversation (e2eWithConvLock) nên an toàn khi tách khỏi
+    // chain chính, để tiếp tục chạy nền sau khi drain đã "mở khoá" cho phần còn lại của app.
+    if (type === 'mls_prune_hint') { e2eHandlePruneHint(conversationId); return Promise.resolve(); } // xem javadoc HallApiHandlers#notifyPruneHintForRevokedDevice
     return Promise.resolve();
+}
+
+// Nhận "mls_prune_hint" (server báo 1 thiết bị TRONG conversation này vừa bị revoke, xem
+// HallApiHandlers#notifyPruneHintForRevokedDevice) -- KHÔNG cần biết deviceId nào, chỉ cần biết
+// CONVERSATION nào cần soi lại NGAY, bỏ qua cooldown 6h thường lệ (server đã xác nhận có việc THẬT,
+// không phải đoán mò định kỳ như e2eCheckGroupRotations). Vô hại nếu gọi thừa (không leaf nào chết
+// thật thì e2ePruneDeadLeaves tự no-op) hoặc nếu mình chưa có state cục bộ (chưa join conversation đó
+// thì không có gì để dọn từ phía mình -- người khác nhận cùng hint sẽ tự lo).
+// Thử tối đa 3 lần, giãn cách dần -- BUG THẬT đã tự gặp khi test với NHIỀU tài khoản thật cùng login/
+// logout đồng thời (môi trường càng đông người dùng càng dễ trúng): bước dọn (e2eCommitRemoveDeadLeaves)
+// thua CAS vì đụng độ với 1 commit KHÁC đang chạy y hệt lúc đó (epoch nhảy do người khác) -- .catch bên
+// trong e2ePruneDeadLeaves NUỐT lỗi CAS-lost đó, trả về state CŨ (leaf chết vẫn còn nguyên) một cách
+// im lặng, đúng ý định "để chu kỳ SAU tự thử lại". Nhưng bước sync-lại-member ngay sau đó (xem dưới)
+// chạy trên ĐÚNG state CŨ đó -- vẫn thấy leaf chết = "đã có mặt", nên KHÔNG phát hiện ra người này thiếu
+// thiết bị sống, KHÔNG hiện cảnh báo -- phải đợi 1 trigger HOÀN TOÀN KHÁC (reload trang -> enterApp lại
+// từ đầu) mới tình cờ chạy lại đúng lúc CAS rảnh mới thấy đúng. Retry vài lần ngay trong CÙNG lượt hint
+// này (mỗi lần idempotent -- không có gì để dọn/sync thêm thì tự no-op) để tự vượt qua đụng độ NGẮN HẠN
+// mà không cần người dùng phải tự reload.
+var E2E_PRUNE_HINT_RETRY_DELAYS_MS = [0, 1500, 3500];
+function e2eHandlePruneHint(conversationId) {
+    if (!conversationId) return Promise.resolve();
+    return e2eHandlePruneHintAttempt(conversationId, 0);
+}
+function e2eHandlePruneHintAttempt(conversationId, attemptIdx) {
+    return e2eWithConvLock(conversationId, function () {
+        return e2eLoadGroup(conversationId).then(function (state) {
+            if (!state) return null;
+            e2eClearPruneDeadLeavesCooldown(conversationId);
+            return e2ePruneDeadLeaves(conversationId, state);
+        }).then(function () {
+            // Dọn xong (có thể vừa xoá mất leaf CUỐI CÙNG của 1 người -- vd họ vừa logout nốt thiết bị
+            // duy nhất còn lại) -- người đó vẫn là thành viên THẬT của conversation (server
+            // conversation_members không đổi gì) nhưng giờ 0 leaf, cần thử ADD LẠI NGAY trong CÙNG lượt
+            // này để phát hiện "họ hết thiết bị sống, chưa thiết lập lại được" và hiện đúng banner
+            // "chưa thiết lập mã hoá" -- TRƯỚC ĐÂY chỉ dọn xong là dừng, phải chờ MAY RỦI có 1 lượt
+            // refreshConversationList khác (không liên quan) tình cờ chạy tới sau đó mới tự phát hiện
+            // ra, có thể rất lâu với conversation ít hoạt động (bug thật đã tự gặp: dọn xong nhưng
+            // banner vẫn không hiện, phải đợi thêm 1 trigger khác).
+            var conv = lastConvList.filter(function (c) { return c.conversationId === conversationId; })[0];
+            if (!conv) return null;
+            return e2eSyncGroupMembers(conversationId, conv.memberUserIds);
+        });
+    }).catch(function (err) { console.warn('[e2e-mls] xử lý prune hint lỗi (bỏ qua)', err); }).then(function () {
+        var nextIdx = attemptIdx + 1;
+        if (nextIdx >= E2E_PRUNE_HINT_RETRY_DELAYS_MS.length) return;
+        return new Promise(function (resolve) { setTimeout(resolve, E2E_PRUNE_HINT_RETRY_DELAYS_MS[nextIdx]); })
+            .then(function () { return e2eHandlePruneHintAttempt(conversationId, nextIdx); });
+    });
 }
 
 function e2eHandleWelcome(conversationId, body) {
@@ -1108,8 +1360,18 @@ function e2eHandleCommit(conversationId, body) {
             return M.processMessage(msg, state, M.emptyPskIndex, M.acceptAll, e2eImpl).then(function (res) {
                 (res.consumed || []).forEach(function (z) { try { M.zeroOutUint8Array(z); } catch (e) {} });
                 if (!res.newState) return null;
-                // Nếu commit remove CHÍNH MÌnh (selfRemoved) -> xoá group local (không đọc được tin mới).
-                if (res.newState.activeState && res.newState.activeState.kind === 'externalCommit') {} // noop
+                // Commit này remove CHÍNH MÌNH khỏi group (server đã xoá mình khỏi conversation_members từ
+                // trước, giờ 1 member khác chạy e2eSyncGroupMembers bắt kịp bằng remove-commit) -- xoá
+                // state cục bộ NGAY, KHÔNG lưu/KHÔNG publish GroupInfo/KHÔNG retry gì thêm cho conversation
+                // này (mình không còn đọc/gửi được gì ở đây nữa). BUG THẬT đã tự bắt được: check TRƯỚC ĐÂY
+                // dùng sai tên field (`res.newState.activeState`, field THẬT là `groupActiveState`, xem
+                // ts-mls's groupActiveState.kind) nên nhánh này CHƯA BAO GIỜ chạy (luôn falsy, không
+                // crash chỉ vì có "&&" chặn trước) -- state "removedFromGroup" vẫn bị lưu đè lên như state
+                // bình thường, publish/retry vẫn chạy vô nghĩa cho 1 conversation mình không còn là
+                // thành viên.
+                if (res.newState.groupActiveState && res.newState.groupActiveState.kind === 'removedFromGroup') {
+                    return e2eDeleteGroup(conversationId);
+                }
                 return e2eSaveGroup(conversationId, res.newState)
                     // Epoch vừa đổi (commit từ người khác, ĐÃ được server chấp nhận -- CAS ở đây chỉ để
                     // đồng bộ GroupInfo public cho người cần External-Join, KHÔNG cần thắng/thua: state cục
@@ -1126,9 +1388,11 @@ function e2eDrainToDevice() {
     // (e2eTryExternalJoin) treo tới hết E2E_INITIAL_DRAIN_TIMEOUT_MS oan uổng.
     var unlockInitialDrain = function () { if (e2eInitialDrainResolve) { var r = e2eInitialDrainResolve; e2eInitialDrainResolve = null; r(); } };
     if (!e2eReady) { unlockInitialDrain(); return Promise.resolve(); }
+    console.time('[e2e-perf] e2eDrainToDevice'); // xem javadoc do thoi gian o e2eInit -- cung 1 dot dieu tra do tre login
     return fetch(HISTORY_API_BASE + '/e2e/to-device', { headers: { 'Authorization': 'Bearer ' + authToken } })
         .then(function (res) { return res.ok ? res.json() : []; })
         .then(function (items) {
+            console.log('[e2e-perf] e2eDrainToDevice: ' + items.length + ' item can xu ly');
             return items.reduce(function (chain, item) {
                 // drain XÓA SẠCH hàng đợi — nếu 1 device trong nhiều device cùng user drain mất thì device
                 // kia không còn welcome. Đây là giới hạn đã biết của hạ tầng to-device per-USER (không per-device)
@@ -1137,7 +1401,7 @@ function e2eDrainToDevice() {
             }, Promise.resolve());
         })
         .catch(function (err) { console.warn('không drain được e2e to-device', err); })
-        .then(unlockInitialDrain);
+        .then(function () { console.timeEnd('[e2e-perf] e2eDrainToDevice'); unlockInitialDrain(); });
 }
 
 // ===== Liên kết thiết bị (mã 6 ký tự) — chuyển LỊCH SỬ ĐÃ GIẢI MÃ qua 1 NHÓM MLS TẠM =====
@@ -1280,8 +1544,12 @@ function e2eHandleLinkPayload(senderUserId, body) {
     }).catch(function (err) { console.warn('[e2e-mls] link payload fail', err); });
 }
 function e2eImportTransfer(transfer) {
-    // msgPlaintext entries (key myUserId|msgId -> {body}) nhập thẳng; group entries: chỉ import group CHƯA có
-    // local (không đè group hiện có — group local có thể đã advance epoch cao hơn file export).
+    // msgPlaintext entries (key myUserId|msgId -> {body}): CHỈ thêm cái CHƯA có cục bộ (giống group
+    // entries bên dưới) -- TRƯỚC ĐÂY đè vô điều kiện: bug thật đã tự bắt được -- 1 tin đã được SỬA sau
+    // thời điểm tạo file backup/link sẽ bị "hồi sinh" về đúng nội dung CŨ (trước khi sửa) nếu restore
+    // file đó về sau, vì cache cục bộ hiện tại (đã có bản đã sửa, do e2eResolveEditedBody tự cache lại
+    // mỗi lần edit) bị ghi đè ngược bởi bản cũ hơn trong file. Cache cục bộ hiện có luôn được ưu tiên
+    // giữ nguyên, transfer chỉ bổ sung tin CHƯA từng có (đúng mục đích phục hồi lịch sử bị thiếu).
     var mp = (transfer.msgPlaintext || []).filter(function (e) { return String(e.key).indexOf(myUserId + '|') === 0; });
     var gs = (transfer.groups || []).filter(function (e) { return String(e.key).indexOf(myUserId + '|') === 0; });
     // Bug thật đã gặp: `e.value.stateB64 || e.stateB64` TỰ THROW ngay (TypeError: Cannot read
@@ -1292,15 +1560,30 @@ function e2eImportTransfer(transfer) {
     // khi transfer có ÍT NHẤT 1 group (test trước đó dùng tài khoản rỗng, không group nào nên không
     // lộ ra). Phải kiểm tra `e.value` tồn tại trước khi đọc `.stateB64` trên nó.
     var gEntries = gs.map(function (e) { return { key: e.key, value: { stateB64: (e.value && e.value.stateB64) || e.stateB64 } }; });
-    return Promise.all([e2eDbPutAll('msgPlaintext', mp), (function () {
-        if (!gEntries.length) return Promise.resolve();
-        // merge: giữ cái đã có, chỉ thêm cái thiếu
-        return e2eDbGetAllForUser('groups').then(function (existing) {
-            var have = {}; existing.forEach(function (e) { have[e.key] = true; });
-            var toAdd = gEntries.filter(function (e) { return !have[e.key]; });
-            return e2eDbPutAll('groups', toAdd);
-        });
-    })()]).then(function () {});
+    return Promise.all([
+        (function () {
+            if (!mp.length) return Promise.resolve();
+            return e2eDbGetAllForUser('msgPlaintext').then(function (existing) {
+                var have = {}; existing.forEach(function (e) { have[e.key] = true; });
+                return e2eDbPutAll('msgPlaintext', mp.filter(function (e) { return !have[e.key]; }));
+            });
+        })(),
+        (function () {
+            if (!gEntries.length) return Promise.resolve();
+            // merge: giữ cái đã có, chỉ thêm cái thiếu (group local có thể đã advance epoch cao hơn file export)
+            return e2eDbGetAllForUser('groups').then(function (existing) {
+                var have = {}; existing.forEach(function (e) { have[e.key] = true; });
+                var toAdd = gEntries.filter(function (e) { return !have[e.key]; });
+                // Leaf trong toAdd là leaf MƯỢN (clone nguyên private key từ thiết bị khác, xem
+                // e2eCreateBackup/e2eApproveDeviceLink) -- đánh dấu để e2eMaybeEncryptForSend bắt tự
+                // External-Join lấy leaf THẬT của thiết bị này trước khi GỬI tin đầu tiên (xem javadoc
+                // e2eMarkGroupBorrowed, ngay trên e2eForceExternalJoin) -- ĐỌC (decrypt) thì dùng ngay
+                // được, không cần chờ.
+                toAdd.forEach(function (e) { e2eMarkGroupBorrowed(e.key.substring((myUserId + '|').length)); });
+                return e2eDbPutAll('groups', toAdd);
+            });
+        })()
+    ]).then(function () {});
 }
 
 // Ai được phép chủ động tạo group MLS cho conv này -- ƯU TIÊN e2eEnabledBy (chính người đã BẤM NÚT
@@ -1387,8 +1670,9 @@ function e2eCheckGroupRotations(oldList, newList) {
 }
 
 // ===== Backup lạnh (xuất/nhập file AES-GCM, không qua server) — giữ nguyên pattern file cũ =====
-// Payload = {msgPlaintext: entries[], groups: [{key, stateB64}]}. Import: msgPlaintext đè, groups giữ-cái-có.
-var E2E_BACKUP_PBKDF2_ITERATIONS = 210000;
+// Payload = {msgPlaintext: entries[], groups: [{key, stateB64}]}. Import (e2eImportTransfer): CẢ 2
+// loại đều merge kiểu giữ-cái-có-chỉ-thêm-cái-thiếu (không đè gì đang có cục bộ).
+var E2E_BACKUP_PBKDF2_ITERATIONS = 600000; // khuyến nghị OWASP hiện tại cho PBKDF2-SHA256 (210k cũ vẫn an toàn nhưng dưới mức khuyến nghị)
 function e2eBytesToHex(b) { return Array.from(b).map(function (x) { return x.toString(16).padStart(2, '0'); }).join(''); }
 function e2eHexToBytes(h) { h = h.replace(/[^0-9a-fA-F]/g, ''); var out = new Uint8Array(Math.floor(h.length / 2)); for (var i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16); return out; }
 function e2eAbToBase64(buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
@@ -1404,15 +1688,21 @@ function e2eCreateBackup(mode, phrase) {
         var payload = JSON.stringify({ msgPlaintext: d[0], groups: d[1].map(function (e) { return { key: e.key, stateB64: e.value.stateB64 }; }) });
         var iv = crypto.getRandomValues(new Uint8Array(12));
         var kp, recoveryKeyHex = null, salt = null;
-        if (mode === 'key') { var kb = crypto.getRandomValues(new Uint8Array(32)); recoveryKeyHex = e2eBytesToHex(kb); kp = e2eImportRawAesKey(kb); }
+        var kb = null;
+        if (mode === 'key') { kb = crypto.getRandomValues(new Uint8Array(32)); recoveryKeyHex = e2eBytesToHex(kb); kp = e2eImportRawAesKey(kb); }
         else { salt = crypto.getRandomValues(new Uint8Array(16)); kp = e2eDeriveKeyFromPhrase(phrase, salt); }
         return kp.then(function (key) { return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(payload)); })
-            .then(function (ct) { var file = { v: 2, mode: mode, iv: e2eAbToBase64(iv), ciphertext: e2eAbToBase64(ct) }; if (salt) file.salt = e2eAbToBase64(salt); return { fileContent: JSON.stringify(file), recoveryKeyHex: recoveryKeyHex }; });
+            .then(function (ct) {
+                if (kb) { try { M.zeroOutUint8Array(kb); } catch (e) {} } // khoá random thô chỉ cần trong lúc encrypt -- dọn ngay khỏi bộ nhớ, giống mọi secret ngắn hạn khác trong file này
+                var file = { v: 2, mode: mode, iv: e2eAbToBase64(iv), ciphertext: e2eAbToBase64(ct) }; if (salt) file.salt = e2eAbToBase64(salt); return { fileContent: JSON.stringify(file), recoveryKeyHex: recoveryKeyHex };
+            });
     });
 }
 function e2eRestoreBackup(fileContent, secret) {
     var file; try { file = JSON.parse(fileContent); } catch (e) { return Promise.reject(new Error('File backup không hợp lệ')); }
-    if (!file || !file.v || !file.ciphertext || !file.iv) return Promise.reject(new Error('File backup không hợp lệ'));
+    // So khớp ĐÚNG version 2 (không chỉ truthy) -- version tương lai không tương thích ngược (đổi field/
+    // cấu trúc payload) sẽ bị chặn rõ ràng ở đây thay vì "ăn" nhầm vào logic v2 rồi lỗi khó hiểu ở bước sau.
+    if (!file || file.v !== 2 || !file.ciphertext || !file.iv) return Promise.reject(new Error('File backup không hợp lệ hoặc không được hỗ trợ'));
     if (!M) return Promise.reject(new Error('MLS chưa sẵn sàng để import group state'));
     var iv = new Uint8Array(e2eBase64ToAb(file.iv));
     var kp = file.mode === 'phrase' ? e2eDeriveKeyFromPhrase(secret, new Uint8Array(e2eBase64ToAb(file.salt))) : e2eImportRawAesKey(e2eHexToBytes(secret));

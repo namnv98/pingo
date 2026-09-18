@@ -132,6 +132,11 @@ function loadHistory(conversationId) {
     if (entry.historyLoadPromise) return entry.historyLoadPromise;
     entry.historyLoaded = true;
 
+    // Đo tổng thời gian mở hội thoại tới lúc render xong -- xem console.time tương tự trong
+    // mls-crypto.js (e2eInit/e2eDrainToDevice/e2eTryExternalJoin/e2eExternalJoinAttempt), gộp lại
+    // để thấy CẢ chuỗi (kể cả /read-cursor + /messages network) chứ không chỉ phần E2E.
+    var perfLabel = '[e2e-perf] loadHistory ' + conversationId;
+    console.time(perfLabel);
     entry.historyLoadPromise = fetchJson('/read-cursor?conversationId=' + encodeURIComponent(conversationId), true)
         .then(function (res) {
             var cursor = res && res.data;
@@ -142,7 +147,11 @@ function loadHistory(conversationId) {
             logToConversation(conversationId, '(không load được lịch sử: ' + err.message + ')');
             // Vẫn phải reset cờ này dù load lỗi giữa chừng, nếu không tin sống tới qua WS sau đó sẽ mãi kẹt không cuộn được.
             entry.suppressAutoScroll = false;
-        });
+            // Lưới an toàn cuối -- lỗi giữa chừng thì onEach của e2eResolveIncomingBatch (xem
+            // loadLatestPage/loadAroundReadCursor) có thể chưa từng chạy lần nào, spinner sẽ kẹt mãi.
+            hideConvLoading(conversationId);
+        })
+        .then(function () { console.timeEnd(perfLabel); }, function () { console.timeEnd(perfLabel); });
     return entry.historyLoadPromise;
 }
 
@@ -155,17 +164,24 @@ function applyScrollAnchor(entry) {
 
 function loadLatestPage(conversationId) {
     var entry = conversations[conversationId];
+    // Bật SỚM (trước khi tin đầu tiên kịp render qua onEach bên dưới) -- khác bản trước đặt trong
+    // .then thứ 2 (sau khi CẢ batch giải mã xong): giờ tin được append DẦN ngay trong lúc giải mã
+    // (xem onEach), nên phải suppress từ trước đó, không thì tin ĐẦU TIÊN bị coi nhầm là "tin sống"
+    // (nảy liveIn + tự cuộn riêng lẻ, xem messaging-core.js#appendMessageBubble).
+    entry.suppressAutoScroll = true;
     return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE)
         .then(function (messages) {
             entry.hasMoreOlder = messages.length === HISTORY_PAGE_SIZE;
+            if (!messages.length) hideConvLoading(conversationId); // rong -- khong co tin nao de onEach tu an spinner
             // API trả mới nhất trước (ORDER BY created_at DESC) — đảo lại để hiển thị đúng thứ tự thời gian.
-            return e2eResolveIncomingBatch(conversationId, messages.slice().reverse());
-        })
-        .then(function (messages) {
-            entry.suppressAutoScroll = true;
-            messages.forEach(function (m) {
+            // onEach: render NGAY từng tin vừa giải mã xong -- xem javadoc hideConvLoading/convLogLoading
+            // (messaging-core.js, style.css) cho lý do "trắng tinh" TRƯỚC ĐÂY khi đợi hiện xong CẢ trang.
+            return e2eResolveIncomingBatch(conversationId, messages.slice().reverse(), function (m) {
+                hideConvLoading(conversationId);
                 appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
+        })
+        .then(function () {
             entry.suppressAutoScroll = false;
             entry.stickToBottom = true;
             entry.scrollAnchor = {type: 'bottom'};
@@ -182,30 +198,36 @@ function loadAroundReadCursor(conversationId, cursor) {
     return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&before=' + (cursor.lastReadTs + 1))
         .then(function (beforeMessages) {
             entry.hasMoreOlder = beforeMessages.length === HISTORY_PAGE_SIZE;
-            return e2eResolveIncomingBatch(conversationId, beforeMessages.slice().reverse());
-        })
-        .then(function (beforeMessages) {
-            beforeMessages.forEach(function (m) {
+            if (!beforeMessages.length) hideConvLoading(conversationId); // rong -- khong co tin "before" nao de onEach tu an spinner
+            // onEach: render NGAY từng tin vừa giải mã xong -- xem javadoc hideConvLoading/convLogLoading
+            // (messaging-core.js, style.css) cho lý do "trắng tinh" TRƯỚC ĐÂY khi đợi hiện xong CẢ trang.
+            return e2eResolveIncomingBatch(conversationId, beforeMessages.slice().reverse(), function (m) {
+                hideConvLoading(conversationId);
                 appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
             });
+        })
+        .then(function () {
             return fetchJson('/messages?conversationId=' + encodeURIComponent(conversationId) + '&limit=' + HISTORY_PAGE_SIZE + '&after=' + cursor.lastReadTs);
         })
-        .then(function (afterMessages) {
-            entry.hasMoreNewer = afterMessages.length === HISTORY_PAGE_SIZE;
-            // after trả TĂNG DẦN sẵn (ORDER BY created_at ASC) -- không cần đảo lại như before/latest.
-            return e2eResolveIncomingBatch(conversationId, afterMessages);
-        })
-        .then(function (afterMessages) {
+        .then(function (afterMessagesRaw) {
+            entry.hasMoreNewer = afterMessagesRaw.length === HISTORY_PAGE_SIZE;
+            hideConvLoading(conversationId); // luoi an toan -- phong truong hop "before" rong VA day la lan dau co tin de hien
+            // Chèn vạch "Tin nhắn mới" NGAY (biết trước số lượng từ kết quả fetch thô, chưa cần đợi giải
+            // mã xong) -- rồi mới render dần từng tin "after" qua onEach, giữ đúng thứ tự: vạch luôn
+            // đứng TRƯỚC những tin chưa đọc, dù giải mã tin nào xong trước.
             var dividerEl = null;
-            if (afterMessages.length) {
+            if (afterMessagesRaw.length) {
                 dividerEl = document.createElement('div');
                 dividerEl.className = 'unreadDivider';
                 dividerEl.innerText = 'Tin nhắn mới';
                 entry.logEl.appendChild(dividerEl);
             }
-            afterMessages.forEach(function (m) {
+            // after trả TĂNG DẦN sẵn (ORDER BY created_at ASC) -- không cần đảo lại như before/latest.
+            return e2eResolveIncomingBatch(conversationId, afterMessagesRaw, function (m) {
                 appendMessageBubble(conversationId, m.fromUserId, m.body, m.ts, m.id, m.seen, m.reactions, m.deleted, undefined, m.seenBy, m.editedTs);
-            });
+            }).then(function () { return dividerEl; });
+        })
+        .then(function (dividerEl) {
             entry.suppressAutoScroll = false;
             if (dividerEl) {
                 entry.stickToBottom = false;
