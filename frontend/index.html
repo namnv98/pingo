@@ -181,6 +181,7 @@
                         <div class="infoRow"><span class="infoRowIcon" id="infoStatusIcon"></span><span class="infoRowLabel">Trạng thái</span><span class="infoRowValue" id="infoStatusValue"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoTypeIcon"></span><span class="infoRowLabel">Loại</span><span class="infoRowValue" id="infoTypeValue"></span></div>
                         <div class="infoRow" id="infoE2eRow"><span class="infoRowIcon fa-solid fa-lock"></span><span class="infoRowLabel">Mã hoá đầu cuối</span><span class="infoRowValue" id="infoE2eValue"></span></div>
+                        <div class="infoRow" id="infoE2eTreeRow" style="display:none"><span class="infoRowIcon fa-solid fa-diagram-project"></span><span class="infoRowLabel">Cây MLS</span><span class="infoRowValue enableLink" id="infoE2eTreeValue">Xem sơ đồ</span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoMemberIcon"></span><span class="infoRowLabel">Thành viên</span><span class="infoRowValue" id="infoMemberCountRow"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoActivityIcon"></span><span class="infoRowLabel">Hoạt động gần nhất</span><span class="infoRowValue" id="infoActivityValue"></span></div>
                         <div class="infoRow"><span class="infoRowIcon" id="infoConvIdIcon"></span><span class="infoRowLabel">Mã hội thoại</span><span class="infoRowValue badge" id="infoConvIdValue"></span></div>
@@ -222,6 +223,9 @@
 <!-- MLS (RFC 9420, engine ts-mls — browser IIFE frontend/vendor/mls.js). Thay hẳn Olm/Megolm cũ (đã bỏ). -->
 <script src="vendor/mls.js"></script>
 <script src="assets/js/mls-crypto.js"></script>
+<!-- Popup debug "Cây MLS" (nút trong Info panel, xem infoE2eTreeRow) -- chỉ ĐỌC state cục bộ đã có
+     (e2eLoadGroup), không tự join/tính toán gì thêm, an toàn để mở bất cứ lúc nào. -->
+<script src="assets/js/mls-tree-view.js"></script>
 <script src="assets/js/theme-accent.js"></script>
 <script src="assets/js/sidebar-conversations.js"></script>
 <script src="assets/js/auth.js"></script>

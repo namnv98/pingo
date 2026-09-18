@@ -852,6 +852,35 @@
         .e2eLinkWaitHint { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; padding: 4px 0 14px; }
         .e2eLinkCode { font-family: ui-monospace, monospace; font-size: 28px; font-weight: 800; letter-spacing: .12em; text-align: center; color: var(--ink); background: var(--canvas); border-radius: 12px; padding: 14px; }
         .e2eLinkStatus { text-align: center; font-size: 12.5px; color: var(--ink-faint); padding: 12px 0 4px; }
+
+        /* Modal "Cây MLS" (debug, xem mls-tree-view.js) -- cùng khuôn overlay/.bgPickerModal như các modal
+           E2E khác ở trên, chỉ RỘNG HƠN hẳn (cây có thể nhiều leaf -- cuộn ngang trong .mlsTreeCanvasWrap
+           thay vì ép co lại khó đọc) và CAO HƠN (còn chỗ cho panel info group phía trên cây). */
+        #mlsTreeOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.6); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
+        #mlsTreeOverlay.show { display: flex; }
+        .bgPickerModal.mlsTreeModal { width: 860px; max-width: 100%; max-height: 88vh; display: flex; flex-direction: column; }
+        .mlsTreeModal .bgPickerBody { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 14px 18px 18px; }
+        .mlsTreeInfoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 16px; background: var(--canvas); border-radius: 10px; padding: 12px 14px; flex: none; }
+        .mlsTreeInfoItem { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .mlsTreeInfoLabel { font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+        .mlsTreeInfoValue { font-size: 12.5px; color: var(--ink); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mlsTreeLegend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-faint); flex: none; }
+        .mlsTreeLegend span { display: inline-flex; align-items: center; gap: 6px; }
+        /* box-shadow inset viền mảnh (không phải border, để không đổi kích thước layout) -- KHÔNG có nó
+           thì chấm "Thiết bị (lá)"/"Ô trống" (nền trắng/trong suốt) gần như biến mất trên nền sáng của
+           modal, tự thấy khi soi ảnh chụp thật (cùng kiểu .bgSwatch đã dùng ở bgPicker phía trên). */
+        .mlsTreeLegendDot { width: 11px; height: 11px; border-radius: 3px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+        .mlsTreeCanvasWrap { flex: 1; min-height: 220px; overflow: auto; background: var(--canvas); border-radius: 10px; border: 1px solid var(--line); padding: 10px; }
+        .mlsTreeStatus { padding: 40px 20px; text-align: center; color: var(--ink-faint); font-size: 12.5px; }
+        /* Node lá/nhánh vẽ bằng SVG thật (không phải div định vị tuyệt đối) -- text bên trong dùng
+           <foreignObject> để tự xuống dòng/co giãn theo nội dung thay vì phải tự đo độ rộng text bằng
+           canvas.measureText cho từng dòng. */
+        .mlsTreeNodeBox { font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.5; color: var(--ink); box-sizing: border-box; width: 100%; height: 100%; padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
+        .mlsTreeNodeBox b { font-family: inherit; color: var(--ink); font-weight: 700; }
+        .mlsTreeNodeBox.mine { color: var(--accent-dark); }
+        .mlsTreeNodeBox .mlsTreeMuted { color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mlsTreeNodeName { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mlsTreeStar { color: #d4a017; }
         /* Modal tìm kiếm toàn cục (xem ensureSearchModal, sidebar-conversations.js) -- tái dùng khung
            .bgPickerModal/.bgPickerHead/.bgPickerBody như modal Hồ sơ, chỉ khác nội dung: ô nhập + danh
            sách kết quả cuộn. Rộng/cao hơn hẳn 2 modal kia vì cần chỗ cho danh sách. */

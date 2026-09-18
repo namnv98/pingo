@@ -851,6 +851,15 @@ function renderInfoPanel(conversationId) {
                 });
         };
     }
+    // Hàng "Cây MLS" (debug, xem mls-tree-view.js) -- chỉ có ý nghĩa khi conversation ĐÃ bật E2E (mới có
+    // group MLS để vẽ), ẩn hẳn nếu chưa bật thay vì hiện ra rồi báo lỗi trống.
+    var e2eTreeRowEl = document.getElementById('infoE2eTreeRow');
+    if (conv.e2eEnabled) {
+        e2eTreeRowEl.style.display = '';
+        document.getElementById('infoE2eTreeValue').onclick = function () { openMlsTreeModal(conv.conversationId); };
+    } else {
+        e2eTreeRowEl.style.display = 'none';
+    }
     // Thêm thành viên: cho phép cả với DM (2 người) -- thêm 1 người thứ 3 vào biến nó thành group
     // tự nhiên, đúng với việc isGroupConv chỉ suy từ SỐ LƯỢNG thành viên, không có cột "type" riêng.
     // GROUP thì chỉ owner (canManageGroupInfo).
