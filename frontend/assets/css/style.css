@@ -858,29 +858,125 @@
            thay vì ép co lại khó đọc) và CAO HƠN (còn chỗ cho panel info group phía trên cây). */
         #mlsTreeOverlay { position: fixed; inset: 0; background: rgba(10,10,16,.6); z-index: 320; display: none; align-items: center; justify-content: center; padding: 20px; }
         #mlsTreeOverlay.show { display: flex; }
-        .bgPickerModal.mlsTreeModal { width: 860px; max-width: 100%; max-height: 88vh; display: flex; flex-direction: column; }
+        .bgPickerModal.mlsTreeModal { width: 920px; max-width: 100%; max-height: 88vh; display: flex; flex-direction: column; transition: width .15s, height .15s, max-width .15s, max-height .15s, border-radius .15s; }
         .mlsTreeModal .bgPickerBody { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 14px 18px 18px; }
-        .mlsTreeInfoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 16px; background: var(--canvas); border-radius: 10px; padding: 12px 14px; flex: none; }
-        .mlsTreeInfoItem { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-        .mlsTreeInfoLabel { font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+        /* Nút toàn màn hình đứng CẠNH nút đóng (✕) trong head, không thay thế nó -- bọc riêng 1 group để
+           .bgPickerHead (justify-content:space-between) chỉ thấy 2 "cột": tiêu đề bên trái, cụm nút bên
+           phải, thay vì dàn đều 3 phần tử ra xa nhau. */
+        .mlsTreeHeadActions { display: flex; align-items: center; gap: 2px; flex: none; }
+        /* Toàn màn hình: overlay bỏ hẳn padding ngoài + modal phủ kín viewport, bo góc về 0 -- CHỈ đổi
+           khung modal, không đụng gì cách vẽ SVG bên trong (canvas tự cuộn theo kích thước mới, xem
+           .mlsTreeCanvasWrap flex:1 có sẵn). */
+        #mlsTreeOverlay.fullscreen { padding: 0; }
+        #mlsTreeOverlay.fullscreen .bgPickerModal.mlsTreeModal { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
+        .mlsTreeInfoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; flex: none; }
+        .mlsTreeInfoItem { display: flex; flex-direction: column; gap: 3px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; box-shadow: var(--shadow-sm); }
+        .mlsTreeInfoLabel { font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
         .mlsTreeInfoValue { font-size: 12.5px; color: var(--ink); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .mlsTreeLegend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-faint); flex: none; }
-        .mlsTreeLegend span { display: inline-flex; align-items: center; gap: 6px; }
+        /* Epoch là con số đáng chú ý nhất (đổi mỗi lần Commit) -- tách riêng thành 1 badge tròn nổi bật
+           thay vì lẫn vào lưới info như các trường tĩnh khác (cipher suite, group id...). */
+        .mlsTreeEpochBadge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 11px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-dark); font-weight: 800; font-size: 13.5px; width: fit-content; }
+        .mlsTreeLegend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-soft); flex: none; padding: 2px 2px 0; }
+        .mlsTreeLegend span.mlsTreeLegendItem { display: inline-flex; align-items: center; gap: 6px; }
         /* box-shadow inset viền mảnh (không phải border, để không đổi kích thước layout) -- KHÔNG có nó
-           thì chấm "Thiết bị (lá)"/"Ô trống" (nền trắng/trong suốt) gần như biến mất trên nền sáng của
-           modal, tự thấy khi soi ảnh chụp thật (cùng kiểu .bgSwatch đã dùng ở bgPicker phía trên). */
-        .mlsTreeLegendDot { width: 11px; height: 11px; border-radius: 3px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
-        .mlsTreeCanvasWrap { flex: 1; min-height: 220px; overflow: auto; background: var(--canvas); border-radius: 10px; border: 1px solid var(--line); padding: 10px; }
+           thì chấm nền trắng/trong suốt gần như biến mất trên nền sáng của modal (cùng kiểu .bgSwatch đã
+           dùng ở bgPicker phía trên). Mỗi trạng thái node (lá/hashed/pending/blank/mine) có 1 màu RIÊNG,
+           khớp 1-1 với màu thật vẽ trong SVG (mlsTreeRenderNodeBox) để chú giải không nói dối giao diện. */
+        .mlsTreeLegendDot { width: 12px; height: 12px; border-radius: 4px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+        .mlsTreeLegendDot.leaf { background: var(--surface); }
+        .mlsTreeLegendDot.hashed { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+        .mlsTreeLegendDot.pending { background: var(--warn-bg); box-shadow: inset 0 0 0 1.5px var(--warn-border); }
+        .mlsTreeLegendDot.blank { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-faint); border-radius: 999px; }
+        .mlsTreeLegendDot.mine { background: var(--surface); box-shadow: inset 0 0 0 2px var(--accent); }
+        .mlsTreeLegendLine { width: 18px; height: 2.5px; border-radius: 2px; background: var(--accent); flex: none; }
+        .mlsTreeCanvasWrap { flex: 1; min-height: 240px; overflow: auto; background: var(--canvas); border-radius: 10px; border: 1px solid var(--line); padding: 14px; }
         .mlsTreeStatus { padding: 40px 20px; text-align: center; color: var(--ink-faint); font-size: 12.5px; }
+        /* Mỗi node bấm được -- xem CSS .mlsTreeNodeG (viền dày hơn 1 chút khi hover, gợi ý "bấm được")
+           và listener click trên #mlsTreeCanvasWrap (ensureMlsTreeModal, mls-tree-view.js) đổ dữ liệu đầy
+           đủ vào panel bên dưới. */
+        .mlsTreeNodeG { cursor: pointer; }
+        .mlsTreeNodeG:hover rect { stroke-width: 2.2; }
+        /* Panel "chi tiết node" -- hiện NGUYÊN VẸN khoá/id (không rút gọn như ô vẽ trên cây) khi bấm vào
+           1 node, để có thể đọc/copy hẳn thay vì chỉ thấy vân tay 4 byte + tooltip khi hover. Chiều cao cố
+           định + overflow:auto (không phải flex:1) để không "nuốt" hết chỗ của canvas cây khi đóng lại
+           placeholder ngắn. */
+        .mlsTreeDetailPanel { flex: none; max-height: 240px; overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+        .mlsTreeDetailEmpty { color: var(--ink-faint); font-size: 12px; text-align: center; padding: 6px 0; }
+        .mlsTreeDetailTitle { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+        .mlsTreeDetailRow { display: flex; gap: 10px; align-items: baseline; font-size: 12px; color: var(--ink-soft); padding: 3px 0; flex-wrap: wrap; }
+        .mlsTreeDetailLabel { flex: none; width: 130px; color: var(--ink-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+        .mlsTreeDetailRow code { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--ink); background: var(--canvas); border-radius: 5px; padding: 2px 6px; word-break: break-all; flex: 1; min-width: 0; }
+        /* Khối "Private key" trong panel chi tiết -- viền/màu ĐỎ CỐ TÌNH khác hẳn phần còn lại (khoá công
+           khai ở trên dùng --ink/--accent trung tính) để không ai lỡ tay coi private key là dữ liệu bình
+           thường. Dùng thẳng #dc2626 (không qua token) -- ĐÚNG mã màu "nguy hiểm" app đã dùng sẵn ở nơi
+           khác (vd #authError, .appModalBtn.danger), không tự bịa thêm 1 sắc đỏ mới. */
+        .mlsTreePrivBox { margin-top: 10px; padding-top: 10px; border-top: 1.5px dashed #dc2626; }
+        .mlsTreePrivTitle { color: #dc2626; font-weight: 700; font-size: 11px; margin-bottom: 6px; }
+        .mlsTreePrivRow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; flex-wrap: wrap; }
+        .mlsTreePrivMasked { color: var(--ink-faint); font-family: ui-monospace, monospace; font-size: 11px; flex: 1; min-width: 0; }
+        .mlsTreePrivValue { display: none; font-family: ui-monospace, monospace; font-size: 11.5px; color: #dc2626; background: var(--canvas); border-radius: 5px; padding: 2px 6px; word-break: break-all; flex: 1; min-width: 0; }
+        .mlsTreePrivRow.revealed .mlsTreePrivMasked { display: none; }
+        .mlsTreePrivRow.revealed .mlsTreePrivValue { display: inline-block; }
+        .mlsTreePrivEye { flex: none; border: 1px solid #dc2626; background: none; color: #dc2626; cursor: pointer; font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; line-height: 1.6; }
+        .mlsTreePrivEye:hover { background: rgba(220,38,38,.14); }
+        /* variant "shared" -- secret DÙNG CHUNG cả nhóm (vd senderDataSecret, xem mlsTreeSharedSecretCardHtml),
+           khác hẳn ý nghĩa với private key CHỈ RIÊNG 1 thiết bị ở trên -- đổi hẳn sang màu cam (--warn-*,
+           TÁI DÙNG đúng token đã dùng cho node "chưa có hash", không bịa thêm 1 sắc màu thứ 3) để mắt phân
+           biệt được ngay "đỏ = chỉ mình bạn có" vs "cam = cả nhóm phải khớp nhau mới giải mã được". */
+        .mlsTreePrivValue.shared { color: var(--warn-ink); }
+        .mlsTreePrivEye.shared { border-color: var(--warn-border); color: var(--warn-ink); }
+        .mlsTreePrivEye.shared:hover { background: var(--warn-bg); }
+        /* Card "khoá dùng chung" trong info grid -- CHIẾM TRỌN 1 hàng (không phải 1 ô nhỏ như Epoch/Cipher
+           suite...) vì nội dung là chuỗi hex dài, ép vào ô 140px sẽ vỡ layout. */
+        .mlsTreeInfoItemShared { grid-column: 1 / -1; }
+        /* Trong card này -- "Cách tính" chiếm khá nhiều chỗ (cả 1 khối công thức) trong khi info grid luôn
+           hiện thường trực phía trên sơ đồ (khác panel chi tiết node, chỉ hiện khi bấm 1 node) -- gắn theo
+           ĐÚNG trạng thái ẩn/hiện của secret (.mlsTreePrivRow.revealed, sibling ngay trước trong DOM, xem
+           mlsTreeSharedSecretCardHtml) thay vì luôn hiện: bấm "Hiện" mới thấy công thức, bấm "Ẩn" thì thu
+           gọn lại luôn, đỡ chiếm diện tích khi không cần. */
+        .mlsTreeInfoItemShared .mlsTreeExplainBox { display: none; }
+        .mlsTreeInfoItemShared .mlsTreePrivRow.revealed ~ .mlsTreeExplainBox { display: block; }
+        /* Khối "Cách tính" trong panel chi tiết -- giải thích công thức/nguồn gốc giá trị của ĐÚNG node
+           vừa bấm (xem mlsTreeExplainHtml), màu trung tính (--accent, không phải đỏ/cam như 2 khối secret
+           ở trên) vì đây là kiến thức/công thức, không phải bản thân 1 secret cần che. */
+        .mlsTreeExplainBox { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+        .mlsTreeExplainTitle { font-weight: 700; font-size: 11px; color: var(--accent-dark); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+        .mlsTreeExplainText { font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+        .mlsTreeExplainText code { font-family: ui-monospace, monospace; font-size: 11px; background: var(--canvas); border-radius: 4px; padding: 1px 5px; }
+        .mlsTreeExplainFormula { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--ink); background: var(--canvas); border-radius: 6px; padding: 8px 10px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+        /* Khối "Secret tree" trong panel chi tiết LEAF -- màu CAM (--warn-*, giống senderDataSecret ở info
+           grid) KHÔNG phải đỏ như Private key -- vì giá trị này KHÔNG riêng của chủ leaf, mọi thiết bị đã
+           xử lý cùng số tin nhắn của leaf đó đều tính ra giống hệt (xem mlsTreeSecretTreeExplainHtml). */
+        .mlsTreeSecretTreeBox { margin-top: 10px; padding-top: 10px; border-top: 1.5px dashed var(--warn-border); }
+        .mlsTreeSecretTreeTitle { color: var(--warn-ink); font-weight: 700; font-size: 11px; margin-bottom: 6px; }
         /* Node lá/nhánh vẽ bằng SVG thật (không phải div định vị tuyệt đối) -- text bên trong dùng
            <foreignObject> để tự xuống dòng/co giãn theo nội dung thay vì phải tự đo độ rộng text bằng
            canvas.measureText cho từng dòng. */
-        .mlsTreeNodeBox { font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.5; color: var(--ink); box-sizing: border-box; width: 100%; height: 100%; padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
+        .mlsTreeNodeBox { font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.45; color: var(--ink); box-sizing: border-box; width: 100%; height: 100%; padding: 7px 9px; display: flex; flex-direction: column; gap: 2px; justify-content: center; }
         .mlsTreeNodeBox b { font-family: inherit; color: var(--ink); font-weight: 700; }
-        .mlsTreeNodeBox.mine { color: var(--accent-dark); }
         .mlsTreeNodeBox .mlsTreeMuted { color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .mlsTreeNodeName { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .mlsTreeStar { color: #d4a017; }
+        .mlsTreeNodeName { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px; min-width: 0; }
+        .mlsTreeNodeName b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mlsTreeStar { color: #d4a017; flex: none; }
+        /* Node lá: avatar tròn (tái dùng avatarColor/avatarInitial của sidebar-conversations.js -- CÙNG
+           màu với avatar hiển thị ở danh sách hội thoại, không tự bịa bảng màu riêng) + 2 "chip" nhỏ cho
+           vân tay sig/hpke thay vì 2 dòng chữ trần trụi như trước -- dễ quét mắt hơn khi cây có nhiều lá. */
+        .mlsTreeLeafHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .mlsTreeAvatar { flex: none; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 10px; font-family: "Inter", sans-serif; }
+        .mlsTreeDeviceId { font-size: 9.5px; }
+        .mlsTreeChipRow { display: flex; gap: 4px; margin-top: 1px; }
+        .mlsTreeChip { flex: 1; min-width: 0; background: var(--canvas); color: var(--ink-soft); border-radius: 5px; padding: 1.5px 5px; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mlsTreeNodeBox.mlsTreeLeafBox.mine .mlsTreeChip { background: var(--accent-soft); color: var(--accent-dark); }
+        /* Node nhánh (không phải lá): 2 trạng thái RÕ RÀNG khác màu nhau -- "đã có hash" (tím, khớp
+           accent) vs "chưa có hash" (vàng cảnh báo, tái dùng đúng token --warn-* đã dùng cho banner cảnh
+           báo khác trong app) -- trước đây 2 trạng thái này TRÔNG GIỐNG HỆT NHAU, chỉ khác mỗi chữ, rất dễ
+           nhầm là bug khi soi cây (xem hẳn 1 buổi trao đổi dài về đúng nhầm lẫn này). */
+        .mlsTreeParentBox { font-weight: 600; }
+        .mlsTreeParentBox.hashed { color: var(--accent-dark); }
+        .mlsTreeParentBox.pending { color: var(--warn-ink); }
+        .mlsTreeDot { font-size: 12px; line-height: 1; flex: none; }
+        .mlsTreeDotGhost { color: var(--ink-faint); }
+        .mlsTreeBlank { color: var(--ink-faint); font-style: italic; }
         /* Modal tìm kiếm toàn cục (xem ensureSearchModal, sidebar-conversations.js) -- tái dùng khung
            .bgPickerModal/.bgPickerHead/.bgPickerBody như modal Hồ sơ, chỉ khác nội dung: ô nhập + danh
            sách kết quả cuộn. Rộng/cao hơn hẳn 2 modal kia vì cần chỗ cho danh sách. */

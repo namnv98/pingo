@@ -118,14 +118,16 @@ Nhóm càng đông, chênh lệch càng lớn: nhóm 10.000 người, ghép cặ
 
 Khi hai node con "chụm" lại thành một node cha, node cha đó **không chỉ có một giá trị đơn** — nó có hẳn một cặp khóa (private + public) riêng, giống hệt cấu trúc của một node lá.
 
-**Quy trình tính node cha, từng bước:**
+Có **2 mô hình khác nhau** để tính ra cặp khóa đó — dễ nhầm lẫn vì nhiều tài liệu/bài giảng phổ biến vẫn dạy theo mô hình cũ (1), trong khi MLS chuẩn hiện hành dùng mô hình (2):
+
+#### (1) Mô hình học thuật gốc — TreeKEM 2018 (dễ hình dung, nhưng KHÔNG phải cách MLS chuẩn dùng)
+
+Đây là thiết kế TreeKEM nguyên bản, dùng để minh họa trực giác "hai node con tự chụm lại":
 
 1. **Tính shared secret bằng ECDH** giữa 2 node con: `shared_secret = ECDH(private key của A, public key của B)` (= ECDH(private key của B, public key của A), hai bên ra cùng kết quả)
 2. **Đưa shared secret qua HKDF** để "làm sạch" thành một chuỗi bit ngẫu nhiên đều: `seed = HKDF(shared_secret)`
 3. **Dùng seed đó làm private key mới cho node cha:** `private key của node cha = seed`
 4. **Tính public key của node cha** từ private key đó, theo cách tính chuẩn (nhân với điểm sinh G trên đường cong elliptic): `public key của node cha = private_key_cha × G`
-
-→ Kết quả: node cha có một cặp khóa (private/public) hoàn chỉnh của riêng nó.
 
 ```mermaid
 flowchart LR
@@ -138,9 +140,31 @@ flowchart LR
   PP --> PU["pub_cha = priv_cha × G"]
 ```
 
-**Vì sao không giữ thẳng shared\_secret làm private key?** Vì để tiếp tục "chụm" node cha này với node cha bên cạnh ở tầng trên, cần một cặp khóa đúng chuẩn ECDH — shared\_secret thô không đủ an toàn về mặt thống kê để dùng trực tiếp, nên phải qua HKDF trước.
+Trực giác dễ hiểu: node cha là "kết hợp" của 2 node con, y hệt cách 2 node lá thống nhất khóa chung ở phần 4. Nhưng đây **không phải cách RFC 9420 (chuẩn MLS hiện hành) thực sự vận hành** — xem mô hình (2).
 
-Node cha này sau đó đóng vai trò y như một node lá ở tầng dưới nó, tiếp tục ECDH với node cha bên cạnh để lên tầng cao hơn, cứ thế lặp lại cho tới gốc.
+#### (2) RFC 9420 thực tế — cách MLS chuẩn (và dự án này, qua thư viện `ts-mls`) hoạt động
+
+Khác biệt cốt lõi: node cha **không được tính bằng cách "kết hợp 2 node con"**. Thay vào đó, chỉ **một người duy nhất** (người đang thực hiện Commit, gọi là A) tự sinh toàn bộ bí mật cho cả direct path, rồi **gửi (mã hóa) bí mật đó** cho các thành viên khác cần biết — chứ họ không tự "chụm" hai bên lại với nhau.
+
+1. A tự sinh **một secret ngẫu nhiên duy nhất** tại lá của mình: `path_secret[0]`.
+2. A tự suy ra chuỗi bí mật cho từng node cha dọc direct path bằng **hash chain thuần túy**, không liên quan gì tới public key của sibling: `path_secret[n] = KDF(path_secret[n-1])`.
+3. Từ mỗi `path_secret[n]`, dùng hàm `DeriveKeyPair` của HPKE để ra cặp khóa (private/public) cho node đó: `(priv_n, pub_n) = HPKE.DeriveKeyPair(path_secret[n])`.
+4. Để những thành viên khác (ví dụ B, nằm trong nhánh mà A cần "báo" bí mật mới) nhận được `path_secret[n]` tương ứng, A **mã hóa nó bằng HPKE Encrypt** với public key hiện có của B (lấy từ ratchet tree đang lưu) rồi gửi kèm trong Commit — bản thân HPKE bên trong có dùng một phép ECDH tạm thời, nhưng đó là để **mã hóa/gửi bí mật cho đúng người**, không phải để "kết hợp khóa 2 node con".
+5. B giải mã ra đúng `path_secret[n]`, rồi tự chạy lại đúng chuỗi hash ở bước 2 để tính tiếp các node cao hơn — ra kết quả giống hệt A.
+
+```mermaid
+flowchart LR
+  Seed0[path_secret của A tại lá] --> KDF1((KDF))
+  KDF1 --> Seed1["path_secret[node cha]"]
+  Seed1 --> DKP(("HPKE.DeriveKeyPair"))
+  DKP --> Pair["priv_cha / pub_cha"]
+  Seed1 --> Enc(("HPKE.Seal với pub_B"))
+  Enc --> CT["encrypted_path_secret gửi cho B trong Commit"]
+```
+
+**Vì sao khác nhau lại quan trọng:** field `parentHash` mà cây MLS thật (kể cả `ts-mls` trong dự án này) lưu ở mỗi node cha chỉ có ý nghĩa trong mô hình (2) — nó dùng để xác thực rằng node cha được tạo ra đúng từ một `path_secret` hợp lệ của một Commit thật, chứ không tồn tại khái niệm này trong mô hình combine-DH (1). Mô hình (1) từng là thiết kế TreeKEM ban đầu nhưng sau đó được thay bằng mô hình (2) vì lý do bảo mật khi phân tích kỹ hơn.
+
+Dù theo mô hình nào, node cha (sau khi đã có key) đóng vai trò y như một node lá ở tầng dưới nó khi tính tiếp lên tầng cao hơn, cứ thế lặp lại cho tới gốc.
 
 ### Copath: A tự tìm đường lên gốc bằng cách nào
 
@@ -174,13 +198,16 @@ Lá của A = index cố định (ví dụ A ở lá số 0). **Đường đi l�
 
 **A cần lấy public key ở đâu để tính?**
 
-Không phải toàn bộ cây — A chỉ cần public key của các "anh em" (sibling) dọc đường đi lên, gọi là **copath**:
+Không phải toàn bộ cây — A chỉ cần public key của các "anh em" (sibling) dọc đường đi lên, gọi là **copath**: node 1, node 9, node 13. Điều này **đúng ở cả 2 mô hình** đã nêu ở mục trước, nhưng vai trò của các public key này khác nhau:
 
-- Tính node 8 (cha của A): cần public key của **node 1** (lá của B, anh em của A) → node 8 = ECDH(priv\_A, pub\_B)
-- Tính node 12: cần public key của **node 9** (cha của C-D, anh em của node 8) → node 12 = ECDH(priv\_node8, pub\_node9)
-- Tính node 14 (gốc): cần public key của **node 13** (anh em của node 12) → node 14 = ECDH(priv\_node12, pub\_node13)
+- **Theo mô hình học thuật gốc (1):** A tự dùng trực tiếp các public key đó để combine bằng ECDH:
+  - Tính node 8 (cha của A): node 8 = ECDH(priv\_A, pub\_B)
+  - Tính node 12: node 12 = ECDH(priv\_node8, pub\_node9)
+  - Tính node 14 (gốc): node 14 = ECDH(priv\_node12, pub\_node13)
 
-→ Copath của A = {node 1, node 9, node 13} — chỉ 3 public key, bằng chiều cao cây (log₂8), không phải toàn bộ cây.
+- **Theo RFC 9420 thực tế (2) — cách MLS chuẩn/`ts-mls` dùng:** A **không** combine gì với các public key này để *tạo ra* khóa node cha (khóa node cha đã được A tự suy ra sẵn từ `path_secret` của chính mình, như mục trước). Public key của node 1, node 9, node 13 chỉ được dùng làm **địa chỉ để mã hóa (HPKE Encrypt)** — A mã hóa đúng `path_secret[n]` tương ứng bằng từng public key này rồi gửi kèm trong Commit, để đúng người sở hữu private key đó (B, hoặc hậu duệ của node 9/13) giải mã được và tự tính tiếp.
+
+→ Copath của A = {node 1, node 9, node 13} — chỉ 3 public key, bằng chiều cao cây (log₂8), không phải toàn bộ cây. Số lượng cần biết giống nhau ở cả 2 mô hình, chỉ khác cách dùng (combine vs. mã hóa-gửi).
 
 **Những public key này lấy từ đâu?**
 
@@ -230,6 +257,85 @@ Nếu root không đổi khi A đổi khóa, việc đổi khóa sẽ hoàn toà
 - Vì công thức ECDH ở mỗi node là **xác định (deterministic)** — cùng input luôn ra cùng output — nên ai cũng tính ra đúng một root mới giống hệt nhau, dù root đó khác hẳn root cũ.
 
 **Tóm gọn:** cái cần "bất biến" không phải giá trị root, mà là **sự đồng thuận** — mọi thành viên phải tính ra cùng một root mới, giống nhau tuyệt đối, mỗi khi có thay đổi. Root luôn được phép (và nên) thay đổi liên tục; điều quan trọng là không ai bị lệch pha so với người khác.
+
+### parentHash: cây tự xác thực lịch sử Commit, và vì sao có node "chưa có hash"
+
+Mỗi node cha trong ratchet tree, ngoài cặp khóa (private/public), còn lưu thêm 1 field gọi là **`parent_hash`** — một hash trỏ lên node cha của chính nó. Mục đích: cho phép các thành viên khác **xác thực** rằng node đó thực sự sinh ra từ một UpdatePath hợp lệ của một Commit thật, không phải bị chèn/giả mạo tùy tiện.
+
+**parentHash không tự động phủ khắp cây — chỉ node nằm trên direct path của Commit đó mới được tính.** RFC 9420 quy định rõ: UpdatePath "chứa một tập public key và path secret đã mã hóa cho các node trung gian trên **filtered direct path** của lá gửi" — tức chỉ các node trên đúng con đường từ lá người Commit lên gốc mới được cập nhật, các node khác trong cây không bị đụng tới.
+
+**Root luôn luôn có `parent_hash` rỗng, vĩnh viễn — đây là quy tắc tường minh trong spec:**
+
+> *"The root node always has a zero-length hash for its parent hash."* — RFC 9420
+
+Lý do đơn giản: `parent_hash` của một node là hash trỏ lên node cha của nó, mà root thì không có node cha nào ở trên — nên trường này ở root luôn rỗng, bất kể lịch sử Commit/Remove/Add nào đã xảy ra. Nhìn thấy root "chưa có hash" trong 1 ứng dụng MLS thật **không phải dấu hiệu lỗi**, mà là hành vi đúng chuẩn.
+
+**Khi cây phải mở rộng** (thêm thành viên/thiết bị vượt quá số lá trống hiện có), một node cha **mới** được chèn vào — node này chưa từng được ai tính key/hash, nên tự nhiên ở trạng thái "chưa có hash" cho tới khi có Commit tiếp theo mà direct path đi đúng qua nó. Kết quả thực tế: trong một cây đang hoạt động, tại một thời điểm bất kỳ hoàn toàn có thể có **một số node đã có hash thật, một số node khác vẫn "chưa có hash"** — tùy vào việc Commit gần nhất đã đi qua nhánh nào.
+
+**Không phải Commit nào cũng bắt buộc phải tính lại path.** RFC 9420 (mục "Path Required") quy định:
+
+| Loại proposal trong Commit | Bắt buộc kèm UpdatePath? |
+| --- | --- |
+| Add, PreSharedKey, ReInit | Không bắt buộc |
+| Update, Remove, External Init | Bắt buộc |
+
+Khi Commit chỉ chứa Add (thêm thành viên mới, không đổi/xóa ai) và bỏ qua path, `commit_secret` được coi là một chuỗi toàn số 0 — nhưng khóa mã hóa của epoch (`encryption_secret`, xem bên dưới) vẫn ra giá trị mới hợp lệ, vì công thức dẫn xuất còn trộn thêm `GroupContext` (epoch number, tree hash...) chứ không chỉ dựa vào `commit_secret`.
+
+**Quan trọng nhất: việc mã hóa/giải mã tin nhắn hoàn toàn không phụ thuộc vào việc các node cha trong cây có key/hash hay không.** Khóa dùng để mã hóa nội dung tin nhắn (`encryption_secret`) đến từ một nhánh dẫn xuất riêng trong **key schedule** của epoch, tạo ra một **secret tree** (chuỗi ratchet đối xứng riêng cho từng thành viên) — hoàn toàn tách biệt khỏi trạng thái các node trong ratchet tree. Một node cha "chưa có hash" chỉ có nghĩa là **cây chưa tự chứng minh được tính hợp lệ của nhánh đó qua parentHash** — không có nghĩa là nhóm không có khóa để nhắn tin.
+
+*(Toàn bộ mục này đã được đối chiếu trực tiếp với văn bản RFC 9420 chính thức và implementation OpenMLS — cùng cấu trúc `ParentNode {public key, parent_hash, unmerged_leaves}`, cùng quy tắc root luôn rỗng, cùng bảng path-required — và kiểm chứng thực tế bằng cách xóa/thêm thành viên trên một group MLS đang chạy.)*
+
+### Key schedule: từ commit_secret ra senderDataSecret và các secret khác
+
+Mục trước đã nói khóa mã hóa tin nhắn (`encryption_secret`) tách biệt khỏi ratchet tree, đến từ **key schedule** của epoch. Mục này giải thích rõ **cách tính** — cụ thể với `senderDataSecret`, secret dùng để giải mã phần "ai gửi tin nhắn này" (sender/generation) của **mọi** tin nhắn trong epoch, và là secret duy nhất trong nhóm này còn tồn tại lâu dài để dùng lại nhiều lần (khác `encryption_secret` — bị xóa khỏi bộ nhớ ngay sau khi dùng xong, theo đúng nguyên tắc forward secrecy).
+
+**Coi HKDF như "máy trộn 2 ngăn":** nhét vào 1 giá trị bí mật (ngăn 1) + 1 "nhãn" chữ công khai (ngăn 2, ví dụ `"joiner"`, `"epoch"`, `"sender data"`...), máy nhả ra 1 giá trị mới — không thể đảo ngược để tìm lại bí mật gốc. Cùng input + cùng nhãn luôn ra đúng cùng kết quả. Toàn bộ chuỗi dưới đây chỉ là dùng đi dùng lại đúng 1 loại máy này.
+
+**Chuỗi trộn, từng bước — bắt đầu từ đúng 1 nguồn duy nhất (`commit_secret`, chính là root path_secret đã nói ở trên):**
+
+```mermaid
+flowchart TD
+  CS["commit_secret (root path_secret của Commit gần nhất,\nhoặc = 0 nếu Commit chỉ có Add)"]
+  CS -->|"trộn với init_secret epoch trước, nhãn joiner"| JS[joiner_secret]
+  JS -->|"trộn thêm PSK nếu có, nhãn epoch"| ES["epoch_secret (gốc của cả epoch)"]
+  ES -->|"nhãn sender data"| SDS["senderDataSecret ⭐"]
+  ES -->|"nhãn encryption"| ENC["encryptionSecret (xóa ngay sau khi dùng)"]
+  ES -->|"nhãn exporter / external / confirm / ..."| KHAC["các secret khác\n(mỗi nhãn 1 giá trị riêng)"]
+```
+
+**Ví như:** `epoch_secret` là 1 chìa khóa gốc; đem chìa đó "cắt" ra nhiều chìa phụ (mỗi lần đổi nhãn là 1 kiểu cắt khác), mỗi chìa mở đúng 1 ổ khóa riêng — 1 chìa để giải mã "ai gửi tin", 1 chìa để mã hóa nội dung, 1 chìa để xuất dữ liệu ra ngoài (exporter)... `senderDataSecret` chỉ là một trong số các chìa phụ đó.
+
+**Vì sao mọi thiết bị ra đúng cùng giá trị mà không ai gửi thẳng cho ai:**
+
+- `commit_secret` không được gửi ở dạng rõ — người Commit mã hóa riêng path_secret cho từng người bằng public key của họ (đúng cơ chế đã mô tả ở mục "Copath"). Mỗi người tự giải mã, tự chạy lại đúng chuỗi hash, ra **đúng cùng** `commit_secret`.
+- `GroupContext` (epoch, tree hash...) vốn dĩ **công khai**, ai cũng đã biết, không cần trao đổi thêm.
+
+→ Hai input giống hệt nhau, đi qua đúng cùng 1 chuỗi máy trộn xác định (deterministic) ở trên → **ai cũng tự tính ra đúng cùng `senderDataSecret`**, dù không ai gửi thẳng giá trị đó qua mạng — cùng một nguyên lý "tự tính ra bí mật chung mà không lộ" đã xuyên suốt toàn bộ tài liệu này, chỉ khác công cụ: DH/ECDH dùng cho *trao đổi khóa giữa các bên*, còn HKDF theo nhãn dùng để *một bên tự "chẻ" 1 bí mật gốc thành nhiều bí mật con dùng cho nhiều việc khác nhau*.
+
+### senderDataSecret KHÔNG giải mã được nội dung tin nhắn — hiểu lầm thường gặp
+
+Một hiểu lầm dễ mắc: "có `senderDataSecret` là giải mã được mọi tin nhắn trong epoch". **Sai** — `senderDataSecret` chỉ giải mã được **1 phần metadata**, không đụng tới nội dung thật.
+
+**Mỗi tin nhắn riêng tư (private message) được mã hóa thành 2 lớp tách biệt:**
+
+| Lớp | Chứa gì | Giải mã bằng gì |
+| --- | --- | --- |
+| **Lớp ngoài — "sender data"** | Chỉ `leaf_index` (ai gửi) + `generation` (thứ mấy trong chuỗi của người đó) + `reuse_guard` | `senderDataSecret` + 1 mẫu byte lấy từ chính ciphertext — **dùng lại được** cho mọi tin nhắn, không ratchet |
+| **Lớp trong — nội dung thật** | Nội dung tin nhắn | Key/nonce lấy từ **secret tree** tại đúng ô `(leaf_index, generation)` vừa đọc được ở lớp ngoài |
+
+**Secret tree là gì:** một mảng ratchet riêng cho **từng leaf**, chia làm 2 chuỗi độc lập:
+
+- **`application`** — ratchet cho tin nhắn thường.
+- **`handshake`** — ratchet cho Proposal/Commit.
+
+Mỗi chuỗi có 1 `generation` (đếm từ 0) và 1 `secret` hiện tại. **Mỗi lần leaf đó gửi 1 tin, `generation` tăng thêm 1 và secret CŨ bị xóa ngay khỏi bộ nhớ** — đây là forward secrecy áp dụng ngay **trong cùng 1 epoch**, không phải chỉ giữa các epoch với nhau như phần "A tự đổi khóa" đã nói. Vì vậy dù đang giữ đúng secret hiện tại của 1 leaf, cũng **không lùi lại giải mã được tin nhắn cũ hơn** của chính leaf đó — secret dùng cho tin cũ đã bị xóa vĩnh viễn.
+
+**Tóm gọn vai trò của mỗi thứ:**
+
+- `senderDataSecret` → biết **"tin này của ai, thứ mấy"** — để biết tra secret tree ở đúng ô nào.
+- Secret tree tại đúng ô đó → mới thật sự ra được key **giải mã nội dung**.
+
+→ Thiếu 1 trong 2 đều không đọc được tin nhắn. `senderDataSecret` một mình **không đủ** để giải mã "mọi tin nhắn trong epoch" như lầm tưởng ban đầu.
 
 ### Xóa/thêm thiết bị và trường hợp multi-device
 
